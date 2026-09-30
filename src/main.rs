@@ -4,9 +4,9 @@ use std::collections::BTreeSet;
 use std::env;
 use std::io::{BufRead, Read};
 use std::process::{Command, Stdio};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -249,7 +249,9 @@ fn run(args: &[String]) -> Result<(), String> {
                                 }
                                 Err(TryRecvError::Empty) => break,
                                 Err(TryRecvError::Disconnected) => {
-                                    return Err("PTT input closed; run --ptt with stdin open".into());
+                                    return Err(
+                                        "PTT input closed; run --ptt with stdin open".into()
+                                    );
                                 }
                             }
                         }
@@ -318,7 +320,9 @@ mod tests {
         );
         assert!(run(&["run".into()]).is_err());
         assert!(run_options(&["run".into(), "--ptt".into()]).is_err());
-        assert!(run_options(&["run".into(), "AA:BB:CC:DD:EE:01".into(), "--unknown".into()]).is_err());
+        assert!(
+            run_options(&["run".into(), "AA:BB:CC:DD:EE:01".into(), "--unknown".into()]).is_err()
+        );
     }
 
     #[test]

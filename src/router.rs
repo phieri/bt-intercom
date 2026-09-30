@@ -352,13 +352,34 @@ mod tests {
     fn ptt_mutes_and_restores_only_owned_links() {
         let calls = Rc::new(RefCell::new(Vec::<Vec<String>>::new()));
         let recorded = Rc::clone(&calls);
+        let objects = Rc::new(RefCell::new(fixture()));
+        let snapshot = Rc::clone(&objects);
         let mut router = Router::with_executor(allowed(), move |args: &[&str]| {
             recorded
                 .borrow_mut()
                 .push(args.iter().map(|s| s.to_string()).collect());
             if args[0] == "pw-dump" {
-                Ok(json!(fixture()).to_string())
+                Ok(json!(*snapshot.borrow()).to_string())
             } else {
+                let (output, input) = if args[1] == "-d" {
+                    (
+                        args[2].parse::<u64>().unwrap(),
+                        args[3].parse::<u64>().unwrap(),
+                    )
+                } else {
+                    (
+                        args[1].parse::<u64>().unwrap(),
+                        args[2].parse::<u64>().unwrap(),
+                    )
+                };
+                if args[1] == "-d" {
+                    snapshot.borrow_mut().retain(|object| {
+                        object["info"]["output-port-id"] != output
+                            || object["info"]["input-port-id"] != input
+                    });
+                } else {
+                    snapshot.borrow_mut().push(json!({"type":"PipeWire:Interface:Link","id":100+output,"info":{"output-port-id":output,"input-port-id":input}}));
+                }
                 Ok(String::new())
             }
         });
@@ -369,7 +390,11 @@ mod tests {
         router.update(false).unwrap();
         assert!(router.owned.is_empty());
         assert_eq!(
-            calls.borrow().iter().filter(|args| args.get(1).is_some_and(|s| s == "-d")).count(),
+            calls
+                .borrow()
+                .iter()
+                .filter(|args| args.get(1).is_some_and(|s| s == "-d"))
+                .count(),
             4
         );
         router.update(true).unwrap();

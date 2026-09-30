@@ -84,6 +84,13 @@ HFP/HSP headset connections depends on firmware, controller capacity and the
 installed audio stack; it is **not guaranteed**, and has not been verified on
 Zero W or Zero 2 W hardware.
 
+For opt-in push-to-talk operation, add `--ptt` to `run`. All microphones start
+muted. With the command running in an interactive terminal, press Enter once to
+transmit to the other headsets, then press Enter again to mute; repeat for each
+talk burst. This is a toggle control, not a press-and-hold key. Closing stdin
+ends the command and removes its links. Only links created by this process are
+muted; pre-existing PipeWire links between headsets are not modified.
+
 If a headset is silent, inspect `wpctl status` and `pw-dump` to confirm that it
 has both `Audio/Source` and `Audio/Sink` nodes and that the duplex profile is
 active. This program does not force a Bluetooth profile: doing so could
