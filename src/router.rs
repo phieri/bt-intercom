@@ -167,11 +167,15 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
         }
     }
 
-    pub fn update(&mut self) -> Result<BTreeMap<String, Headset>, String> {
+    pub fn update(&mut self, transmitting: bool) -> Result<BTreeMap<String, Headset>, String> {
         let snapshot = serde_json::from_str(&(self.execute)(&["pw-dump"])?)
             .map_err(|e| format!("invalid pw-dump JSON: {e}"))?;
         let (headsets, existing) = topology(&snapshot, &self.allowed)?;
-        let desired = desired_links(&headsets);
+        let desired = if transmitting {
+            desired_links(&headsets)
+        } else {
+            BTreeSet::new()
+        };
         for (output, input) in self.owned.difference(&desired).copied().collect::<Vec<_>>() {
             if existing.contains(&(output, input)) {
                 (self.execute)(&["pw-link", "-d", &output.to_string(), &input.to_string()])?;
@@ -291,7 +295,7 @@ mod tests {
                 Ok(String::new())
             }
         });
-        router.update().unwrap();
+        router.update(true).unwrap();
         assert_eq!(router.owned.len(), 3);
         assert!(
             !calls
@@ -299,7 +303,7 @@ mod tests {
                 .contains(&vec!["pw-link".into(), "13".into(), "24".into()])
         );
         *objects.borrow_mut() = headset(10, A);
-        router.update().unwrap();
+        router.update(true).unwrap();
         assert!(router.owned.is_empty());
         router.close();
         assert!(!calls.borrow().contains(&vec![
@@ -328,9 +332,9 @@ mod tests {
             }
             Ok(String::new())
         });
-        router.update().unwrap();
+        router.update(true).unwrap();
         assert_eq!(router.owned.len(), 3);
-        router.update().unwrap();
+        router.update(true).unwrap();
         assert_eq!(router.owned.len(), 4);
         router.close();
         assert!(router.owned.is_empty());
@@ -342,5 +346,33 @@ mod tests {
                 .count(),
             4
         );
+    }
+
+    #[test]
+    fn ptt_mutes_and_restores_only_owned_links() {
+        let calls = Rc::new(RefCell::new(Vec::<Vec<String>>::new()));
+        let recorded = Rc::clone(&calls);
+        let mut router = Router::with_executor(allowed(), move |args: &[&str]| {
+            recorded
+                .borrow_mut()
+                .push(args.iter().map(|s| s.to_string()).collect());
+            if args[0] == "pw-dump" {
+                Ok(json!(fixture()).to_string())
+            } else {
+                Ok(String::new())
+            }
+        });
+        router.update(false).unwrap();
+        assert!(router.owned.is_empty());
+        router.update(true).unwrap();
+        assert_eq!(router.owned.len(), 4);
+        router.update(false).unwrap();
+        assert!(router.owned.is_empty());
+        assert_eq!(
+            calls.borrow().iter().filter(|args| args.get(1).is_some_and(|s| s == "-d")).count(),
+            4
+        );
+        router.update(true).unwrap();
+        assert_eq!(router.owned.len(), 4);
     }
 }
