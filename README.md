@@ -70,6 +70,17 @@ some headsets require an interactive PIN/confirmation or must instead be
 paired using the desktop's Bluetooth UI or `bluetoothctl`. BlueZ stores bonds
 and trust settings; this program does not store credentials.
 
+Check whether PipeWire sees duplex audio for each headset before routing:
+
+```sh
+rpi-intercom status AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02
+```
+
+This reports microphone and speaker port counts, or that an address is not
+found in PipeWire. It does not create links or connect devices. A device with
+no duplex audio needs its Bluetooth connection and HFP/HSP profile checked
+using `bluetoothctl info ADDRESS` and `wpctl status`.
+
 Start the intercom with the paired addresses:
 
 ```sh
@@ -77,12 +88,16 @@ rpi-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 --connect
 ```
 
 Leave it running in the foreground; Ctrl-C removes the links created by this
-process. Omit `--connect` if your Bluetooth manager connects devices
-automatically. Each extra headset increases the number of simultaneous audio
-links. The onboard adapter's ability to maintain two or more concurrent
-HFP/HSP headset connections depends on firmware, controller capacity and the
-installed audio stack; it is **not guaranteed**, and has not been verified on
-Zero W or Zero 2 W hardware.
+process. With `--connect`, the intercom checks BlueZ every 30 seconds and
+retries disconnected headsets; omit it if your Bluetooth manager connects
+devices automatically. A connection attempt can block the audio-routing loop
+for up to 50 seconds per headset (15 seconds for `info` and 35 seconds for
+`connect`), so use automatic connection management if
+prompt push-to-talk responses are required. Each extra headset increases the
+number of simultaneous audio links. The onboard adapter's ability to maintain
+two or more concurrent HFP/HSP headset connections depends on firmware,
+controller capacity and the installed audio stack; it is **not guaranteed**,
+and has not been verified on Zero W or Zero 2 W hardware.
 
 For opt-in push-to-talk operation, add `--ptt` to `run`. All microphones start
 muted. With the command running in an interactive terminal, press Enter once to
