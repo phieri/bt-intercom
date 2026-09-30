@@ -289,6 +289,19 @@ mod tests {
     }
 
     #[test]
+    fn inspection_does_not_create_or_remove_links() {
+        let mut router = Router::with_executor(allowed(), |args: &[&str]| {
+            assert_eq!(args, ["pw-dump"]);
+            Ok(json!(fixture()).to_string())
+        });
+        let (headsets, links) = router.inspect().unwrap();
+        assert!(links.is_empty());
+        assert!(headsets[A].has_duplex_audio());
+        assert!(headsets[B].has_duplex_audio());
+        assert!(!Headset::default().has_duplex_audio());
+    }
+
+    #[test]
     fn owns_only_created_links_and_cleans_up_on_disappearance() {
         let objects = Rc::new(RefCell::new(fixture()));
         objects.borrow_mut().push(json!({"type":"PipeWire:Interface:Link","id":100,"info":{"output-port-id":13,"input-port-id":24}}));

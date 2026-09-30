@@ -79,16 +79,23 @@ fn address(value: &str) -> Result<String, String> {
     Ok(value.to_ascii_uppercase())
 }
 
-fn paired(info: &str) -> bool {
+fn device_flag(info: &str, flag: &str) -> bool {
     info.lines().any(|line| {
         line.trim()
             .split_once(':')
-            .is_some_and(|(key, value)| key.trim() == "Paired" && value.trim() == "yes")
+            .is_some_and(|(key, value)| key.trim() == flag && value.trim() == "yes")
     })
 }
 
 fn usage() -> &'static str {
-    "Usage: rpi-intercom scan [--seconds 1..300]\n       rpi-intercom pair ADDRESS\n       rpi-intercom run ADDRESS [ADDRESS ...] [--interval SECONDS] [--connect] [--ptt]"
+    "Usage: rpi-intercom scan [--seconds 1..300]\n       rpi-intercom pair ADDRESS\n       rpi-intercom status ADDRESS [ADDRESS ...]\n       rpi-intercom run ADDRESS [ADDRESS ...] [--interval SECONDS] [--connect] [--ptt]"
+}
+
+fn addresses(args: &[String]) -> Result<BTreeSet<String>, String> {
+    if args.is_empty() {
+        return Err(usage().into());
+    }
+    args.iter().map(|value| address(value)).collect()
 }
 
 fn run_options(args: &[String]) -> Result<(BTreeSet<String>, Duration, bool, bool), String> {
@@ -150,6 +157,21 @@ fn ptt_input() -> Receiver<bool> {
     receiver
 }
 
+fn connect_disconnected(allowed: &BTreeSet<String>) {
+    for device in allowed {
+        let connected = command(&["bluetoothctl", "info", device], Duration::from_secs(15))
+            .is_ok_and(|info| device_flag(&info, "Connected"));
+        if !connected
+            && let Err(error) = command(
+                &["bluetoothctl", "--timeout", "30", "connect", device],
+                Duration::from_secs(35),
+            )
+        {
+            eprintln!("WARNING: Could not connect {device}: {error}");
+        }
+    }
+}
+
 fn run(args: &[String]) -> Result<(), String> {
     let Some(action) = args.first().map(String::as_str) else {
         return Err(usage().into());
@@ -196,10 +218,10 @@ fn run(args: &[String]) -> Result<(), String> {
                     Duration::from_secs(65)
                 )?
             );
-            if !paired(&command(
-                &["bluetoothctl", "info", &device],
-                Duration::from_secs(15),
-            )?) {
+            if !device_flag(
+                &command(&["bluetoothctl", "info", &device], Duration::from_secs(15))?,
+                "Paired",
+            ) {
                 return Err(format!("pairing did not succeed for {device}"));
             }
             for action in ["trust", "connect"] {
@@ -212,6 +234,23 @@ fn run(args: &[String]) -> Result<(), String> {
                 );
             }
         }
+        "status" => {
+            let allowed = addresses(&args[1..])?;
+            let mut router = Router::new(allowed);
+            let (headsets, _) = router.inspect()?;
+            for (address, headset) in headsets {
+                println!(
+                    "{address}: {} ({} microphone ports, {} speaker ports)",
+                    if headset.has_duplex_audio() {
+                        "duplex ready"
+                    } else {
+                        "duplex unavailable"
+                    },
+                    headset.sources.len(),
+                    headset.sinks.len()
+                );
+            }
+        }
         "run" => {
             let (allowed, interval, connect, ptt) = run_options(args)?;
             let stopped = Arc::new(AtomicBool::new(false));
@@ -219,16 +258,7 @@ fn run(args: &[String]) -> Result<(), String> {
             ctrlc::set_handler(move || signal.store(true, Ordering::SeqCst))
                 .map_err(|e| e.to_string())?;
             let mut router = Router::new(allowed);
-            if connect {
-                for device in &router.allowed {
-                    if let Err(error) = command(
-                        &["bluetoothctl", "--timeout", "30", "connect", device],
-                        Duration::from_secs(35),
-                    ) {
-                        eprintln!("WARNING: Could not connect {device}: {error}");
-                    }
-                }
-            }
+            let mut last_connect: Option<Instant> = None;
             let input = if ptt {
                 eprintln!("PTT: Press Enter to transmit; press Enter again to mute.");
                 Some(ptt_input())
@@ -239,6 +269,12 @@ fn run(args: &[String]) -> Result<(), String> {
             let mut last_update: Option<Instant> = None;
             let result: Result<(), String> = (|| {
                 while !stopped.load(Ordering::SeqCst) {
+                    if connect
+                        && last_connect.is_none_or(|time| time.elapsed() >= Duration::from_secs(30))
+                    {
+                        connect_disconnected(&router.allowed);
+                        last_connect = Some(Instant::now());
+                    }
                     if let Some(ref input) = input {
                         loop {
                             match input.try_recv() {
@@ -263,9 +299,7 @@ fn run(args: &[String]) -> Result<(), String> {
                         let headsets = router.update(transmitting)?;
                         let active = headsets
                             .values()
-                            .filter(|headset| {
-                                !headset.sources.is_empty() && !headset.sinks.is_empty()
-                            })
+                            .filter(|headset| headset.has_duplex_audio())
                             .count();
                         eprintln!(
                             "INFO: {active}/{} headsets with duplex audio",
@@ -303,10 +337,12 @@ mod tests {
     }
 
     #[test]
-    fn confirms_pairing_status() {
-        assert!(!paired("  Paired: no\n"));
-        assert!(paired("  Paired: yes\n"));
-        assert!(!paired("Not Paired: yes\n"));
+    fn confirms_bluetooth_device_flags() {
+        assert!(!device_flag("  Paired: no\n", "Paired"));
+        assert!(device_flag("  Paired: yes\n", "Paired"));
+        assert!(!device_flag("Not Paired: yes\n", "Paired"));
+        assert!(device_flag("  Connected: yes\n", "Connected"));
+        assert!(!device_flag("  Paired: yes\n", "Connected"));
     }
 
     #[test]
@@ -322,6 +358,8 @@ mod tests {
             .is_err()
         );
         assert!(run(&["run".into()]).is_err());
+        assert!(run(&["status".into()]).is_err());
+        assert!(addresses(&["--connect".into()]).is_err());
         assert!(run_options(&["run".into(), "--ptt".into()]).is_err());
         assert!(
             run_options(&["run".into(), "AA:BB:CC:DD:EE:01".into(), "--unknown".into()]).is_err()
@@ -344,8 +382,8 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         ptt_input_from(std::io::Cursor::new(b"\n\n"), sender);
 
-        assert_eq!(receiver.recv().unwrap(), true);
-        assert_eq!(receiver.recv().unwrap(), false);
+        assert!(receiver.recv().unwrap());
+        assert!(!receiver.recv().unwrap());
         assert!(matches!(
             receiver.try_recv(),
             Err(TryRecvError::Disconnected)
