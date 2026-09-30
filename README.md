@@ -28,7 +28,7 @@ also identify the links in diagnostic snapshots.
   depend on model-specific GPIO or audio hardware; availability of the
   required audio stack and simultaneous headset connections must be checked
   on your particular Pi and OS.
-- Linux with BlueZ (`bluetoothctl`), PipeWire (`pw-dump`, `pw-cli`, `pw-link`),
+- Linux with BlueZ (`bluetoothctl`), PipeWire (`pw-dump`, `pw-cli`),
   and WirePlumber. Run the intercom in the **same user session** as PipeWire.
   Install the distribution's Bluetooth/PipeWire packages and enable the
   Bluetooth and user audio services.
