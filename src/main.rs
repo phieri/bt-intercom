@@ -55,6 +55,9 @@ fn wait_child(
 /// `process_group(0)`, which makes the child the leader of its own group.
 fn kill_process_group(child: &mut Child) {
     let pid = child.id() as libc::pid_t;
+    if pid <= 0 {
+        return;
+    }
     // SAFETY: `pid` is the child's own process ID, which was placed in its
     // own process group via `process_group(0)` when spawned, so `-pid`
     // refers to a valid process group led by that child.
