@@ -26,6 +26,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/configure-pages@v5
+      - name: Download asciinema player
+        run: |
+          curl -fsSL --retry 3 https://registry.npmjs.org/asciinema-player/-/asciinema-player-3.17.0.tgz -o "$RUNNER_TEMP/asciinema-player.tgz"
+          echo "d03ef67fc2f32a7aa5177c0b64650c7c8fd234ef2d3e4b34886632bb3dd58c5c  $RUNNER_TEMP/asciinema-player.tgz" | sha256sum -c -
+          mkdir -p docs/vendor
+          tar -xzf "$RUNNER_TEMP/asciinema-player.tgz" -C docs/vendor --strip-components=3 \
+            package/dist/bundle/asciinema-player.css \
+            package/dist/bundle/asciinema-player.min.js
+          tar -xOf "$RUNNER_TEMP/asciinema-player.tgz" package/LICENSE > docs/vendor/LICENSE.asciinema-player
       - uses: actions/upload-pages-artifact@v4
         with:
           path: docs
