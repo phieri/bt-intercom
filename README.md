@@ -1,7 +1,7 @@
 # rpi-intercom
 
 A local, full-duplex **Bluetooth Classic** intercom between headsets connected
-to one Raspberry Pi Zero W or Zero 2 W. It uses BlueZ for pairing and
+to one Raspberry Pi. It uses BlueZ for pairing and
 PipeWire/WirePlumber for HFP/HSP headset audio. The application does not
 implement Bluetooth codecs or profiles itself. It does **not** support
 Bluetooth LE Audio.
@@ -22,8 +22,12 @@ also identify the links in diagnostic snapshots.
 
 ## Requirements
 
-- Raspberry Pi Zero W or Zero 2 W with its onboard Bluetooth radio. An
-  original Pi Zero needs a USB Bluetooth Classic adapter instead.
+- Raspberry Pi with a Bluetooth Classic radio: Zero W, Zero 2 W, Pi 3, Pi 4
+  and Pi 5 have onboard Bluetooth. Pi 1, Pi 2 and the original Pi Zero
+  require a compatible USB Bluetooth Classic adapter. The software does not
+  depend on model-specific GPIO or audio hardware; availability of the
+  required audio stack and simultaneous headset connections must be checked
+  on your particular Pi and OS.
 - Linux with BlueZ (`bluetoothctl`), PipeWire (`pw-dump`, `pw-cli`, `pw-link`),
   and WirePlumber. Run the intercom in the **same user session** as PipeWire.
   Install the distribution's Bluetooth/PipeWire packages and enable the
@@ -56,13 +60,20 @@ install -Dm755 target/release/rpi-intercom ~/.local/bin/rpi-intercom
 ```
 
 Alternatively, download the appropriate binary from a successful GitHub Actions
-build artifact and install it as `~/.local/bin/rpi-intercom`. Use
-`arm-unknown-linux-gnueabihf` for Raspberry Pi Zero W (32-bit Raspberry Pi OS)
-or `aarch64-unknown-linux-gnu` for Zero 2 W running 64-bit Raspberry Pi OS.
-For Zero 2 W running 32-bit Raspberry Pi OS, use the 32-bit artifact.
-Build artifacts are dynamically linked against glibc; build on the Pi if the
-artifact is incompatible with your OS. The original Pi Zero also needs a USB
-Bluetooth adapter.
+build artifact and install it as `~/.local/bin/rpi-intercom`. Choose by both
+the Pi model and the installed OS:
+
+| Pi model | Raspberry Pi OS | Build artifact target |
+| --- | --- | --- |
+| Pi 1, original Zero, Zero W | 32-bit | `arm-unknown-linux-gnueabihf` (ARMv6) |
+| Pi 2, Zero 2 W, Pi 3, Pi 4 | 32-bit | `armv7-unknown-linux-gnueabihf` (ARMv7) |
+| Zero 2 W, Pi 3, Pi 4, Pi 5 | 64-bit | `aarch64-unknown-linux-gnu` (ARM64) |
+
+The ARMv6 artifact also runs on compatible 32-bit ARMv7 systems, but the
+ARMv7 artifact does not run on ARMv6 Pis. Pi 5 installations should use a
+64-bit OS. Build artifacts are dynamically linked against glibc; build on
+the Pi if the artifact is incompatible with your OS. A USB Bluetooth Classic
+adapter is required on Pi 1, Pi 2 and the original Zero.
 
 ## Usage
 
@@ -109,7 +120,7 @@ link uses one monitored `pw-cli` subprocess. Each extra headset increases the
 number of simultaneous audio links. The onboard adapter's ability to maintain
 two or more concurrent HFP/HSP headset connections depends on firmware,
 controller capacity and the installed audio stack; it is **not guaranteed**,
-and has not been verified on Zero W or Zero 2 W hardware.
+and has not been verified across these Pi models.
 
 For opt-in push-to-talk, map **each** headset's play/pause button to its Linux
 input event device. The app listens only for `KEY_PLAYPAUSE` (code 164), not
@@ -229,4 +240,4 @@ cargo test --locked
 ```
 
 GitHub Actions runs these checks on Linux and cross-compiles release binaries
-for both Raspberry Pi architectures.
+for ARMv6, ARMv7 and 64-bit ARM Raspberry Pis.
