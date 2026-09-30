@@ -35,11 +35,41 @@
         <h2 id="demo-title">Watch the CLI in action</h2>
         <div class="player-panel">
           <div class="panel-heading"><span class="dot" aria-hidden="true"></span> rpi-intercom / terminal</div>
-          <div id="player">
+          <div id="player" role="group" aria-label="Interactive terminal demo player">
             <p>Play the terminal tour with the asciinema player, or <a href="demo.cast">download the asciicast recording</a>.</p>
           </div>
         </div>
-        <p class="note">Illustrative session with example addresses and representative output, not a recording of real Bluetooth hardware. The <a href="https://github.com/asciinema/asciinema">asciinema</a> player replays a text-based recording; no audio or video is captured. Playback requires JavaScript. <a href="demo.cast">Download the recording</a>.</p>
+        <details class="transcript">
+          <summary>Read the terminal demo transcript</summary>
+          <pre>$ rpi-intercom --help
+Usage: rpi-intercom scan [--seconds 1..300]
+       rpi-intercom pair ADDRESS
+       rpi-intercom status ADDRESS [ADDRESS ...]
+       rpi-intercom run ADDRESS [ADDRESS ...] [--interval SECONDS] [--connect] [--ptt ADDRESS=/dev/input/eventX ...] [--dashboard]
+$ rpi-intercom status AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02
+AA:BB:CC:DD:EE:01: duplex ready (1 microphone ports, 1 speaker ports)
+AA:BB:CC:DD:EE:02: duplex ready (1 microphone ports, 1 speaker ports)
+$ rpi-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 \
+  --ptt AA:BB:CC:DD:EE:01=/dev/input/event4 \
+  --ptt AA:BB:CC:DD:EE:02=/dev/input/event5
+PTT: Hold your headset's play/pause button to transmit; release to mute.
+INFO: 2/2 headsets with duplex audio
+PTT AA:BB:CC:DD:EE:01: transmitting
+INFO: 2/2 headsets with duplex audio
+PTT AA:BB:CC:DD:EE:01: muted
+INFO: 2/2 headsets with duplex audio
+PTT AA:BB:CC:DD:EE:02: transmitting
+INFO: 2/2 headsets with duplex audio
+PTT AA:BB:CC:DD:EE:01: transmitting
+INFO: 2/2 headsets with duplex audio
+PTT AA:BB:CC:DD:EE:02: muted
+INFO: 2/2 headsets with duplex audio
+PTT AA:BB:CC:DD:EE:01: muted
+INFO: 2/2 headsets with duplex audio
+^C
+$ </pre>
+        </details>
+        <p class="note">Illustrative session with example addresses and representative output, not a recording of real Bluetooth hardware. The <a href="https://github.com/asciinema/asciinema">asciinema</a> player replays a text-based recording; no audio or video is captured. Playback requires JavaScript; the transcript above is available without it. <a href="demo.cast">Download the recording</a>.</p>
       </section>
 
       <section aria-labelledby="workflow-title">

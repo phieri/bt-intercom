@@ -21,11 +21,14 @@ h1 { max-width: 14ch; margin: 0; font-size: clamp(2.5rem, 7vw, 5rem); line-heigh
 .links { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 3rem; }
 .links a { display: inline-block; border: 1px solid #557a7c; border-radius: .5rem; padding: .65rem 1rem; text-decoration: none; font-weight: 600; }
 .links a:first-child { background: #79dfc0; color: #071b1a; border-color: #79dfc0; }
-.player-panel { background: #111d29; border: 1px solid #304254; border-radius: .8rem; overflow: hidden; }
+.player-panel { background: #000; border: 1px solid #304254; border-radius: .8rem; overflow: hidden; }
 .panel-heading { display: flex; align-items: center; gap: .7rem; padding: .8rem 1.2rem; border-bottom: 1px solid #304254; color: #afc2cf; font-size: .9rem; }
 .dot { width: .65rem; height: .65rem; border-radius: 50%; background: #79dfc0; }
-#player { aspect-ratio: 2.2; overflow: hidden; }
+#player { aspect-ratio: 2.2; min-height: 18rem; overflow: auto; }
 #player .asciinema-player { max-width: 100%; }
+.transcript { margin-top: 1rem; }
+.transcript summary { cursor: pointer; color: #79dfc0; }
+.transcript pre { padding: 1rem; background: #000; border: 1px solid #304254; border-radius: .5rem; color: #e5eef5; white-space: pre-wrap; overflow-wrap: anywhere; }
 .note { max-width: 75ch; color: #afc2cf; font-size: .9rem; }
 h2 { margin-top: 3rem; font-size: 1.5rem; }
 .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 1rem; padding: 0; list-style: none; }
