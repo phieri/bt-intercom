@@ -9,7 +9,9 @@ Bluetooth LE Audio.
 Each allowlisted headset microphone is connected to the speakers of every
 *other* allowlisted headset. Audio is never sent to its own headset. The
 router automatically follows headset disconnections and reconnections; it
-only removes links it created.
+only removes links tagged with its own per-process ownership identifier.
+Cleanup inspects live link IDs instead of relying on remembered port numbers,
+which PipeWire can reuse after a disconnect.
 
 ## Requirements
 
@@ -65,8 +67,9 @@ rpi-intercom pair AA:BB:CC:DD:EE:01
 rpi-intercom pair AA:BB:CC:DD:EE:02
 ```
 
-Only pair devices you own and recognize. Pairing uses BlueZ's local agent;
-some headsets require an interactive PIN/confirmation or must instead be
+Only pair devices you own and recognize. Pairing uses BlueZ's local
+KeyboardDisplay agent and inherits the terminal so PIN/confirmation prompts
+are visible immediately. Some headsets must instead be
 paired using the desktop's Bluetooth UI or `bluetoothctl`. BlueZ stores bonds
 and trust settings; this program does not store credentials.
 
@@ -88,12 +91,11 @@ rpi-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 --connect
 ```
 
 Leave it running in the foreground; Ctrl-C removes the links created by this
-process. With `--connect`, the intercom checks BlueZ every 30 seconds and
-retries disconnected headsets; omit it if your Bluetooth manager connects
-devices automatically. A connection attempt can block the audio-routing loop
-for up to 50 seconds per headset (15 seconds for `info` and 35 seconds for
-`connect`), so use automatic connection management if
-prompt push-to-talk responses are required. Each extra headset increases the
+process. With `--connect`, a background worker checks BlueZ and retries
+disconnected headsets, waiting 30 seconds between passes; omit it if your
+Bluetooth manager connects devices automatically. Each headset can take up to
+50 seconds to check/connect, but this does not block routing or terminal
+push-to-talk. Shutdown cancels an in-flight Bluetooth command. Each extra headset increases the
 number of simultaneous audio links. The onboard adapter's ability to maintain
 two or more concurrent HFP/HSP headset connections depends on firmware,
 controller capacity and the installed audio stack; it is **not guaranteed**,
@@ -105,6 +107,12 @@ transmit to the other headsets, then press Enter again to mute; repeat for each
 talk burst. This is a toggle control, not a press-and-hold key. Closing stdin
 ends the command and removes its links. Only links created by this process are
 muted; pre-existing PipeWire links between headsets are not modified.
+Routing is polled every two seconds (adjust with `--interval SECONDS`), with
+terminal toggles checked every 100 ms. PipeWire command execution can add
+latency; this is not a hard real-time or hardware-button PTT implementation.
+Routing failures are logged and retried, including when PipeWire restarts.
+If a mute operation fails, audio may continue until a retry succeeds: PTT is
+not a privacy/security boundary.
 
 If a headset is silent, inspect `wpctl status` and `pw-dump` to confirm that it
 has both `Audio/Source` and `Audio/Sink` nodes and that the duplex profile is
@@ -113,10 +121,61 @@ override an existing user session. Without a duplex profile there is no
 microphone to route. For a persistent installation, run the command as a
 systemd **user** service after PipeWire and WirePlumber start, not as root.
 
+### Unattended user service
+
+An example unit is supplied in `examples/rpi-intercom.service`. Install the
+binary as above, pair/trust the headsets, and select their duplex profiles first.
+From the repository directory:
+
+```sh
+mkdir -p ~/.config/systemd/user ~/.config/rpi-intercom
+cp examples/rpi-intercom.service ~/.config/systemd/user/
+printf 'HEADSETS="AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02"\n' \
+  > ~/.config/rpi-intercom/environment
+# Replace the example addresses with your own before starting.
+systemctl --user daemon-reload
+systemctl --user enable --now rpi-intercom.service
+journalctl --user -u rpi-intercom.service -f
+```
+
+The unit uses full-duplex mode, not terminal PTT. For startup without an
+interactive login, an administrator can enable lingering with
+`sudo loginctl enable-linger "$USER"`. WirePlumber's Bluetooth seat policy must
+also permit this user's headsets when no graphical session is active; consult
+your installed WirePlumber version's BlueZ monitor/seat-monitoring settings.
+Do not run competing desktop and headless audio sessions for the same adapter.
+Stop with `systemctl --user stop rpi-intercom.service` to allow link cleanup.
+SIGKILL, power loss, or unavailable PipeWire during cleanup can leave lingering
+links in a still-running PipeWire server. Inspect `pw-link -l -I` and remove
+only the stale intercom links with `pw-link -d LINK_ID`; new processes do not
+take ownership of an earlier process's links.
+
 The Pi needs no local microphone or speaker. Audio remains on the Pi and its
 paired headsets; this is not a network intercom or walkie-talkie protocol.
 Codec negotiation, encryption and connection limits are determined by BlueZ
 and PipeWire. Headsets need acoustic isolation to avoid feedback.
+
+## Hardware validation and remaining limits
+
+The tests exercise synthetic PipeWire graphs and subprocess behavior, not
+Bluetooth radios or audio transport. Before relying on a deployment:
+
+1. Verify each headset individually exposes both microphone and speaker ports
+   with `status`, then verify both remain duplex-ready when connected together.
+2. Test speech in both directions, isolation from each headset's own microphone,
+   and PTT mute/unmute. Keep volume low initially to avoid feedback.
+3. Power-cycle each headset, change its profile, and restart PipeWire; check that
+   routing recovers and unrelated user-created links remain intact.
+4. Test SIGINT/SIGTERM cleanup and the user service after a reboot without login.
+5. Measure latency, dropouts, CPU use, and simultaneous SCO/eSCO connection
+   capacity on the actual controller/firmware. More than two participants also
+   needs verification of PipeWire input mixing, levels, and clipping.
+
+No hardware GPIO/button control, automatic profile switching, echo cancellation,
+gain normalization, or network transport is implemented. GPIO PTT needs a
+specified pin/wiring and control policy; profile and audio policy remain with
+BlueZ/WirePlumber. Direct links use PipeWire's format negotiation and mixing;
+the application does not add a separate resampling or DSP pipeline.
 
 ## Development
 

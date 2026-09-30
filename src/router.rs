@@ -519,4 +519,43 @@ mod tests {
         router.update(true).unwrap();
         assert_eq!(server.links(), 4);
     }
+
+    #[test]
+    fn snapshot_failure_does_not_delete_blindly_and_recovery_works() {
+        let server = PipeWire::new();
+        let fail_snapshot = RefCell::new(false);
+        let mut router = Router::with_executor(allowed(), |args: &[&str]| {
+            if args[0] == "pw-dump" && *fail_snapshot.borrow() {
+                return Err("PipeWire unavailable".into());
+            }
+            server.execute(args)
+        });
+        router.update(true).unwrap();
+        fail_snapshot.replace(true);
+        assert!(router.update(false).is_err());
+        router.close();
+        assert_eq!(server.links(), 4);
+        fail_snapshot.replace(false);
+        router.update(false).unwrap();
+        assert_eq!(server.links(), 0);
+    }
+
+    #[test]
+    fn creation_that_succeeds_before_command_failure_is_still_owned() {
+        let server = PipeWire::new();
+        let mut router = Router::with_executor(allowed(), |args: &[&str]| {
+            let result = server.execute(args);
+            if args.get(1) == Some(&"-L") {
+                Err("command timed out after creating link".into())
+            } else {
+                result
+            }
+        });
+        assert!(router.update(true).is_err());
+        assert_eq!(server.links(), 4);
+        router.update(true).unwrap();
+        assert_eq!(server.links(), 4);
+        router.close();
+        assert_eq!(server.links(), 0);
+    }
 }
