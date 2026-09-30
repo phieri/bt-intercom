@@ -26,6 +26,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/configure-pages@v5
+      - name: Download asciinema player
+        run: |
+          mkdir -p docs/vendor
+          curl -fsSL --retry 3 https://github.com/asciinema/asciinema-player/releases/download/v3.17.0/asciinema-player.css -o docs/vendor/asciinema-player.css
+          curl -fsSL --retry 3 https://github.com/asciinema/asciinema-player/releases/download/v3.17.0/asciinema-player.min.js -o docs/vendor/asciinema-player.min.js
+          curl -fsSL --retry 3 https://raw.githubusercontent.com/asciinema/asciinema-player/v3.17.0/LICENSE -o docs/vendor/LICENSE.asciinema-player
+          echo "f619fe17597043564f03b2c6918b3daf890ee8b912fb408542fba11afade4fdb  docs/vendor/asciinema-player.css" | sha256sum -c -
+          echo "a13c37632e1b5c49fe9128417b9319a9b5bc64cb457dd5ae52cbba8a3aceb880  docs/vendor/asciinema-player.min.js" | sha256sum -c -
+          echo "63422284ed65be54ab38d8a94e7518d27e222fbb26c9ae4cd984c63926e91c12  docs/vendor/LICENSE.asciinema-player" | sha256sum -c -
       - uses: actions/upload-pages-artifact@v4
         with:
           path: docs
