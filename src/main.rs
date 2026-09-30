@@ -238,17 +238,20 @@ fn run(args: &[String]) -> Result<(), String> {
             let allowed = addresses(&args[1..])?;
             let mut router = Router::new(allowed);
             let (headsets, _) = router.inspect()?;
-            for (address, headset) in headsets {
-                println!(
-                    "{address}: {} ({} microphone ports, {} speaker ports)",
-                    if headset.has_duplex_audio() {
-                        "duplex ready"
-                    } else {
-                        "duplex unavailable"
-                    },
-                    headset.sources.len(),
-                    headset.sinks.len()
-                );
+            for address in &router.allowed {
+                match headsets.get(address) {
+                    Some(headset) => println!(
+                        "{address}: {} ({} microphone ports, {} speaker ports)",
+                        if headset.has_duplex_audio() {
+                            "duplex ready"
+                        } else {
+                            "duplex unavailable"
+                        },
+                        headset.sources.len(),
+                        headset.sinks.len()
+                    ),
+                    None => println!("{address}: not found in PipeWire"),
+                }
             }
         }
         "run" => {
