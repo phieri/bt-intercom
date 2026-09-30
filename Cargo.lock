@@ -120,6 +120,7 @@ name = "rpi-intercom"
 version = "0.1.0"
 dependencies = [
  "ctrlc",
+ "libc",
  "serde_json",
 ]
 

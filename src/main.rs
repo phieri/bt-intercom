@@ -4,6 +4,7 @@ mod router;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::io::{BufRead, IsTerminal, Read};
+use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -18,11 +19,25 @@ fn command(args: &[&str], timeout: Duration) -> Result<String, String> {
     command_cancellable(args, timeout, None)
 }
 
+/// Which process(es) `wait_child` should terminate when the command times
+/// out, is cancelled, or errors while polling.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KillMode {
+    /// Kill only the direct child (used for interactive children that share
+    /// the caller's controlling terminal, where grouping could trigger
+    /// `SIGTTIN`/job-control issues).
+    Process,
+    /// Kill the child's entire process group, releasing pipes held open by
+    /// descendants. Only valid for children spawned with `process_group(0)`.
+    ProcessGroup,
+}
+
 fn wait_child(
     child: &mut Child,
     name: &str,
     timeout: Duration,
     stopped: Option<&AtomicBool>,
+    kill_mode: KillMode,
 ) -> Result<ExitStatus, String> {
     let start = Instant::now();
     loop {
@@ -37,9 +52,31 @@ fn wait_child(
             }
             Err(error) => error.to_string(),
         };
-        let _ = child.kill();
+        match kill_mode {
+            KillMode::ProcessGroup => kill_process_group(child),
+            KillMode::Process => {
+                let _ = child.kill();
+            }
+        }
         let _ = child.wait();
         return Err(error);
+    }
+}
+
+/// Kills the child's entire process group, so descendants that keep the
+/// child's inherited pipes open (e.g. backgrounded subprocesses) are also
+/// terminated and release those pipes. Only valid for children spawned with
+/// `process_group(0)`, which makes the child the leader of its own group.
+fn kill_process_group(child: &mut Child) {
+    let pid = child.id() as libc::pid_t;
+    if pid <= 0 {
+        return;
+    }
+    // SAFETY: `pid` is the child's own process ID, which was placed in its
+    // own process group via `process_group(0)` when spawned, so `-pid`
+    // refers to a valid process group led by that child.
+    unsafe {
+        libc::kill(-pid, libc::SIGKILL);
     }
 }
 
@@ -56,6 +93,7 @@ fn command_cancellable(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()
         .map_err(|e| format!("{}: {e}", args[0]))?;
     let mut stdout = child.stdout.take().unwrap();
@@ -68,7 +106,13 @@ fn command_cancellable(
         let mut bytes = Vec::new();
         stderr.read_to_end(&mut bytes).map(|_| bytes)
     });
-    let status = wait_child(&mut child, args[0], timeout, stopped);
+    let status = wait_child(
+        &mut child,
+        args[0],
+        timeout,
+        stopped,
+        KillMode::ProcessGroup,
+    )?;
     let stdout = output
         .join()
         .map_err(|_| "stdout reader panicked".to_string())?
@@ -77,7 +121,6 @@ fn command_cancellable(
         .join()
         .map_err(|_| "stderr reader panicked".to_string())?
         .map_err(|e| e.to_string())?;
-    let status = status?;
     if !status.success() {
         return Err(format!(
             "{} exited with {status}: {}",
@@ -98,7 +141,13 @@ fn pair_command(device: &str) -> Result<(), String> {
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|error| format!("bluetoothctl: {error}"))?;
-    let status = wait_child(&mut child, "bluetoothctl", Duration::from_secs(300), None)?;
+    let status = wait_child(
+        &mut child,
+        "bluetoothctl",
+        Duration::from_secs(300),
+        None,
+        KillMode::Process,
+    )?;
     if status.success() {
         Ok(())
     } else {
@@ -666,5 +715,16 @@ mod tests {
         thread::sleep(Duration::from_millis(50));
         stopped.store(true, Ordering::SeqCst);
         assert!(worker.join().unwrap().unwrap_err().contains("cancelled"));
+    }
+
+    #[test]
+    fn timeout_does_not_wait_for_descendants_holding_output_pipes() {
+        let start = Instant::now();
+        assert!(
+            command(&["sh", "-c", "sleep 2 & wait"], Duration::from_millis(20))
+                .unwrap_err()
+                .contains("timed out")
+        );
+        assert!(start.elapsed() < Duration::from_secs(1));
     }
 }
