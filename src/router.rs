@@ -353,6 +353,7 @@ mod tests {
         let calls = Rc::new(RefCell::new(Vec::<Vec<String>>::new()));
         let recorded = Rc::clone(&calls);
         let objects = Rc::new(RefCell::new(fixture()));
+        objects.borrow_mut().push(json!({"type":"PipeWire:Interface:Link","id":100,"info":{"output-port-id":13,"input-port-id":24}}));
         let snapshot = Rc::clone(&objects);
         let mut router = Router::with_executor(allowed(), move |args: &[&str]| {
             recorded
@@ -386,18 +387,37 @@ mod tests {
         router.update(false).unwrap();
         assert!(router.owned.is_empty());
         router.update(true).unwrap();
-        assert_eq!(router.owned.len(), 4);
+        assert_eq!(router.owned.len(), 3);
         router.update(false).unwrap();
         assert!(router.owned.is_empty());
+        assert!(objects.borrow().iter().any(|object| {
+            object["info"]["output-port-id"] == 13 && object["info"]["input-port-id"] == 24
+        }));
+        let deleted = calls
+            .borrow()
+            .iter()
+            .filter(|args| args.get(1).is_some_and(|s| s == "-d"))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(deleted.len(), 3);
+        assert!(!deleted.contains(&vec![
+            "pw-link".into(),
+            "-d".into(),
+            "13".into(),
+            "24".into()
+        ]));
         assert_eq!(
-            calls
+            objects
                 .borrow()
                 .iter()
-                .filter(|args| args.get(1).is_some_and(|s| s == "-d"))
+                .filter(|object| object["type"] == "PipeWire:Interface:Link")
                 .count(),
-            4
+            1
         );
         router.update(true).unwrap();
-        assert_eq!(router.owned.len(), 4);
+        assert_eq!(router.owned.len(), 3);
+        assert!(objects.borrow().iter().any(|object| {
+            object["info"]["output-port-id"] == 13 && object["info"]["input-port-id"] == 24
+        }));
     }
 }

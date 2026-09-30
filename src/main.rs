@@ -125,24 +125,27 @@ fn run_options(args: &[String]) -> Result<(BTreeSet<String>, Duration, bool, boo
     Ok((allowed, Duration::from_secs_f64(interval), connect, ptt))
 }
 
+fn ptt_input_from<R: BufRead>(mut input: R, sender: mpsc::Sender<bool>) {
+    let mut transmitting = false;
+    loop {
+        let mut line = String::new();
+        match input.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                transmitting = !transmitting;
+                if sender.send(transmitting).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
 fn ptt_input() -> Receiver<bool> {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let stdin = std::io::stdin();
-        let mut input = stdin.lock();
-        let mut transmitting = false;
-        loop {
-            let mut line = String::new();
-            match input.read_line(&mut line) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {
-                    transmitting = !transmitting;
-                    if sender.send(transmitting).is_err() {
-                        break;
-                    }
-                }
-            }
-        }
+        ptt_input_from(stdin.lock(), sender);
     });
     receiver
 }
@@ -334,5 +337,18 @@ mod tests {
             run_options(&["run".into(), "--ptt".into(), address, "--connect".into()]).unwrap();
         assert_eq!(allowed.len(), 1);
         assert!(connect && ptt);
+    }
+
+    #[test]
+    fn ptt_input_toggles_each_line_and_disconnects_at_eof() {
+        let (sender, receiver) = mpsc::channel();
+        ptt_input_from(std::io::Cursor::new(b"\n\n"), sender);
+
+        assert_eq!(receiver.recv().unwrap(), true);
+        assert_eq!(receiver.recv().unwrap(), false);
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(TryRecvError::Disconnected)
+        ));
     }
 }
