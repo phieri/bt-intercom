@@ -6,45 +6,7 @@
     <meta name="description" content="Watch the rpi-intercom command-line workflow in an asciinema terminal player.">
     <title>rpi-intercom · Terminal tour</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/asciinema-player@3.17.0/dist/bundle/asciinema-player.css">
-    <style>
-      :root {
-        color-scheme: dark;
-        font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background: #0a1019;
-        color: #e5eef5;
-      }
-      * { box-sizing: border-box; }
-      body { margin: 0; line-height: 1.6; }
-      a { color: #79dfc0; }
-      a:hover { color: #b0fce0; }
-      a:focus-visible { outline: 2px solid #79dfc0; outline-offset: 4px; }
-      .skip { position: absolute; left: -9999px; top: 0; background: #0a1019; padding: .75rem; }
-      .skip:focus { left: 1rem; z-index: 2; }
-      header, main, footer { width: min(100% - 2.5rem, 1000px); margin-inline: auto; }
-      header { padding-block: 1.5rem; border-bottom: 1px solid #304254; }
-      header a { font-weight: 700; text-decoration: none; letter-spacing: .02em; }
-      main { padding-block: clamp(3rem, 8vw, 6rem); }
-      .eyebrow { margin: 0 0 1rem; color: #79dfc0; font-size: .8rem; font-weight: 700; letter-spacing: .15em; text-transform: uppercase; }
-      h1 { max-width: 14ch; margin: 0; font-size: clamp(2.5rem, 7vw, 5rem); line-height: 1.08; letter-spacing: -.045em; }
-      .intro { max-width: 65ch; margin-block: 1.5rem 2.5rem; color: #afc2cf; font-size: 1.15rem; }
-      .links { display: flex; flex-wrap: wrap; gap: 1rem; margin-bottom: 3rem; }
-      .links a { display: inline-block; border: 1px solid #557a7c; border-radius: .5rem; padding: .65rem 1rem; text-decoration: none; font-weight: 600; }
-      .links a:first-child { background: #79dfc0; color: #071b1a; border-color: #79dfc0; }
-      .player-panel { background: #111d29; border: 1px solid #304254; border-radius: .8rem; overflow: hidden; }
-      .panel-heading { display: flex; align-items: center; gap: .7rem; padding: .8rem 1.2rem; border-bottom: 1px solid #304254; color: #afc2cf; font-size: .9rem; }
-      .dot { width: .65rem; height: .65rem; border-radius: 50%; background: #79dfc0; }
-      #player { min-height: 20rem; overflow: hidden; }
-      #player .asciinema-player { max-width: 100%; }
-      .note { max-width: 75ch; color: #afc2cf; font-size: .9rem; }
-      h2 { margin-top: 3rem; font-size: 1.5rem; }
-      .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 1rem; padding: 0; list-style: none; }
-      .steps li { padding: 1.25rem; background: #111d29; border: 1px solid #304254; border-radius: .6rem; }
-      .steps strong { display: block; margin-bottom: .3rem; }
-      .steps p { margin: 0; color: #afc2cf; }
-      code { color: #a0eace; }
-      footer { padding-block: 2rem; border-top: 1px solid #304254; color: #afc2cf; font-size: .9rem; }
-      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
-    </style>
+    <link rel="stylesheet" href="style.css">
     <script src="https://cdn.jsdelivr.net/npm/asciinema-player@3.17.0/dist/bundle/asciinema-player.min.js" defer></script>
     <script>
       document.addEventListener("DOMContentLoaded", () => {
@@ -62,7 +24,7 @@
     <main id="main">
       <p class="eyebrow">Bluetooth Classic · Raspberry Pi · PipeWire</p>
       <h1>Multiple headsets. One conversation.</h1>
-      <p class="intro">A local, full-duplex headset intercom for Raspberry Pi Zero W and Zero 2 W. See what the command-line workflow looks like, from checking duplex audio to toggling push-to-talk.</p>
+      <p class="intro">A local, full-duplex headset intercom for Raspberry Pi Zero W and Zero 2 W. See the command-line workflow, from checking duplex audio to holding a headset's play/pause button to talk.</p>
       <div class="links">
         <a href="https://github.com/phieri/rpi-intercom#requirements">Get started on GitHub</a>
         <a href="https://github.com/phieri/rpi-intercom#usage">Read the CLI guide</a>
@@ -85,7 +47,7 @@
         <ol class="steps">
           <li><strong>01 / Pair</strong><p>Discover and pair headsets you own with <code>scan</code> and <code>pair</code>.</p></li>
           <li><strong>02 / Check</strong><p>Use <code>status</code> to confirm each headset exposes duplex audio in PipeWire.</p></li>
-          <li><strong>03 / Talk</strong><p>Start <code>run</code> for full duplex, or opt in to <code>--ptt</code> to toggle transmission with Enter.</p></li>
+          <li><strong>03 / Talk</strong><p>Start <code>run</code> for full duplex, or map each headset's play/pause button with <code>--ptt</code> for press-and-hold transmission.</p></li>
         </ol>
         <p class="note">Requires BlueZ, PipeWire, WirePlumber, and compatible Bluetooth Classic headsets on a Raspberry Pi. Browser playback is only a demonstration; audio stays on the Pi and its paired headsets.</p>
       </section>
