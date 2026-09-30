@@ -6,6 +6,11 @@ PipeWire/WirePlumber for HFP/HSP headset audio. The application does not
 implement Bluetooth codecs or profiles itself. It does **not** support
 Bluetooth LE Audio.
 
+Watch an [illustrative CLI session](https://phieri.github.io/rpi-intercom/)
+replayed with the asciinema player. The GitHub Pages site deploys from
+`docs/` via the `Deploy Pages` workflow (set Pages source to **GitHub Actions**
+in the repository settings).
+
 Each allowlisted headset microphone is connected to the speakers of every
 *other* allowlisted headset. Audio is never sent to its own headset. The
 router automatically follows headset disconnections and reconnections; it
