@@ -16,9 +16,9 @@ only removes links it created.
 - Raspberry Pi Zero W or Zero 2 W with its onboard Bluetooth radio. An
   original Pi Zero needs a USB Bluetooth Classic adapter instead.
 - Linux with BlueZ (`bluetoothctl`), PipeWire (`pw-dump`, `pw-link`),
-  WirePlumber, and Python 3.10+ running in the **same user session** as
-  PipeWire. Install the distribution's Bluetooth/PipeWire packages and enable
-  the Bluetooth and user audio services.
+  and WirePlumber. Run the intercom in the **same user session** as PipeWire.
+  Install the distribution's Bluetooth/PipeWire packages and enable the
+  Bluetooth and user audio services.
 - Two or more Bluetooth Classic headsets offering **both** a microphone and
   speaker to PipeWire. Select the bidirectional HFP/HSP headset profile
   (`headset-head-unit`); A2DP is playback-only. Check `wpctl status` and, if
@@ -39,11 +39,21 @@ Start PipeWire and WirePlumber for your login user. Verify that
 starting the intercom. Do **not** start this app with `sudo`: root's PipeWire
 session will not have your headset nodes.
 
-Install in the PipeWire user's environment (for example, a virtual environment):
+Install Rust and build the command-line binary on the Pi:
 
 ```sh
-python3 -m pip install .
+cargo build --release --locked
+install -Dm755 target/release/rpi-intercom ~/.local/bin/rpi-intercom
 ```
+
+Alternatively, download the appropriate binary from a successful GitHub Actions
+build artifact and install it as `~/.local/bin/rpi-intercom`. Use
+`arm-unknown-linux-gnueabihf` for Raspberry Pi Zero W (32-bit Raspberry Pi OS)
+or `aarch64-unknown-linux-gnu` for Zero 2 W running 64-bit Raspberry Pi OS.
+For Zero 2 W running 32-bit Raspberry Pi OS, use the 32-bit artifact.
+Build artifacts are dynamically linked against glibc; build on the Pi if the
+artifact is incompatible with your OS. The original Pi Zero also needs a USB
+Bluetooth adapter.
 
 ## Usage
 
@@ -63,7 +73,7 @@ and trust settings; this program does not store credentials.
 Start the intercom with the paired addresses:
 
 ```sh
-rpi-intercom run --connect AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02
+rpi-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 --connect
 ```
 
 Leave it running in the foreground; Ctrl-C removes the links created by this
@@ -89,5 +99,10 @@ and PipeWire. Headsets need acoustic isolation to avoid feedback.
 ## Development
 
 ```sh
-python3 -m unittest discover -s tests -v
+cargo fmt --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --locked
 ```
+
+GitHub Actions runs these checks on Linux and cross-compiles release binaries
+for both Raspberry Pi architectures.

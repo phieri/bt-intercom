@@ -1,0 +1,43 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked
+
+  cross:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        include:
+          - target: arm-unknown-linux-gnueabihf
+          - target: aarch64-unknown-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # The cross ARM image uses an armv6 hard-float toolchain; Ubuntu's armhf
+      # cross linker defaults to armv7 and cannot run on the original Zero W.
+      - run: cargo install cross --version 0.2.5 --locked
+      - name: Cross-compile release binary
+        run: cross build --release --locked --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpi-intercom-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/rpi-intercom
+          if-no-files-found: error
