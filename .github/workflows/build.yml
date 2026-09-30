@@ -33,6 +33,7 @@ jobs:
       matrix:
         include:
           - target: arm-unknown-linux-gnueabihf
+          - target: armv7-unknown-linux-gnueabihf
           - target: aarch64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v7
@@ -40,7 +41,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       # The cross ARM image uses an armv6 hard-float toolchain; Ubuntu's armhf
-      # cross linker defaults to armv7 and cannot run on the original Zero W.
+      # cross linker defaults to armv7 and cannot run on the Zero or Zero W.
       - run: cargo install cross --version 0.2.5 --locked
       - name: Cross-compile release binary
         run: cross build --release --locked --target ${{ matrix.target }}
