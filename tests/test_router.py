@@ -15,8 +15,10 @@ def obj(kind, id_, props=None, **info):
 def headset(base, address):
     return [
         obj("Device", base, {"api.bluez5.address": address}),
-        obj("Node", base + 1, {"device.id": str(base), "media.class": "Audio/Source"}),
-        obj("Node", base + 2, {"device.id": str(base), "media.class": "Audio/Sink"}),
+        obj("Node", base + 1, {"device.id": str(base), "media.class": "Audio/Source",
+                                "api.bluez5.profile": "headset-head-unit"}),
+        obj("Node", base + 2, {"device.id": str(base), "media.class": "Audio/Sink",
+                                "api.bluez5.profile": "headset-head-unit"}),
         obj("Port", base + 3, {"node.id": str(base + 1), "port.direction": "out",
                                "audio.channel": "MONO"}),
         obj("Port", base + 4, {"node.id": str(base + 2), "port.direction": "in",
@@ -51,6 +53,19 @@ class TopologyTests(unittest.TestCase):
         ]
         headsets, _ = topology(self.objects, {self.a, self.b})
         self.assertEqual(len(headsets[self.a].sources), 1)
+
+    def test_ignores_le_audio_and_a2dp_nodes(self):
+        self.objects[1]["info"]["props"]["api.bluez5.profile"] = "bap-duplex"
+        self.objects[2]["info"]["props"]["api.bluez5.profile"] = "a2dp-sink"
+        headsets, _ = topology(self.objects, {self.a, self.b})
+        self.assertEqual(headsets[self.a].sources, [])
+        self.assertEqual(headsets[self.a].sinks, [])
+        self.assertEqual(desired_links(headsets), set())
+
+    def test_unknown_profile_does_not_route(self):
+        del self.objects[1]["info"]["props"]["api.bluez5.profile"]
+        headsets, _ = topology(self.objects, {self.a, self.b})
+        self.assertEqual(desired_links(headsets), {(23, 14), (23, 15)})
 
     def test_matches_stereo_channels(self):
         self.objects[3]["info"]["props"]["audio.channel"] = "FL"
