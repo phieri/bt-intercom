@@ -178,7 +178,7 @@ fn run(args: &[String]) -> Result<(), String> {
             if allowed.is_empty() {
                 return Err(usage().into());
             }
-            if !interval.is_finite() || interval <= 0.0 || interval > u64::MAX as f64 {
+            if !interval.is_finite() || interval <= 0.0 || interval >= u64::MAX as f64 {
                 return Err("--interval must be positive and finite".into());
             }
             let interval = Duration::from_secs_f64(interval);
@@ -211,7 +211,9 @@ fn run(args: &[String]) -> Result<(), String> {
                     let started = Instant::now();
                     while !stopped.load(Ordering::SeqCst) && started.elapsed() < interval {
                         thread::sleep(
-                            (interval - started.elapsed()).min(Duration::from_millis(100)),
+                            interval
+                                .saturating_sub(started.elapsed())
+                                .min(Duration::from_millis(100)),
                         );
                     }
                 }
