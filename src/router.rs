@@ -248,12 +248,10 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
         let desired = desired_links(&headsets)
             .into_iter()
             .filter(|(output, _)| {
-                headsets
-                    .iter()
-                    .any(|(address, headset)| {
-                        sources.contains(address)
-                            && headset.sources.iter().any(|port| port.id == *output)
-                    })
+                headsets.iter().any(|(address, headset)| {
+                    sources.contains(address)
+                        && headset.sources.iter().any(|port| port.id == *output)
+                })
             })
             .collect::<BTreeSet<_>>();
         let mut failures = Vec::new();
@@ -392,6 +390,22 @@ mod tests {
         );
         let (headsets, _) = topology(&json!(fixture()), &[A.to_string()].into()).unwrap();
         assert!(desired_links(&headsets).is_empty());
+    }
+
+    #[test]
+    fn headset_button_controls_only_its_own_microphone() {
+        let server = PipeWire::new();
+        let mut router = server.router();
+        let mut sources = BTreeSet::new();
+        router.update_sources(&sources).unwrap();
+        assert_eq!(server.links(), 0);
+        sources.insert(A.to_string());
+        router.update_sources(&sources).unwrap();
+        let (_, links) = router.inspect_owned().unwrap();
+        assert_eq!(links, [(13, 24), (13, 25)].into());
+        sources.clear();
+        router.update_sources(&sources).unwrap();
+        assert_eq!(server.links(), 0);
     }
 
     #[test]
