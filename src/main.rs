@@ -19,12 +19,25 @@ fn command(args: &[&str], timeout: Duration) -> Result<String, String> {
     command_cancellable(args, timeout, None)
 }
 
+/// Which process(es) `wait_child` should terminate when the command times
+/// out, is cancelled, or errors while polling.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KillMode {
+    /// Kill only the direct child (used for interactive children that share
+    /// the caller's controlling terminal, where grouping could trigger
+    /// `SIGTTIN`/job-control issues).
+    Process,
+    /// Kill the child's entire process group, releasing pipes held open by
+    /// descendants. Only valid for children spawned with `process_group(0)`.
+    ProcessGroup,
+}
+
 fn wait_child(
     child: &mut Child,
     name: &str,
     timeout: Duration,
     stopped: Option<&AtomicBool>,
-    own_process_group: bool,
+    kill_mode: KillMode,
 ) -> Result<ExitStatus, String> {
     let start = Instant::now();
     loop {
@@ -39,10 +52,11 @@ fn wait_child(
             }
             Err(error) => error.to_string(),
         };
-        if own_process_group {
-            kill_process_group(child);
-        } else {
-            let _ = child.kill();
+        match kill_mode {
+            KillMode::ProcessGroup => kill_process_group(child),
+            KillMode::Process => {
+                let _ = child.kill();
+            }
         }
         let _ = child.wait();
         return Err(error);
@@ -92,7 +106,13 @@ fn command_cancellable(
         let mut bytes = Vec::new();
         stderr.read_to_end(&mut bytes).map(|_| bytes)
     });
-    let status = wait_child(&mut child, args[0], timeout, stopped, true)?;
+    let status = wait_child(
+        &mut child,
+        args[0],
+        timeout,
+        stopped,
+        KillMode::ProcessGroup,
+    )?;
     let stdout = output
         .join()
         .map_err(|_| "stdout reader panicked".to_string())?
@@ -126,7 +146,7 @@ fn pair_command(device: &str) -> Result<(), String> {
         "bluetoothctl",
         Duration::from_secs(300),
         None,
-        false,
+        KillMode::Process,
     )?;
     if status.success() {
         Ok(())
