@@ -208,12 +208,10 @@ fn run(args: &[String]) -> Result<(), String> {
                         "INFO: {active}/{} headsets with duplex audio",
                         router.allowed.len()
                     );
-                    let deadline = Instant::now() + interval;
-                    while !stopped.load(Ordering::SeqCst) && Instant::now() < deadline {
+                    let started = Instant::now();
+                    while !stopped.load(Ordering::SeqCst) && started.elapsed() < interval {
                         thread::sleep(
-                            deadline
-                                .saturating_duration_since(Instant::now())
-                                .min(Duration::from_millis(100)),
+                            (interval - started.elapsed()).min(Duration::from_millis(100)),
                         );
                     }
                 }

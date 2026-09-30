@@ -65,13 +65,12 @@ pub fn topology(
                     property(props, "media.class"),
                     Some("Audio/Source" | "Audio/Sink")
                 ) && property(props, "api.bluez5.profile") == Some("headset-head-unit")
-                {
-                    if let (Some(device), Some(class)) = (
+                    && let (Some(device), Some(class)) = (
                         props.get("device.id").and_then(id_string),
                         property(props, "media.class"),
-                    ) {
-                        nodes.insert(id, (device, class));
-                    }
+                    )
+                {
+                    nodes.insert(id, (device, class));
                 }
             }
             Some("Port") => {
