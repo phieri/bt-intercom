@@ -68,7 +68,7 @@ fn command_cancellable(
         let mut bytes = Vec::new();
         stderr.read_to_end(&mut bytes).map(|_| bytes)
     });
-    let status = wait_child(&mut child, args[0], timeout, stopped);
+    let status = wait_child(&mut child, args[0], timeout, stopped)?;
     let stdout = output
         .join()
         .map_err(|_| "stdout reader panicked".to_string())?
@@ -77,7 +77,6 @@ fn command_cancellable(
         .join()
         .map_err(|_| "stderr reader panicked".to_string())?
         .map_err(|e| e.to_string())?;
-    let status = status?;
     if !status.success() {
         return Err(format!(
             "{} exited with {status}: {}",
@@ -666,5 +665,19 @@ mod tests {
         thread::sleep(Duration::from_millis(50));
         stopped.store(true, Ordering::SeqCst);
         assert!(worker.join().unwrap().unwrap_err().contains("cancelled"));
+    }
+
+    #[test]
+    fn timeout_does_not_wait_for_descendants_holding_output_pipes() {
+        let start = Instant::now();
+        assert!(
+            command(
+                &["sh", "-c", "sleep 2 & wait"],
+                Duration::from_millis(20)
+            )
+            .unwrap_err()
+            .contains("timed out")
+        );
+        assert!(start.elapsed() < Duration::from_secs(1));
     }
 }
