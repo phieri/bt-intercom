@@ -9,15 +9,16 @@ Bluetooth LE Audio.
 Each allowlisted headset microphone is connected to the speakers of every
 *other* allowlisted headset. Audio is never sent to its own headset. The
 router automatically follows headset disconnections and reconnections; it
-only removes links tagged with its own per-process ownership identifier.
-Cleanup inspects live link IDs instead of relying on remembered port numbers,
-which PipeWire can reuse after a disconnect.
+only removes links it created. Each link belongs to a monitored `pw-cli`
+connection; closing that connection releases the link without deleting a
+numeric ID that PipeWire could have reused. Per-instance ownership properties
+also identify the links in diagnostic snapshots.
 
 ## Requirements
 
 - Raspberry Pi Zero W or Zero 2 W with its onboard Bluetooth radio. An
   original Pi Zero needs a USB Bluetooth Classic adapter instead.
-- Linux with BlueZ (`bluetoothctl`), PipeWire (`pw-dump`, `pw-link`),
+- Linux with BlueZ (`bluetoothctl`), PipeWire (`pw-dump`, `pw-cli`, `pw-link`),
   and WirePlumber. Run the intercom in the **same user session** as PipeWire.
   Install the distribution's Bluetooth/PipeWire packages and enable the
   Bluetooth and user audio services.
@@ -68,8 +69,10 @@ rpi-intercom pair AA:BB:CC:DD:EE:02
 ```
 
 Only pair devices you own and recognize. Pairing uses BlueZ's local
-KeyboardDisplay agent and inherits the terminal so PIN/confirmation prompts
-are visible immediately. Some headsets must instead be
+KeyboardDisplay agent in an interactive shell. Enter the displayed
+`pair ADDRESS` command, answer PIN/confirmation prompts, then enter `quit`;
+the app verifies pairing before trusting and connecting that address. The shell
+has a five-minute limit. Some headsets must instead be
 paired using the desktop's Bluetooth UI or `bluetoothctl`. BlueZ stores bonds
 and trust settings; this program does not store credentials.
 
@@ -95,7 +98,8 @@ process. With `--connect`, a background worker checks BlueZ and retries
 disconnected headsets, waiting 30 seconds between passes; omit it if your
 Bluetooth manager connects devices automatically. Each headset can take up to
 50 seconds to check/connect, but this does not block routing or terminal
-push-to-talk. Shutdown cancels an in-flight Bluetooth command. Each extra headset increases the
+push-to-talk. Shutdown cancels an in-flight Bluetooth command. Each audio
+link uses one monitored `pw-cli` subprocess. Each extra headset increases the
 number of simultaneous audio links. The onboard adapter's ability to maintain
 two or more concurrent HFP/HSP headset connections depends on firmware,
 controller capacity and the installed audio stack; it is **not guaranteed**,
@@ -145,10 +149,11 @@ also permit this user's headsets when no graphical session is active; consult
 your installed WirePlumber version's BlueZ monitor/seat-monitoring settings.
 Do not run competing desktop and headless audio sessions for the same adapter.
 Stop with `systemctl --user stop rpi-intercom.service` to allow link cleanup.
-SIGKILL, power loss, or unavailable PipeWire during cleanup can leave lingering
-links in a still-running PipeWire server. Inspect `pw-link -l -I` and remove
-only the stale intercom links with `pw-link -d LINK_ID`; new processes do not
-take ownership of an earlier process's links.
+The service manager also terminates helper processes if the main process
+crashes. Outside the service, SIGKILL can leave orphaned `pw-cli -m` helpers:
+terminate those specific helpers to release their links. New processes do not
+take ownership of an earlier process's links. Normal cleanup does not require
+a working `pw-dump`.
 
 The Pi needs no local microphone or speaker. Audio remains on the Pi and its
 paired headsets; this is not a network intercom or walkie-talkie protocol.

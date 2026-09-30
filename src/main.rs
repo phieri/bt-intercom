@@ -87,21 +87,16 @@ fn command_cancellable(
 }
 
 fn pair_command(device: &str) -> Result<(), String> {
+    eprintln!("At the Bluetooth prompt, enter: pair {device}");
+    eprintln!("Answer any PIN/confirmation prompts, then enter: quit");
     let mut child = Command::new("bluetoothctl")
-        .args([
-            "--agent",
-            "KeyboardDisplay",
-            "--timeout",
-            "60",
-            "pair",
-            device,
-        ])
+        .args(["--agent", "KeyboardDisplay"])
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|error| format!("bluetoothctl: {error}"))?;
-    let status = wait_child(&mut child, "bluetoothctl", Duration::from_secs(65), None)?;
+    let status = wait_child(&mut child, "bluetoothctl", Duration::from_secs(300), None)?;
     if status.success() {
         Ok(())
     } else {
