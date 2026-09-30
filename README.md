@@ -117,7 +117,7 @@ Bluetooth manager connects devices automatically. Each headset can take up to
 50 seconds to check/connect, but this does not block routing or headset-button
 push-to-talk. Shutdown cancels an in-flight Bluetooth command. Each audio
 link uses one monitored `pw-cli` subprocess. Each extra headset increases the
-number of simultaneous audio links. The onboard adapter's ability to maintain
+number of simultaneous audio links. The Bluetooth adapter's ability to maintain
 two or more concurrent HFP/HSP headset connections depends on firmware,
 controller capacity and the installed audio stack; it is **not guaranteed**,
 and has not been verified across these Pi models.
