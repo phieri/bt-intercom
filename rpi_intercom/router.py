@@ -42,7 +42,8 @@ def topology(objects, allowed):
             if address in allowed:
                 devices[str(obj["id"])] = address
         elif kind == "Node":
-            if props.get("media.class") in ("Audio/Source", "Audio/Sink"):
+            if (props.get("media.class") in ("Audio/Source", "Audio/Sink")
+                    and props.get("api.bluez5.profile") == "headset-head-unit"):
                 nodes[str(obj["id"])] = (str(props.get("device.id")), props["media.class"])
         elif kind == "Port":
             ports[obj["id"]] = (props.get("node.id"), props.get("port.direction"),
