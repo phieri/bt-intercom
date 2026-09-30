@@ -110,26 +110,29 @@ two or more concurrent HFP/HSP headset connections depends on firmware,
 controller capacity and the installed audio stack; it is **not guaranteed**,
 and has not been verified on Zero W or Zero 2 W hardware.
 
-For opt-in push-to-talk, map **each** headset's button to its Linux input event
-device and key code. For example, if both headsets expose a play/pause button
-(`KEY_PLAYPAUSE`, code 164) through separate `/dev/input/event*` devices:
+For opt-in push-to-talk, map **each** headset's play/pause button to its Linux
+input event device. The app listens only for `KEY_PLAYPAUSE` (code 164), not
+the headset's call/answer button. For example, if both headsets expose
+play/pause through separate `/dev/input/event*` devices:
 
 ```sh
 rpi-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 \
-  --ptt AA:BB:CC:DD:EE:01=/dev/input/event4:164 \
-  --ptt AA:BB:CC:DD:EE:02=/dev/input/event5:164
+  --ptt AA:BB:CC:DD:EE:01=/dev/input/event4 \
+  --ptt AA:BB:CC:DD:EE:02=/dev/input/event5
 ```
 
-Identify each headset's event device and button code with `evtest` or
+Identify each headset's play/pause event device with `evtest` or
 `libinput debug-events`; prefer a stable `/dev/input/by-id/` or
 `/dev/input/by-path/` symlink when available. The account running the intercom
 needs permission to read those devices. Bluetooth headset buttons are **not**
 universally exposed as Linux input events: this mode only works when your
-headset and Bluetooth stack expose distinct button events for each headset.
+headset and Bluetooth stack expose distinct `KEY_PLAYPAUSE` press and release
+events for each headset. A headset that exposes only a call button is not
+supported for PTT.
 Do not map a keyboard input device. An unmapped or unreadable button prevents
 PTT from starting.
 
-All headset microphones start muted. Holding a headset's mapped button connects
+All headset microphones start muted. Holding a headset's play/pause button connects
 **that headset's microphone** to the other headsets; releasing disconnects it.
 Repeated key events are ignored. Enter on the Pi does nothing. If an event
 device closes or fails, the command exits and releases its links. Only links

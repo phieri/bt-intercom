@@ -1,10 +1,10 @@
 {"version":2,"width":86,"height":18}
 [0.2,"o","$ rpi-intercom --help\r\n"]
-[0.7,"o","Usage: rpi-intercom scan [--seconds 1..300]\r\n       rpi-intercom pair ADDRESS\r\n       rpi-intercom status ADDRESS [ADDRESS ...]\r\n       rpi-intercom run ADDRESS [ADDRESS ...] [--interval SECONDS] [--connect] [--ptt ADDRESS=/dev/input/eventX:KEY_CODE ...] [--dashboard]\r\n"]
+[0.7,"o","Usage: rpi-intercom scan [--seconds 1..300]\r\n       rpi-intercom pair ADDRESS\r\n       rpi-intercom status ADDRESS [ADDRESS ...]\r\n       rpi-intercom run ADDRESS [ADDRESS ...] [--interval SECONDS] [--connect] [--ptt ADDRESS=/dev/input/eventX ...] [--dashboard]\r\n"]
 [4.0,"o","$ rpi-intercom status AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02\r\n"]
 [4.6,"o","AA:BB:CC:DD:EE:01: duplex ready (1 microphone ports, 1 speaker ports)\r\nAA:BB:CC:DD:EE:02: duplex ready (1 microphone ports, 1 speaker ports)\r\n"]
-[8.0,"o","$ rpi-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 \\\r\n  --ptt AA:BB:CC:DD:EE:01=/dev/input/event4:164 \\\r\n  --ptt AA:BB:CC:DD:EE:02=/dev/input/event5:164\r\n"]
-[8.5,"o","PTT: Hold your headset button to transmit; release to mute.\r\nINFO: 2/2 headsets with duplex audio\r\n"]
+[8.0,"o","$ rpi-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 \\\r\n  --ptt AA:BB:CC:DD:EE:01=/dev/input/event4 \\\r\n  --ptt AA:BB:CC:DD:EE:02=/dev/input/event5\r\n"]
+[8.5,"o","PTT: Hold your headset's play/pause button to transmit; release to mute.\r\nINFO: 2/2 headsets with duplex audio\r\n"]
 [11.0,"o","PTT AA:BB:CC:DD:EE:01: transmitting\r\nINFO: 2/2 headsets with duplex audio\r\n"]
 [14.0,"o","PTT AA:BB:CC:DD:EE:01: muted\r\nINFO: 2/2 headsets with duplex audio\r\n"]
 [17.0,"o","^C\r\n$ "]

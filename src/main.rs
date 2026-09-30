@@ -264,11 +264,7 @@ fn run_options(args: &[String]) -> Result<RunOptions, String> {
     Ok((allowed, interval, connect, buttons, dashboard))
 }
 
-fn ptt_input_from<R: Read>(
-    mut input: R,
-    address: String,
-    sender: mpsc::Sender<PttEvent>,
-) {
+fn ptt_input_from<R: Read>(mut input: R, address: String, sender: mpsc::Sender<PttEvent>) {
     let mut pressed = false;
     let mut event = vec![0; std::mem::size_of::<libc::timeval>() + 8];
     let offset = std::mem::size_of::<libc::timeval>();
@@ -473,7 +469,9 @@ fn run(args: &[String]) -> Result<(), String> {
             let mut transmitting = input.is_none();
             let mut active_sources = BTreeSet::new();
             if input.is_some() {
-                eprintln!("PTT: Hold your headset's play/pause button to transmit; release to mute.");
+                eprintln!(
+                    "PTT: Hold your headset's play/pause button to transmit; release to mute."
+                );
             }
             let mut last_update: Option<Instant> = None;
             let result: Result<(), String> = (|| {
@@ -690,10 +688,7 @@ mod tests {
         assert!(connect && dashboard);
         assert_eq!(buttons.len(), 1);
         assert_eq!(buttons[0].path, "/dev/input/event4");
-        for mapping in [
-            "AA:BB:CC:DD:EE:02=/dev/input/event4",
-            "AA:BB:CC:DD:EE:01=",
-        ] {
+        for mapping in ["AA:BB:CC:DD:EE:02=/dev/input/event4", "AA:BB:CC:DD:EE:01="] {
             assert!(
                 run_options(&[
                     "run".into(),
@@ -764,7 +759,11 @@ mod tests {
         ));
 
         let (sender, receiver) = mpsc::channel();
-        ptt_input_from(std::io::Cursor::new(event(0, 3, 0)), "headset".into(), sender);
+        ptt_input_from(
+            std::io::Cursor::new(event(0, 3, 0)),
+            "headset".into(),
+            sender,
+        );
         assert!(receiver.recv().unwrap().is_err());
     }
 
