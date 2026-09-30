@@ -25,7 +25,9 @@ only removes links it created.
   profile (A2DP is playback-only); check `wpctl status` and, if necessary,
   select the duplex profile with `wpctl set-profile DEVICE_ID PROFILE_INDEX`.
   LE Audio requires a working BAP-capable controller, headset, BlueZ and
-  PipeWire build. Classic support does not imply LE Audio support.
+  PipeWire build. The onboard Bluetooth 4.x radios of the Zero W and Zero 2 W
+  do **not** provide LE Audio ISO support; an appropriate external adapter is
+  needed. Classic support does not imply LE Audio support.
 
 Install in the PipeWire user's environment (for example, a virtual environment):
 

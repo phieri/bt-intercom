@@ -17,6 +17,11 @@ def address(value):
     return value.upper()
 
 
+def paired(device):
+    info = command("bluetoothctl", "info", device)
+    return re.search(r"^\s*Paired:\s*yes\s*$", info, re.MULTILINE) is not None
+
+
 def parser():
     cli = argparse.ArgumentParser(description="Route audio between trusted Bluetooth headsets")
     actions = cli.add_subparsers(dest="action", required=True)
@@ -41,7 +46,10 @@ def main(argv=None):
             print(command("bluetoothctl", "--timeout", str(args.seconds), "scan", "on",
                           timeout=args.seconds + 5))
         elif args.action == "pair":
-            for action in ("pair", "trust", "connect"):
+            print(command("bluetoothctl", "--timeout", "60", "pair", args.address, timeout=65))
+            if not paired(args.address):
+                raise ValueError(f"pairing did not succeed for {args.address}")
+            for action in ("trust", "connect"):
                 print(command("bluetoothctl", "--timeout", "60", action, args.address, timeout=65))
         else:
             if args.interval <= 0:

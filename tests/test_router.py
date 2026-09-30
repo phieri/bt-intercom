@@ -1,8 +1,9 @@
 import json
 import subprocess
 import unittest
+from unittest.mock import patch
 
-from rpi_intercom.cli import address, parser
+from rpi_intercom.cli import address, paired, parser
 from rpi_intercom.router import Router, desired_links, topology
 
 
@@ -116,6 +117,12 @@ class CliTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             parser().parse_args(["pair", "invalid; rm -rf /"])
         self.assertEqual(address("aa:bb:cc:dd:ee:ff"), "AA:BB:CC:DD:EE:FF")
+
+    def test_pairing_status_must_be_confirmed(self):
+        with patch("rpi_intercom.cli.command", return_value="  Paired: no\n"):
+            self.assertFalse(paired("AA:BB:CC:DD:EE:FF"))
+        with patch("rpi_intercom.cli.command", return_value="  Paired: yes\n"):
+            self.assertTrue(paired("AA:BB:CC:DD:EE:FF"))
 
 
 if __name__ == "__main__":

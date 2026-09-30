@@ -55,7 +55,7 @@ def topology(objects, allowed):
 
     headsets = {address: Headset(address, [], []) for address in devices.values()}
     for id_, (node_id, direction, channel) in ports.items():
-        node = nodes.get(node_id)
+        node = nodes.get(str(node_id))
         if not node:
             continue
         device_id, media_class = node
