@@ -118,6 +118,18 @@ Routing failures are logged and retried, including when PipeWire restarts.
 If a mute operation fails, audio may continue until a retry succeeds: PTT is
 not a privacy/security boundary.
 
+For an opt-in live console view, add `--dashboard` to `run` in an interactive
+terminal (it requires a terminal on stderr). The view refreshes as routing and
+Bluetooth status change and shows each requested headset's paired/connected
+status, duplex availability, owned active PipeWire link counts (outgoing and
+incoming), and Bluetooth RSSI when BlueZ reports it. `?` means Bluetooth
+status has not been obtained; `unknown` signal means RSSI is unavailable,
+not necessarily a poor connection. Link counts show established routes,
+**not** measured speech, throughput, or packet loss. The display does not
+change pairing, connections, profiles, or audio routing. Omit `--dashboard`
+for a systemd service or redirected logs. It works with `--ptt`; Enter still
+toggles transmission.
+
 If a headset is silent, inspect `wpctl status` and `pw-dump` to confirm that it
 has both `Audio/Source` and `Audio/Sink` nodes and that the duplex profile is
 active. This program does not force a Bluetooth profile: doing so could
