@@ -1,8 +1,9 @@
+mod dashboard;
 mod router;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
-use std::io::{BufRead, Read};
+use std::io::{BufRead, IsTerminal, Read};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,6 +11,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use dashboard::Dashboard;
 use router::Router;
 
 fn command(args: &[&str], timeout: Duration) -> Result<String, String> {
@@ -127,7 +129,7 @@ fn device_flag(info: &str, flag: &str) -> bool {
 }
 
 fn usage() -> &'static str {
-    "Usage: rpi-intercom scan [--seconds 1..300]\n       rpi-intercom pair ADDRESS\n       rpi-intercom status ADDRESS [ADDRESS ...]\n       rpi-intercom run ADDRESS [ADDRESS ...] [--interval SECONDS] [--connect] [--ptt]"
+    "Usage: rpi-intercom scan [--seconds 1..300]\n       rpi-intercom pair ADDRESS\n       rpi-intercom status ADDRESS [ADDRESS ...]\n       rpi-intercom run ADDRESS [ADDRESS ...] [--interval SECONDS] [--connect] [--ptt] [--dashboard]"
 }
 
 fn addresses(args: &[String]) -> Result<BTreeSet<String>, String> {
@@ -137,16 +139,18 @@ fn addresses(args: &[String]) -> Result<BTreeSet<String>, String> {
     args.iter().map(|value| address(value)).collect()
 }
 
-fn run_options(args: &[String]) -> Result<(BTreeSet<String>, Duration, bool, bool), String> {
+fn run_options(args: &[String]) -> Result<(BTreeSet<String>, Duration, bool, bool, bool), String> {
     let mut allowed = BTreeSet::new();
     let mut interval = 2.0_f64;
     let mut connect = false;
     let mut ptt = false;
+    let mut dashboard = false;
     let mut index = 1;
     while index < args.len() {
         match args[index].as_str() {
             "--connect" => connect = true,
             "--ptt" => ptt = true,
+            "--dashboard" => dashboard = true,
             "--interval" => {
                 index += 1;
                 interval = args
@@ -172,7 +176,7 @@ fn run_options(args: &[String]) -> Result<(BTreeSet<String>, Duration, bool, boo
     if interval.is_zero() {
         return Err("--interval must be at least one nanosecond".into());
     }
-    Ok((allowed, interval, connect, ptt))
+    Ok((allowed, interval, connect, ptt, dashboard))
 }
 
 fn ptt_input_from<R: BufRead>(mut input: R, sender: mpsc::Sender<bool>) {
@@ -321,12 +325,21 @@ fn run(args: &[String]) -> Result<(), String> {
             }
         }
         "run" => {
-            let (allowed, interval, connect, ptt) = run_options(args)?;
+            let (allowed, interval, connect, ptt, show_dashboard) = run_options(args)?;
+            if show_dashboard && !std::io::stderr().is_terminal() {
+                return Err("--dashboard requires an interactive terminal on stderr".into());
+            }
             let stopped = Arc::new(AtomicBool::new(false));
             let signal = Arc::clone(&stopped);
             ctrlc::set_handler(move || signal.store(true, Ordering::SeqCst))
                 .map_err(|e| e.to_string())?;
             let mut router = Router::new(allowed);
+            let mut dashboard = show_dashboard
+                .then(|| Dashboard::start(router.allowed.clone(), Arc::clone(&stopped)));
+            let mut headsets = BTreeMap::new();
+            let mut links = BTreeSet::new();
+            let mut last_error = None;
+            let mut redraw = true;
             let (shutdown, shutdown_rx) = mpsc::channel();
             let connector = if connect {
                 let devices = router.allowed.clone();
@@ -359,10 +372,13 @@ fn run(args: &[String]) -> Result<(), String> {
                                 Ok(state) => {
                                     transmitting = state;
                                     last_update = None;
-                                    eprintln!(
-                                        "PTT: {}",
-                                        if state { "transmitting" } else { "muted" }
-                                    );
+                                    redraw = true;
+                                    if dashboard.is_none() {
+                                        eprintln!(
+                                            "PTT: {}",
+                                            if state { "transmitting" } else { "muted" }
+                                        );
+                                    }
                                 }
                                 Err(TryRecvError::Empty) => break,
                                 Err(TryRecvError::Disconnected) => {
@@ -374,20 +390,54 @@ fn run(args: &[String]) -> Result<(), String> {
                         }
                     }
                     if last_update.is_none_or(|updated| updated.elapsed() >= interval) {
-                        match router.update(transmitting) {
-                            Ok(headsets) => {
-                                let active = headsets
-                                    .values()
-                                    .filter(|headset| headset.has_duplex_audio())
-                                    .count();
-                                eprintln!(
-                                    "INFO: {active}/{} headsets with duplex audio",
-                                    router.allowed.len()
-                                );
+                        let update = router.update(transmitting);
+                        if dashboard.is_some() {
+                            let mut inspect_error = None;
+                            match router.inspect_owned() {
+                                Ok((current, active)) => {
+                                    headsets = current;
+                                    links = active;
+                                }
+                                Err(error) => {
+                                    headsets.clear();
+                                    links.clear();
+                                    inspect_error = Some(error);
+                                }
                             }
-                            Err(error) => eprintln!("WARNING: Routing update failed: {error}"),
+                            last_error = update.err().or(inspect_error);
+                            redraw = true;
+                        } else {
+                            match update {
+                                Ok(headsets) => {
+                                    let active = headsets
+                                        .values()
+                                        .filter(|headset| headset.has_duplex_audio())
+                                        .count();
+                                    eprintln!(
+                                        "INFO: {active}/{} headsets with duplex audio",
+                                        router.allowed.len()
+                                    );
+                                }
+                                Err(error) => eprintln!("WARNING: Routing update failed: {error}"),
+                            }
                         }
                         last_update = Some(Instant::now());
+                    }
+                    if let Some(ref mut dashboard) = dashboard {
+                        redraw |= dashboard.refresh();
+                        if redraw {
+                            dashboard
+                                .draw(
+                                    &router.allowed,
+                                    &headsets,
+                                    &links,
+                                    transmitting,
+                                    last_error.as_deref(),
+                                    &mut std::io::stderr().lock(),
+                                )
+                                .map_err(|error| error.to_string())?;
+                            redraw = false;
+                        }
                     }
                     thread::sleep(Duration::from_millis(100).min(interval));
                 }
@@ -395,6 +445,9 @@ fn run(args: &[String]) -> Result<(), String> {
             })();
             stopped.store(true, Ordering::SeqCst);
             let _ = shutdown.send(());
+            if let Some(ref mut dashboard) = dashboard {
+                dashboard.stop();
+            }
             if let Some(connector) = connector {
                 let _ = connector.join();
             }
@@ -501,12 +554,19 @@ mod tests {
     #[test]
     fn parses_ptt_without_changing_default_mode() {
         let address = "AA:BB:CC:DD:EE:01".to_string();
-        let (_, _, _, ptt) = run_options(&["run".into(), address.clone()]).unwrap();
+        let (_, _, _, ptt, dashboard) = run_options(&["run".into(), address.clone()]).unwrap();
         assert!(!ptt);
-        let (allowed, _, connect, ptt) =
-            run_options(&["run".into(), "--ptt".into(), address, "--connect".into()]).unwrap();
+        assert!(!dashboard);
+        let (allowed, _, connect, ptt, dashboard) = run_options(&[
+            "run".into(),
+            "--ptt".into(),
+            address,
+            "--connect".into(),
+            "--dashboard".into(),
+        ])
+        .unwrap();
         assert_eq!(allowed.len(), 1);
-        assert!(connect && ptt);
+        assert!(connect && ptt && dashboard);
     }
 
     #[test]

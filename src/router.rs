@@ -37,7 +37,7 @@ type StartLink = Box<dyn FnMut(&[&str]) -> Result<Box<dyn LinkHandle>, String>>;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Port {
-    id: u64,
+    pub(crate) id: u64,
     channel: String,
 }
 
@@ -301,6 +301,12 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
         topology(&snapshot, &self.allowed)
     }
 
+    pub fn inspect_owned(&mut self) -> Result<(BTreeMap<String, Headset>, BTreeSet<Link>), String> {
+        let snapshot = self.snapshot()?;
+        let (headsets, _) = topology(&snapshot, &self.allowed)?;
+        Ok((headsets, self.owned_links(&snapshot)))
+    }
+
     fn snapshot(&mut self) -> Result<Value, String> {
         serde_json::from_str(&(self.execute)(&["pw-dump"])?)
             .map_err(|e| format!("invalid pw-dump JSON: {e}"))
@@ -411,6 +417,19 @@ mod tests {
         assert!(headsets[A].has_duplex_audio());
         assert!(headsets[B].has_duplex_audio());
         assert!(!Headset::default().has_duplex_audio());
+    }
+
+    #[test]
+    fn dashboard_inspection_excludes_external_links() {
+        let server = PipeWire::new();
+        server.external_link();
+        let mut router = server.router();
+        router.update(true).unwrap();
+        let (headsets, owned) = router.inspect_owned().unwrap();
+        assert!(headsets[A].has_duplex_audio());
+        assert!(!owned.contains(&(13, 24)));
+        assert_eq!(owned.len(), 3);
+        router.close();
     }
 
     #[derive(Clone)]
