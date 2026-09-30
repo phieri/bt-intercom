@@ -2,10 +2,11 @@ mod router;
 
 use std::collections::BTreeSet;
 use std::env;
-use std::io::Read;
+use std::io::{BufRead, Read};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -87,7 +88,66 @@ fn paired(info: &str) -> bool {
 }
 
 fn usage() -> &'static str {
-    "Usage: rpi-intercom scan [--seconds 1..300]\n       rpi-intercom pair ADDRESS\n       rpi-intercom run ADDRESS [ADDRESS ...] [--interval SECONDS] [--connect]"
+    "Usage: rpi-intercom scan [--seconds 1..300]\n       rpi-intercom pair ADDRESS\n       rpi-intercom run ADDRESS [ADDRESS ...] [--interval SECONDS] [--connect] [--ptt]"
+}
+
+fn run_options(args: &[String]) -> Result<(BTreeSet<String>, Duration, bool, bool), String> {
+    let mut allowed = BTreeSet::new();
+    let mut interval = 2.0_f64;
+    let mut connect = false;
+    let mut ptt = false;
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--connect" => connect = true,
+            "--ptt" => ptt = true,
+            "--interval" => {
+                index += 1;
+                interval = args
+                    .get(index)
+                    .ok_or_else(usage)?
+                    .parse()
+                    .map_err(|_| "--interval must be positive")?;
+            }
+            value if value.starts_with('-') => return Err(usage().into()),
+            value => {
+                allowed.insert(address(value)?);
+            }
+        }
+        index += 1;
+    }
+    if allowed.is_empty() {
+        return Err(usage().into());
+    }
+    if !interval.is_finite() || interval <= 0.0 || interval >= u64::MAX as f64 {
+        return Err("--interval must be positive and finite".into());
+    }
+    Ok((allowed, Duration::from_secs_f64(interval), connect, ptt))
+}
+
+fn ptt_input_from<R: BufRead>(mut input: R, sender: mpsc::Sender<bool>) {
+    let mut transmitting = false;
+    loop {
+        let mut line = String::new();
+        match input.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                transmitting = !transmitting;
+                if sender.send(transmitting).is_err() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+fn ptt_input() -> Receiver<bool> {
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let stdin = std::io::stdin();
+        ptt_input_from(stdin.lock(), sender);
+    });
+    receiver
 }
 
 fn run(args: &[String]) -> Result<(), String> {
@@ -153,35 +213,7 @@ fn run(args: &[String]) -> Result<(), String> {
             }
         }
         "run" => {
-            let mut allowed = BTreeSet::new();
-            let mut interval = 2.0_f64;
-            let mut connect = false;
-            let mut index = 1;
-            while index < args.len() {
-                match args[index].as_str() {
-                    "--connect" => connect = true,
-                    "--interval" => {
-                        index += 1;
-                        interval = args
-                            .get(index)
-                            .ok_or_else(usage)?
-                            .parse()
-                            .map_err(|_| "--interval must be positive")?;
-                    }
-                    value if value.starts_with('-') => return Err(usage().into()),
-                    value => {
-                        allowed.insert(address(value)?);
-                    }
-                }
-                index += 1;
-            }
-            if allowed.is_empty() {
-                return Err(usage().into());
-            }
-            if !interval.is_finite() || interval <= 0.0 || interval >= u64::MAX as f64 {
-                return Err("--interval must be positive and finite".into());
-            }
-            let interval = Duration::from_secs_f64(interval);
+            let (allowed, interval, connect, ptt) = run_options(args)?;
             let stopped = Arc::new(AtomicBool::new(false));
             let signal = Arc::clone(&stopped);
             ctrlc::set_handler(move || signal.store(true, Ordering::SeqCst))
@@ -197,25 +229,51 @@ fn run(args: &[String]) -> Result<(), String> {
                     }
                 }
             }
+            let input = if ptt {
+                eprintln!("PTT: Press Enter to transmit; press Enter again to mute.");
+                Some(ptt_input())
+            } else {
+                None
+            };
+            let mut transmitting = !ptt;
+            let mut last_update: Option<Instant> = None;
             let result: Result<(), String> = (|| {
                 while !stopped.load(Ordering::SeqCst) {
-                    let headsets = router.update()?;
-                    let active = headsets
-                        .values()
-                        .filter(|headset| !headset.sources.is_empty() && !headset.sinks.is_empty())
-                        .count();
-                    eprintln!(
-                        "INFO: {active}/{} headsets with duplex audio",
-                        router.allowed.len()
-                    );
-                    let started = Instant::now();
-                    while !stopped.load(Ordering::SeqCst) && started.elapsed() < interval {
-                        thread::sleep(
-                            interval
-                                .saturating_sub(started.elapsed())
-                                .min(Duration::from_millis(100)),
-                        );
+                    if let Some(ref input) = input {
+                        loop {
+                            match input.try_recv() {
+                                Ok(state) => {
+                                    transmitting = state;
+                                    last_update = None;
+                                    eprintln!(
+                                        "PTT: {}",
+                                        if state { "transmitting" } else { "muted" }
+                                    );
+                                }
+                                Err(TryRecvError::Empty) => break,
+                                Err(TryRecvError::Disconnected) => {
+                                    return Err(
+                                        "PTT input closed; run --ptt with stdin open".into()
+                                    );
+                                }
+                            }
+                        }
                     }
+                    if last_update.is_none_or(|updated| updated.elapsed() >= interval) {
+                        let headsets = router.update(transmitting)?;
+                        let active = headsets
+                            .values()
+                            .filter(|headset| {
+                                !headset.sources.is_empty() && !headset.sinks.is_empty()
+                            })
+                            .count();
+                        eprintln!(
+                            "INFO: {active}/{} headsets with duplex audio",
+                            router.allowed.len()
+                        );
+                        last_update = Some(Instant::now());
+                    }
+                    thread::sleep(Duration::from_millis(100).min(interval));
                 }
                 Ok(())
             })();
@@ -264,5 +322,33 @@ mod tests {
             .is_err()
         );
         assert!(run(&["run".into()]).is_err());
+        assert!(run_options(&["run".into(), "--ptt".into()]).is_err());
+        assert!(
+            run_options(&["run".into(), "AA:BB:CC:DD:EE:01".into(), "--unknown".into()]).is_err()
+        );
+    }
+
+    #[test]
+    fn parses_ptt_without_changing_default_mode() {
+        let address = "AA:BB:CC:DD:EE:01".to_string();
+        let (_, _, _, ptt) = run_options(&["run".into(), address.clone()]).unwrap();
+        assert!(!ptt);
+        let (allowed, _, connect, ptt) =
+            run_options(&["run".into(), "--ptt".into(), address, "--connect".into()]).unwrap();
+        assert_eq!(allowed.len(), 1);
+        assert!(connect && ptt);
+    }
+
+    #[test]
+    fn ptt_input_toggles_each_line_and_disconnects_at_eof() {
+        let (sender, receiver) = mpsc::channel();
+        ptt_input_from(std::io::Cursor::new(b"\n\n"), sender);
+
+        assert_eq!(receiver.recv().unwrap(), true);
+        assert_eq!(receiver.recv().unwrap(), false);
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(TryRecvError::Disconnected)
+        ));
     }
 }

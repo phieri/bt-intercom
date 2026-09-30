@@ -167,11 +167,15 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
         }
     }
 
-    pub fn update(&mut self) -> Result<BTreeMap<String, Headset>, String> {
+    pub fn update(&mut self, transmitting: bool) -> Result<BTreeMap<String, Headset>, String> {
         let snapshot = serde_json::from_str(&(self.execute)(&["pw-dump"])?)
             .map_err(|e| format!("invalid pw-dump JSON: {e}"))?;
         let (headsets, existing) = topology(&snapshot, &self.allowed)?;
-        let desired = desired_links(&headsets);
+        let desired = if transmitting {
+            desired_links(&headsets)
+        } else {
+            BTreeSet::new()
+        };
         for (output, input) in self.owned.difference(&desired).copied().collect::<Vec<_>>() {
             if existing.contains(&(output, input)) {
                 (self.execute)(&["pw-link", "-d", &output.to_string(), &input.to_string()])?;
@@ -291,7 +295,7 @@ mod tests {
                 Ok(String::new())
             }
         });
-        router.update().unwrap();
+        router.update(true).unwrap();
         assert_eq!(router.owned.len(), 3);
         assert!(
             !calls
@@ -299,7 +303,7 @@ mod tests {
                 .contains(&vec!["pw-link".into(), "13".into(), "24".into()])
         );
         *objects.borrow_mut() = headset(10, A);
-        router.update().unwrap();
+        router.update(true).unwrap();
         assert!(router.owned.is_empty());
         router.close();
         assert!(!calls.borrow().contains(&vec![
@@ -328,9 +332,9 @@ mod tests {
             }
             Ok(String::new())
         });
-        router.update().unwrap();
+        router.update(true).unwrap();
         assert_eq!(router.owned.len(), 3);
-        router.update().unwrap();
+        router.update(true).unwrap();
         assert_eq!(router.owned.len(), 4);
         router.close();
         assert!(router.owned.is_empty());
@@ -342,5 +346,78 @@ mod tests {
                 .count(),
             4
         );
+    }
+
+    #[test]
+    fn ptt_mutes_and_restores_only_owned_links() {
+        let calls = Rc::new(RefCell::new(Vec::<Vec<String>>::new()));
+        let recorded = Rc::clone(&calls);
+        let objects = Rc::new(RefCell::new(fixture()));
+        objects.borrow_mut().push(json!({"type":"PipeWire:Interface:Link","id":100,"info":{"output-port-id":13,"input-port-id":24}}));
+        let snapshot = Rc::clone(&objects);
+        let mut router = Router::with_executor(allowed(), move |args: &[&str]| {
+            recorded
+                .borrow_mut()
+                .push(args.iter().map(|s| s.to_string()).collect());
+            if args[0] == "pw-dump" {
+                Ok(json!(*snapshot.borrow()).to_string())
+            } else {
+                let (output, input) = if args[1] == "-d" {
+                    (
+                        args[2].parse::<u64>().unwrap(),
+                        args[3].parse::<u64>().unwrap(),
+                    )
+                } else {
+                    (
+                        args[1].parse::<u64>().unwrap(),
+                        args[2].parse::<u64>().unwrap(),
+                    )
+                };
+                if args[1] == "-d" {
+                    snapshot.borrow_mut().retain(|object| {
+                        object["info"]["output-port-id"] != output
+                            || object["info"]["input-port-id"] != input
+                    });
+                } else {
+                    snapshot.borrow_mut().push(json!({"type":"PipeWire:Interface:Link","id":100+output,"info":{"output-port-id":output,"input-port-id":input}}));
+                }
+                Ok(String::new())
+            }
+        });
+        router.update(false).unwrap();
+        assert!(router.owned.is_empty());
+        router.update(true).unwrap();
+        assert_eq!(router.owned.len(), 3);
+        router.update(false).unwrap();
+        assert!(router.owned.is_empty());
+        assert!(objects.borrow().iter().any(|object| {
+            object["info"]["output-port-id"] == 13 && object["info"]["input-port-id"] == 24
+        }));
+        let deleted = calls
+            .borrow()
+            .iter()
+            .filter(|args| args.get(1).is_some_and(|s| s == "-d"))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(deleted.len(), 3);
+        assert!(!deleted.contains(&vec![
+            "pw-link".into(),
+            "-d".into(),
+            "13".into(),
+            "24".into()
+        ]));
+        assert_eq!(
+            objects
+                .borrow()
+                .iter()
+                .filter(|object| object["type"] == "PipeWire:Interface:Link")
+                .count(),
+            1
+        );
+        router.update(true).unwrap();
+        assert_eq!(router.owned.len(), 3);
+        assert!(objects.borrow().iter().any(|object| {
+            object["info"]["output-port-id"] == 13 && object["info"]["input-port-id"] == 24
+        }));
     }
 }
