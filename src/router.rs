@@ -231,13 +231,31 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
     }
 
     pub fn update(&mut self, transmitting: bool) -> Result<BTreeMap<String, Headset>, String> {
-        let snapshot = self.snapshot()?;
-        let (headsets, existing) = topology(&snapshot, &self.allowed)?;
-        let desired = if transmitting {
-            desired_links(&headsets)
+        let sources = if transmitting {
+            self.allowed.clone()
         } else {
             BTreeSet::new()
         };
+        self.update_sources(&sources)
+    }
+
+    pub fn update_sources(
+        &mut self,
+        sources: &BTreeSet<String>,
+    ) -> Result<BTreeMap<String, Headset>, String> {
+        let snapshot = self.snapshot()?;
+        let (headsets, existing) = topology(&snapshot, &self.allowed)?;
+        let desired = desired_links(&headsets)
+            .into_iter()
+            .filter(|(output, _)| {
+                headsets
+                    .iter()
+                    .any(|(address, headset)| {
+                        sources.contains(address)
+                            && headset.sources.iter().any(|port| port.id == *output)
+                    })
+            })
+            .collect::<BTreeSet<_>>();
         let mut failures = Vec::new();
         let live = self.owned_links(&snapshot);
         self.owned.retain(|link, (handle, started)| {

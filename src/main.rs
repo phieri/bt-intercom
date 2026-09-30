@@ -3,7 +3,8 @@ mod router;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
-use std::io::{BufRead, IsTerminal, Read};
+use std::fs::File;
+use std::io::{IsTerminal, Read};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Arc;
@@ -178,7 +179,7 @@ fn device_flag(info: &str, flag: &str) -> bool {
 }
 
 fn usage() -> &'static str {
-    "Usage: rpi-intercom scan [--seconds 1..300]\n       rpi-intercom pair ADDRESS\n       rpi-intercom status ADDRESS [ADDRESS ...]\n       rpi-intercom run ADDRESS [ADDRESS ...] [--interval SECONDS] [--connect] [--ptt] [--dashboard]"
+    "Usage: rpi-intercom scan [--seconds 1..300]\n       rpi-intercom pair ADDRESS\n       rpi-intercom status ADDRESS [ADDRESS ...]\n       rpi-intercom run ADDRESS [ADDRESS ...] [--interval SECONDS] [--connect] [--ptt ADDRESS=/dev/input/eventX:KEY_CODE ...] [--dashboard]"
 }
 
 fn addresses(args: &[String]) -> Result<BTreeSet<String>, String> {
@@ -188,17 +189,40 @@ fn addresses(args: &[String]) -> Result<BTreeSet<String>, String> {
     args.iter().map(|value| address(value)).collect()
 }
 
-fn run_options(args: &[String]) -> Result<(BTreeSet<String>, Duration, bool, bool, bool), String> {
+struct PttButton {
+    address: String,
+    path: String,
+    key: u16,
+}
+
+fn run_options(
+    args: &[String],
+) -> Result<(BTreeSet<String>, Duration, bool, Vec<PttButton>, bool), String> {
     let mut allowed = BTreeSet::new();
     let mut interval = 2.0_f64;
     let mut connect = false;
-    let mut ptt = false;
+    let mut buttons: Vec<PttButton> = Vec::new();
     let mut dashboard = false;
     let mut index = 1;
     while index < args.len() {
         match args[index].as_str() {
             "--connect" => connect = true,
-            "--ptt" => ptt = true,
+            "--ptt" => {
+                index += 1;
+                let binding = args.get(index).ok_or_else(usage)?;
+                let (device, event) = binding.split_once('=').ok_or_else(usage)?;
+                let (path, code) = event.rsplit_once(':').ok_or_else(usage)?;
+                if path.is_empty() {
+                    return Err(usage().into());
+                }
+                let address = address(device)?;
+                let key = code.parse::<u16>().map_err(|_| usage())?;
+                buttons.push(PttButton {
+                    address,
+                    path: path.into(),
+                    key,
+                });
+            }
             "--dashboard" => dashboard = true,
             "--interval" => {
                 index += 1;
@@ -218,6 +242,15 @@ fn run_options(args: &[String]) -> Result<(BTreeSet<String>, Duration, bool, boo
     if allowed.is_empty() {
         return Err(usage().into());
     }
+    let mut configured = BTreeSet::new();
+    for button in &buttons {
+        if !allowed.contains(&button.address) || !configured.insert(&button.address) {
+            return Err("--ptt requires one unique button mapping per listed headset".into());
+        }
+    }
+    if !buttons.is_empty() && configured != allowed {
+        return Err("--ptt requires a button mapping for every listed headset".into());
+    }
     if !interval.is_finite() || interval <= 0.0 || interval >= u64::MAX as f64 {
         return Err("--interval must be positive and finite".into());
     }
@@ -225,18 +258,31 @@ fn run_options(args: &[String]) -> Result<(BTreeSet<String>, Duration, bool, boo
     if interval.is_zero() {
         return Err("--interval must be at least one nanosecond".into());
     }
-    Ok((allowed, interval, connect, ptt, dashboard))
+    Ok((allowed, interval, connect, buttons, dashboard))
 }
 
-fn ptt_input_from<R: BufRead>(mut input: R, sender: mpsc::Sender<bool>) {
-    let mut transmitting = false;
+fn ptt_input_from<R: Read>(
+    mut input: R,
+    address: String,
+    key: u16,
+    sender: mpsc::Sender<Result<(String, bool), String>>,
+) {
+    let mut pressed = false;
+    let mut event = vec![0; std::mem::size_of::<libc::timeval>() + 8];
+    let offset = std::mem::size_of::<libc::timeval>();
     loop {
-        let mut line = String::new();
-        match input.read_line(&mut line) {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {
-                transmitting = !transmitting;
-                if sender.send(transmitting).is_err() {
+        if let Err(error) = input.read_exact(&mut event) {
+            let _ = sender.send(Err(format!("PTT input for {address} closed: {error}")));
+            break;
+        }
+        let event_type = u16::from_ne_bytes([event[offset], event[offset + 1]]);
+        let event_key = u16::from_ne_bytes([event[offset + 2], event[offset + 3]]);
+        let value = i32::from_ne_bytes(event[offset + 4..offset + 8].try_into().unwrap());
+        if event_type == 1 && event_key == key && (value == 0 || value == 1) {
+            let next = value == 1;
+            if next != pressed {
+                pressed = next;
+                if sender.send(Ok((address.clone(), pressed))).is_err() {
                     break;
                 }
             }
@@ -244,13 +290,21 @@ fn ptt_input_from<R: BufRead>(mut input: R, sender: mpsc::Sender<bool>) {
     }
 }
 
-fn ptt_input() -> Receiver<bool> {
+fn ptt_input(buttons: Vec<PttButton>) -> Result<Receiver<Result<(String, bool), String>>, String> {
+    let inputs = buttons
+        .into_iter()
+        .map(|button| {
+            File::open(&button.path)
+                .map(|file| (button, file))
+                .map_err(|error| format!("PTT input: {error}"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let (sender, receiver) = mpsc::channel();
-    thread::spawn(move || {
-        let stdin = std::io::stdin();
-        ptt_input_from(stdin.lock(), sender);
-    });
-    receiver
+    for (button, file) in inputs {
+        let sender = sender.clone();
+        thread::spawn(move || ptt_input_from(file, button.address, button.key, sender));
+    }
+    Ok(receiver)
 }
 
 fn connect_disconnected(
@@ -374,7 +428,7 @@ fn run(args: &[String]) -> Result<(), String> {
             }
         }
         "run" => {
-            let (allowed, interval, connect, ptt, show_dashboard) = run_options(args)?;
+            let (allowed, interval, connect, buttons, show_dashboard) = run_options(args)?;
             if show_dashboard && !std::io::stderr().is_terminal() {
                 return Err("--dashboard requires an interactive terminal on stderr".into());
             }
@@ -405,41 +459,52 @@ fn run(args: &[String]) -> Result<(), String> {
             } else {
                 None
             };
-            let input = if ptt {
-                eprintln!("PTT: Press Enter to transmit; press Enter again to mute.");
-                Some(ptt_input())
-            } else {
+            let input = if buttons.is_empty() {
                 None
+            } else {
+                Some(ptt_input(buttons)?)
             };
-            let mut transmitting = !ptt;
+            let mut transmitting = input.is_none();
+            let mut active_sources = BTreeSet::new();
+            if input.is_some() {
+                eprintln!("PTT: Hold your headset button to transmit; release to mute.");
+            }
             let mut last_update: Option<Instant> = None;
             let result: Result<(), String> = (|| {
                 while !stopped.load(Ordering::SeqCst) {
                     if let Some(ref input) = input {
                         loop {
                             match input.try_recv() {
-                                Ok(state) => {
-                                    transmitting = state;
+                                Ok(Ok((address, state))) => {
+                                    if state {
+                                        active_sources.insert(address.clone());
+                                    } else {
+                                        active_sources.remove(&address);
+                                    }
+                                    transmitting = !active_sources.is_empty();
                                     last_update = None;
                                     redraw = true;
                                     if dashboard.is_none() {
                                         eprintln!(
-                                            "PTT: {}",
+                                            "PTT {address}: {}",
                                             if state { "transmitting" } else { "muted" }
                                         );
                                     }
                                 }
+                                Ok(Err(error)) => return Err(error),
                                 Err(TryRecvError::Empty) => break,
                                 Err(TryRecvError::Disconnected) => {
-                                    return Err(
-                                        "PTT input closed; run --ptt with stdin open".into()
-                                    );
+                                    return Err("PTT input closed".into());
                                 }
                             }
                         }
                     }
                     if last_update.is_none_or(|updated| updated.elapsed() >= interval) {
-                        let update = router.update(transmitting);
+                        let update = if input.is_some() {
+                            router.update_sources(&active_sources)
+                        } else {
+                            router.update(true)
+                        };
                         if dashboard.is_some() {
                             let mut inspect_error = None;
                             match router.inspect_owned() {
