@@ -40,10 +40,10 @@ def topology(objects, allowed):
         if kind == "Device":
             address = props.get("api.bluez5.address", "").upper()
             if address in allowed:
-                devices[obj["id"]] = address
+                devices[str(obj["id"])] = address
         elif kind == "Node":
             if props.get("media.class") in ("Audio/Source", "Audio/Sink"):
-                nodes[obj["id"]] = (props.get("device.id"), props["media.class"])
+                nodes[str(obj["id"])] = (str(props.get("device.id")), props["media.class"])
         elif kind == "Port":
             ports[obj["id"]] = (props.get("node.id"), props.get("port.direction"),
                                  props.get("audio.channel", "MONO"))
