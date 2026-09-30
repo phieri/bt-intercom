@@ -102,7 +102,7 @@ Leave it running in the foreground; Ctrl-C removes the links created by this
 process. With `--connect`, a background worker checks BlueZ and retries
 disconnected headsets, waiting 30 seconds between passes; omit it if your
 Bluetooth manager connects devices automatically. Each headset can take up to
-50 seconds to check/connect, but this does not block routing or terminal
+50 seconds to check/connect, but this does not block routing or headset-button
 push-to-talk. Shutdown cancels an in-flight Bluetooth command. Each audio
 link uses one monitored `pw-cli` subprocess. Each extra headset increases the
 number of simultaneous audio links. The onboard adapter's ability to maintain
@@ -110,15 +110,33 @@ two or more concurrent HFP/HSP headset connections depends on firmware,
 controller capacity and the installed audio stack; it is **not guaranteed**,
 and has not been verified on Zero W or Zero 2 W hardware.
 
-For opt-in push-to-talk operation, add `--ptt` to `run`. All microphones start
-muted. With the command running in an interactive terminal, press Enter once to
-transmit to the other headsets, then press Enter again to mute; repeat for each
-talk burst. This is a toggle control, not a press-and-hold key. Closing stdin
-ends the command and removes its links. Only links created by this process are
-muted; pre-existing PipeWire links between headsets are not modified.
-Routing is polled every two seconds (adjust with `--interval SECONDS`), with
-terminal toggles checked every 100 ms. PipeWire command execution can add
-latency; this is not a hard real-time or hardware-button PTT implementation.
+For opt-in push-to-talk, map **each** headset's button to its Linux input event
+device and key code. For example, if both headsets expose a play/pause button
+(`KEY_PLAYPAUSE`, code 164) through separate `/dev/input/event*` devices:
+
+```sh
+rpi-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 \
+  --ptt AA:BB:CC:DD:EE:01=/dev/input/event4:164 \
+  --ptt AA:BB:CC:DD:EE:02=/dev/input/event5:164
+```
+
+Identify each headset's event device and button code with `evtest` or
+`libinput debug-events`; prefer a stable `/dev/input/by-id/` or
+`/dev/input/by-path/` symlink when available. The account running the intercom
+needs permission to read those devices. Bluetooth headset buttons are **not**
+universally exposed as Linux input events: this mode only works when your
+headset and Bluetooth stack expose distinct button events for each headset.
+Do not map a keyboard input device. An unmapped or unreadable button prevents
+PTT from starting.
+
+All headset microphones start muted. Holding a headset's mapped button connects
+**that headset's microphone** to the other headsets; releasing disconnects it.
+Repeated key events are ignored. Enter on the Pi does nothing. If an event
+device closes or fails, the command exits and releases its links. Only links
+created by this process are controlled; pre-existing PipeWire links between
+headsets are not modified. Routing is polled every two seconds (adjust with
+`--interval SECONDS`), with button events checked every 100 ms. PipeWire
+command execution can add latency; this is not hard real-time PTT.
 Routing failures are logged and retried, including when PipeWire restarts.
 If a mute operation fails, audio may continue until a retry succeeds: PTT is
 not a privacy/security boundary.
@@ -132,8 +150,7 @@ status has not been obtained; `unknown` signal means RSSI is unavailable,
 not necessarily a poor connection. Link counts show established routes,
 **not** measured speech, throughput, or packet loss. The display does not
 change pairing, connections, profiles, or audio routing. Omit `--dashboard`
-for a systemd service or redirected logs. It works with `--ptt`; Enter still
-toggles transmission.
+for a systemd service or redirected logs. It works with headset-button PTT.
 
 If a headset is silent, inspect `wpctl status` and `pw-dump` to confirm that it
 has both `Audio/Source` and `Audio/Sink` nodes and that the duplex profile is
@@ -159,7 +176,7 @@ systemctl --user enable --now rpi-intercom.service
 journalctl --user -u rpi-intercom.service -f
 ```
 
-The unit uses full-duplex mode, not terminal PTT. For startup without an
+The unit uses full-duplex mode, not headset-button PTT. For startup without an
 interactive login, an administrator can enable lingering with
 `sudo loginctl enable-linger "$USER"`. WirePlumber's Bluetooth seat policy must
 also permit this user's headsets when no graphical session is active; consult
@@ -193,7 +210,7 @@ Bluetooth radios or audio transport. Before relying on a deployment:
    capacity on the actual controller/firmware. More than two participants also
    needs verification of PipeWire input mixing, levels, and clipping.
 
-No hardware GPIO/button control, automatic profile switching, echo cancellation,
+No GPIO button control, automatic profile switching, echo cancellation,
 gain normalization, or network transport is implemented. GPIO PTT needs a
 specified pin/wiring and control policy; profile and audio policy remain with
 BlueZ/WirePlumber. Direct links use PipeWire's format negotiation and mixing;
