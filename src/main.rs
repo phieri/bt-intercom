@@ -157,12 +157,15 @@ fn ptt_input() -> Receiver<bool> {
     receiver
 }
 
-fn connect_disconnected(allowed: &BTreeSet<String>) {
+fn connect_disconnected(
+    allowed: &BTreeSet<String>,
+    mut execute: impl FnMut(&[&str], Duration) -> Result<String, String>,
+) {
     for device in allowed {
-        let connected = command(&["bluetoothctl", "info", device], Duration::from_secs(15))
+        let connected = execute(&["bluetoothctl", "info", device], Duration::from_secs(15))
             .is_ok_and(|info| device_flag(&info, "Connected"));
         if !connected
-            && let Err(error) = command(
+            && let Err(error) = execute(
                 &["bluetoothctl", "--timeout", "30", "connect", device],
                 Duration::from_secs(35),
             )
@@ -275,7 +278,7 @@ fn run(args: &[String]) -> Result<(), String> {
                     if connect
                         && last_connect.is_none_or(|time| time.elapsed() >= Duration::from_secs(30))
                     {
-                        connect_disconnected(&router.allowed);
+                        connect_disconnected(&router.allowed, command);
                         last_connect = Some(Instant::now());
                     }
                     if let Some(ref input) = input {
@@ -346,6 +349,51 @@ mod tests {
         assert!(!device_flag("Not Paired: yes\n", "Paired"));
         assert!(device_flag("  Connected: yes\n", "Connected"));
         assert!(!device_flag("  Paired: yes\n", "Connected"));
+    }
+
+    #[test]
+    fn connects_only_when_disconnected_or_info_fails() {
+        let device = "AA:BB:CC:DD:EE:01";
+        let allowed = BTreeSet::from([device.to_string()]);
+        for (info, should_connect) in [
+            (Ok("Connected: yes\n"), false),
+            (Ok("Connected: no\n"), true),
+            (Err("bluetoothctl info failed"), true),
+        ] {
+            let mut calls = Vec::new();
+            connect_disconnected(&allowed, |args, timeout| {
+                calls.push((
+                    args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>(),
+                    timeout,
+                ));
+                if args[1] == "info" {
+                    info.map(str::to_string).map_err(str::to_string)
+                } else {
+                    Ok(String::new())
+                }
+            });
+            let mut expected = vec![(
+                vec![
+                    "bluetoothctl".to_string(),
+                    "info".to_string(),
+                    device.to_string(),
+                ],
+                Duration::from_secs(15),
+            )];
+            if should_connect {
+                expected.push((
+                    vec![
+                        "bluetoothctl".to_string(),
+                        "--timeout".to_string(),
+                        "30".to_string(),
+                        "connect".to_string(),
+                        device.to_string(),
+                    ],
+                    Duration::from_secs(35),
+                ));
+            }
+            assert_eq!(calls, expected);
+        }
     }
 
     #[test]

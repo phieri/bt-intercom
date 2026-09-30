@@ -91,7 +91,8 @@ Leave it running in the foreground; Ctrl-C removes the links created by this
 process. With `--connect`, the intercom checks BlueZ every 30 seconds and
 retries disconnected headsets; omit it if your Bluetooth manager connects
 devices automatically. A connection attempt can block the audio-routing loop
-for up to 35 seconds per headset, so use automatic connection management if
+for up to 50 seconds per headset (15 seconds for `info` and 35 seconds for
+`connect`), so use automatic connection management if
 prompt push-to-talk responses are required. Each extra headset increases the
 number of simultaneous audio links. The onboard adapter's ability to maintain
 two or more concurrent HFP/HSP headset connections depends on firmware,
