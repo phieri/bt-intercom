@@ -179,7 +179,7 @@ fn device_flag(info: &str, flag: &str) -> bool {
 }
 
 fn usage() -> &'static str {
-    "Usage: rpi-intercom scan [--seconds 1..300]\n       rpi-intercom pair ADDRESS\n       rpi-intercom status ADDRESS [ADDRESS ...]\n       rpi-intercom run ADDRESS [ADDRESS ...] [--interval SECONDS] [--connect] [--ptt ADDRESS=/dev/input/eventX:KEY_CODE ...] [--dashboard]"
+    "Usage: rpi-intercom scan [--seconds 1..300]\n       rpi-intercom pair ADDRESS\n       rpi-intercom status ADDRESS [ADDRESS ...]\n       rpi-intercom run ADDRESS [ADDRESS ...] [--interval SECONDS] [--connect] [--ptt ADDRESS=/dev/input/eventX ...] [--dashboard]"
 }
 
 fn addresses(args: &[String]) -> Result<BTreeSet<String>, String> {
@@ -192,8 +192,9 @@ fn addresses(args: &[String]) -> Result<BTreeSet<String>, String> {
 struct PttButton {
     address: String,
     path: String,
-    key: u16,
 }
+
+const KEY_PLAYPAUSE: u16 = 164;
 
 type RunOptions = (BTreeSet<String>, Duration, bool, Vec<PttButton>, bool);
 type PttEvent = Result<(String, bool), String>;
@@ -211,17 +212,14 @@ fn run_options(args: &[String]) -> Result<RunOptions, String> {
             "--ptt" => {
                 index += 1;
                 let binding = args.get(index).ok_or_else(usage)?;
-                let (device, event) = binding.split_once('=').ok_or_else(usage)?;
-                let (path, code) = event.rsplit_once(':').ok_or_else(usage)?;
+                let (device, path) = binding.split_once('=').ok_or_else(usage)?;
                 if path.is_empty() {
                     return Err(usage().into());
                 }
                 let address = address(device)?;
-                let key = code.parse::<u16>().map_err(|_| usage())?;
                 buttons.push(PttButton {
                     address,
                     path: path.into(),
-                    key,
                 });
             }
             "--dashboard" => dashboard = true,
@@ -269,7 +267,6 @@ fn run_options(args: &[String]) -> Result<RunOptions, String> {
 fn ptt_input_from<R: Read>(
     mut input: R,
     address: String,
-    key: u16,
     sender: mpsc::Sender<PttEvent>,
 ) {
     let mut pressed = false;
@@ -287,7 +284,7 @@ fn ptt_input_from<R: Read>(
             let _ = sender.send(Err(format!("PTT input for {address} lost button events")));
             break;
         }
-        if event_type == 1 && event_key == key && (value == 0 || value == 1) {
+        if event_type == 1 && event_key == KEY_PLAYPAUSE && (value == 0 || value == 1) {
             let next = value == 1;
             if next != pressed {
                 pressed = next;
@@ -311,7 +308,7 @@ fn ptt_input(buttons: Vec<PttButton>) -> Result<Receiver<PttEvent>, String> {
     let (sender, receiver) = mpsc::channel();
     for (button, file) in inputs {
         let sender = sender.clone();
-        thread::spawn(move || ptt_input_from(file, button.address, button.key, sender));
+        thread::spawn(move || ptt_input_from(file, button.address, sender));
     }
     Ok(receiver)
 }
@@ -476,7 +473,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let mut transmitting = input.is_none();
             let mut active_sources = BTreeSet::new();
             if input.is_some() {
-                eprintln!("PTT: Hold your headset button to transmit; release to mute.");
+                eprintln!("PTT: Hold your headset's play/pause button to transmit; release to mute.");
             }
             let mut last_update: Option<Instant> = None;
             let result: Result<(), String> = (|| {
@@ -683,7 +680,7 @@ mod tests {
         let (allowed, _, connect, buttons, dashboard) = run_options(&[
             "run".into(),
             "--ptt".into(),
-            format!("{address}=/dev/input/event4:164"),
+            format!("{address}=/dev/input/event4"),
             address,
             "--connect".into(),
             "--dashboard".into(),
@@ -692,11 +689,9 @@ mod tests {
         assert_eq!(allowed.len(), 1);
         assert!(connect && dashboard);
         assert_eq!(buttons.len(), 1);
-        assert_eq!(buttons[0].key, 164);
         assert_eq!(buttons[0].path, "/dev/input/event4");
         for mapping in [
-            "AA:BB:CC:DD:EE:02=/dev/input/event4:164",
-            "AA:BB:CC:DD:EE:01=/dev/input/event4:invalid",
+            "AA:BB:CC:DD:EE:02=/dev/input/event4",
             "AA:BB:CC:DD:EE:01=",
         ] {
             assert!(
@@ -715,9 +710,9 @@ mod tests {
                 "AA:BB:CC:DD:EE:01".into(),
                 "AA:BB:CC:DD:EE:02".into(),
                 "--ptt".into(),
-                "AA:BB:CC:DD:EE:01=/dev/input/event4:164".into(),
+                "AA:BB:CC:DD:EE:01=/dev/input/event4".into(),
                 "--ptt".into(),
-                "AA:BB:CC:DD:EE:02=/dev/input/event4:165".into()
+                "AA:BB:CC:DD:EE:02=/dev/input/event4".into()
             ])
             .is_err()
         );
@@ -727,7 +722,7 @@ mod tests {
                 "AA:BB:CC:DD:EE:01".into(),
                 "AA:BB:CC:DD:EE:02".into(),
                 "--ptt".into(),
-                "AA:BB:CC:DD:EE:01=/dev/input/event4:164".into()
+                "AA:BB:CC:DD:EE:01=/dev/input/event4".into()
             ])
             .is_err()
         );
@@ -745,16 +740,20 @@ mod tests {
         let mut events = Vec::new();
         for (kind, key, value) in [
             (1, 28, 1),  // Pi keyboard Enter
-            (1, 164, 1), // headset button pressed
-            (1, 164, 2), // autorepeat
-            (1, 164, 1),
-            (0, 164, 0),
-            (1, 164, 0), // headset button released
+            (1, 169, 1), // KEY_PHONE (call button)
+            (1, 169, 0),
+            (1, 0x1bd, 1), // KEY_PICKUP_PHONE
+            (1, 0x1bd, 0),
+            (1, KEY_PLAYPAUSE, 1), // headset play/pause pressed
+            (1, KEY_PLAYPAUSE, 2), // autorepeat
+            (1, KEY_PLAYPAUSE, 1),
+            (0, KEY_PLAYPAUSE, 0),
+            (1, KEY_PLAYPAUSE, 0), // headset play/pause released
         ] {
             events.extend(event(kind, key, value));
         }
         let (sender, receiver) = mpsc::channel();
-        ptt_input_from(std::io::Cursor::new(events), "headset".into(), 164, sender);
+        ptt_input_from(std::io::Cursor::new(events), "headset".into(), sender);
 
         assert_eq!(receiver.recv().unwrap().unwrap(), ("headset".into(), true));
         assert_eq!(receiver.recv().unwrap().unwrap(), ("headset".into(), false));
@@ -765,12 +764,7 @@ mod tests {
         ));
 
         let (sender, receiver) = mpsc::channel();
-        ptt_input_from(
-            std::io::Cursor::new(event(0, 3, 0)),
-            "headset".into(),
-            164,
-            sender,
-        );
+        ptt_input_from(std::io::Cursor::new(event(0, 3, 0)), "headset".into(), sender);
         assert!(receiver.recv().unwrap().is_err());
     }
 
