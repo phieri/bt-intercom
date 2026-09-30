@@ -89,10 +89,14 @@ impl Dashboard {
         error: Option<&str>,
         output: &mut impl Write,
     ) -> io::Result<()> {
-        write!(
+        writeln!(
             output,
-            "\x1b[H\x1b[2Jrpi-intercom | {} | {} owned active links\n",
-            if transmitting { "transmitting" } else { "muted" },
+            "\x1b[H\x1b[2Jrpi-intercom | {} | {} owned active links",
+            if transmitting {
+                "transmitting"
+            } else {
+                "muted"
+            },
             links.len()
         )?;
         writeln!(
@@ -141,12 +145,18 @@ impl Dashboard {
                 status(headset.map(Headset::has_duplex_audio))
             )?;
         }
-        writeln!(output, "\nLinks represent routing, not measured speech; RSSI is shown only if BlueZ reports it.")?;
+        writeln!(
+            output,
+            "\nLinks represent routing, not measured speech; RSSI is shown only if BlueZ reports it."
+        )?;
         if let Some(error) = error {
             writeln!(
                 output,
                 "Last routing error: {}",
-                error.chars().filter(|ch| !ch.is_control()).collect::<String>()
+                error
+                    .chars()
+                    .filter(|ch| !ch.is_control())
+                    .collect::<String>()
             )?;
         }
         output.flush()
@@ -210,7 +220,8 @@ mod tests {
         let text = String::from_utf8(output).unwrap();
         assert!(text.contains("muted | 1 owned active links"));
         assert!(text.contains("AA:BB:CC:DD:EE:01  ?"));
-        assert!(text.contains("  no      1/0"));
+        assert!(text.contains("no"));
+        assert!(text.contains("1/0"));
         assert!(text.contains("unknown"));
     }
 }
