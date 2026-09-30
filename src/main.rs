@@ -4,6 +4,7 @@ mod router;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::io::{BufRead, IsTerminal, Read};
+use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,6 +24,7 @@ fn wait_child(
     name: &str,
     timeout: Duration,
     stopped: Option<&AtomicBool>,
+    own_process_group: bool,
 ) -> Result<ExitStatus, String> {
     let start = Instant::now();
     loop {
@@ -37,9 +39,27 @@ fn wait_child(
             }
             Err(error) => error.to_string(),
         };
-        let _ = child.kill();
+        if own_process_group {
+            kill_process_group(child);
+        } else {
+            let _ = child.kill();
+        }
         let _ = child.wait();
         return Err(error);
+    }
+}
+
+/// Kills the child's entire process group, so descendants that keep the
+/// child's inherited pipes open (e.g. backgrounded subprocesses) are also
+/// terminated and release those pipes. Only valid for children spawned with
+/// `process_group(0)`, which makes the child the leader of its own group.
+fn kill_process_group(child: &mut Child) {
+    let pid = child.id() as libc::pid_t;
+    // SAFETY: `pid` is the child's own process ID, which was placed in its
+    // own process group via `process_group(0)` when spawned, so `-pid`
+    // refers to a valid process group led by that child.
+    unsafe {
+        libc::kill(-pid, libc::SIGKILL);
     }
 }
 
@@ -56,6 +76,7 @@ fn command_cancellable(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .process_group(0)
         .spawn()
         .map_err(|e| format!("{}: {e}", args[0]))?;
     let mut stdout = child.stdout.take().unwrap();
@@ -68,7 +89,7 @@ fn command_cancellable(
         let mut bytes = Vec::new();
         stderr.read_to_end(&mut bytes).map(|_| bytes)
     });
-    let status = wait_child(&mut child, args[0], timeout, stopped)?;
+    let status = wait_child(&mut child, args[0], timeout, stopped, true)?;
     let stdout = output
         .join()
         .map_err(|_| "stdout reader panicked".to_string())?
@@ -97,7 +118,13 @@ fn pair_command(device: &str) -> Result<(), String> {
         .stderr(Stdio::inherit())
         .spawn()
         .map_err(|error| format!("bluetoothctl: {error}"))?;
-    let status = wait_child(&mut child, "bluetoothctl", Duration::from_secs(300), None)?;
+    let status = wait_child(
+        &mut child,
+        "bluetoothctl",
+        Duration::from_secs(300),
+        None,
+        false,
+    )?;
     if status.success() {
         Ok(())
     } else {
