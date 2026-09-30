@@ -3,7 +3,7 @@ mod router;
 use std::collections::BTreeSet;
 use std::env;
 use std::io::{BufRead, Read};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -13,8 +13,45 @@ use std::time::{Duration, Instant};
 use router::Router;
 
 fn command(args: &[&str], timeout: Duration) -> Result<String, String> {
+    command_cancellable(args, timeout, None)
+}
+
+fn wait_child(
+    child: &mut Child,
+    name: &str,
+    timeout: Duration,
+    stopped: Option<&AtomicBool>,
+) -> Result<ExitStatus, String> {
+    let start = Instant::now();
+    loop {
+        let cancelled = stopped.is_some_and(|flag| flag.load(Ordering::SeqCst));
+        let error = match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) if cancelled => format!("{name} cancelled"),
+            Ok(None) if start.elapsed() >= timeout => format!("{name} timed out"),
+            Ok(None) => {
+                thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+            Err(error) => error.to_string(),
+        };
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(error);
+    }
+}
+
+fn command_cancellable(
+    args: &[&str],
+    timeout: Duration,
+    stopped: Option<&AtomicBool>,
+) -> Result<String, String> {
+    if stopped.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
+        return Err(format!("{} cancelled", args[0]));
+    }
     let mut child = Command::new(args[0])
         .args(&args[1..])
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -29,23 +66,7 @@ fn command(args: &[&str], timeout: Duration) -> Result<String, String> {
         let mut bytes = Vec::new();
         stderr.read_to_end(&mut bytes).map(|_| bytes)
     });
-    let start = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break Ok(status),
-            Ok(None) if start.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break Err(format!("{} timed out", args[0]));
-            }
-            Ok(None) => thread::sleep(Duration::from_millis(20)),
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break Err(e.to_string());
-            }
-        }
-    };
+    let status = wait_child(&mut child, args[0], timeout, stopped);
     let stdout = output
         .join()
         .map_err(|_| "stdout reader panicked".to_string())?
@@ -63,6 +84,24 @@ fn command(args: &[&str], timeout: Duration) -> Result<String, String> {
         ));
     }
     Ok(String::from_utf8_lossy(&stdout).into_owned())
+}
+
+fn pair_command(device: &str) -> Result<(), String> {
+    eprintln!("At the Bluetooth prompt, enter: pair {device}");
+    eprintln!("Answer any PIN/confirmation prompts, then enter: quit");
+    let mut child = Command::new("bluetoothctl")
+        .args(["--agent", "KeyboardDisplay"])
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|error| format!("bluetoothctl: {error}"))?;
+    let status = wait_child(&mut child, "bluetoothctl", Duration::from_secs(300), None)?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("bluetoothctl pair exited with {status}"))
+    }
 }
 
 fn address(value: &str) -> Result<String, String> {
@@ -129,7 +168,11 @@ fn run_options(args: &[String]) -> Result<(BTreeSet<String>, Duration, bool, boo
     if !interval.is_finite() || interval <= 0.0 || interval >= u64::MAX as f64 {
         return Err("--interval must be positive and finite".into());
     }
-    Ok((allowed, Duration::from_secs_f64(interval), connect, ptt))
+    let interval = Duration::from_secs_f64(interval);
+    if interval.is_zero() {
+        return Err("--interval must be at least one nanosecond".into());
+    }
+    Ok((allowed, interval, connect, ptt))
 }
 
 fn ptt_input_from<R: BufRead>(mut input: R, sender: mpsc::Sender<bool>) {
@@ -159,18 +202,44 @@ fn ptt_input() -> Receiver<bool> {
 
 fn connect_disconnected(
     allowed: &BTreeSet<String>,
+    stopped: &AtomicBool,
     mut execute: impl FnMut(&[&str], Duration) -> Result<String, String>,
 ) {
     for device in allowed {
+        if stopped.load(Ordering::SeqCst) {
+            break;
+        }
         let connected = execute(&["bluetoothctl", "info", device], Duration::from_secs(15))
             .is_ok_and(|info| device_flag(&info, "Connected"));
         if !connected
+            && !stopped.load(Ordering::SeqCst)
             && let Err(error) = execute(
                 &["bluetoothctl", "--timeout", "30", "connect", device],
                 Duration::from_secs(35),
             )
         {
             eprintln!("WARNING: Could not connect {device}: {error}");
+        }
+    }
+}
+
+fn reconnect_worker(
+    allowed: BTreeSet<String>,
+    stopped: Arc<AtomicBool>,
+    shutdown: Receiver<()>,
+    retry: Duration,
+    mut execute: impl FnMut(&[&str], Duration) -> Result<String, String>,
+) {
+    loop {
+        connect_disconnected(&allowed, &stopped, &mut execute);
+        if stopped.load(Ordering::SeqCst) {
+            break;
+        }
+        if !matches!(
+            shutdown.recv_timeout(retry),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ) {
+            break;
         }
     }
 }
@@ -214,13 +283,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 return Err(usage().into());
             }
             let device = address(&args[1])?;
-            print!(
-                "{}",
-                command(
-                    &["bluetoothctl", "--timeout", "60", "pair", &device],
-                    Duration::from_secs(65)
-                )?
-            );
+            pair_command(&device)?;
             if !device_flag(
                 &command(&["bluetoothctl", "info", &device], Duration::from_secs(15))?,
                 "Paired",
@@ -264,7 +327,22 @@ fn run(args: &[String]) -> Result<(), String> {
             ctrlc::set_handler(move || signal.store(true, Ordering::SeqCst))
                 .map_err(|e| e.to_string())?;
             let mut router = Router::new(allowed);
-            let mut last_connect: Option<Instant> = None;
+            let (shutdown, shutdown_rx) = mpsc::channel();
+            let connector = if connect {
+                let devices = router.allowed.clone();
+                let cancelled = Arc::clone(&stopped);
+                Some(thread::spawn(move || {
+                    reconnect_worker(
+                        devices,
+                        Arc::clone(&cancelled),
+                        shutdown_rx,
+                        Duration::from_secs(30),
+                        |args, timeout| command_cancellable(args, timeout, Some(&cancelled)),
+                    );
+                }))
+            } else {
+                None
+            };
             let input = if ptt {
                 eprintln!("PTT: Press Enter to transmit; press Enter again to mute.");
                 Some(ptt_input())
@@ -275,12 +353,6 @@ fn run(args: &[String]) -> Result<(), String> {
             let mut last_update: Option<Instant> = None;
             let result: Result<(), String> = (|| {
                 while !stopped.load(Ordering::SeqCst) {
-                    if connect
-                        && last_connect.is_none_or(|time| time.elapsed() >= Duration::from_secs(30))
-                    {
-                        connect_disconnected(&router.allowed, command);
-                        last_connect = Some(Instant::now());
-                    }
                     if let Some(ref input) = input {
                         loop {
                             match input.try_recv() {
@@ -302,21 +374,30 @@ fn run(args: &[String]) -> Result<(), String> {
                         }
                     }
                     if last_update.is_none_or(|updated| updated.elapsed() >= interval) {
-                        let headsets = router.update(transmitting)?;
-                        let active = headsets
-                            .values()
-                            .filter(|headset| headset.has_duplex_audio())
-                            .count();
-                        eprintln!(
-                            "INFO: {active}/{} headsets with duplex audio",
-                            router.allowed.len()
-                        );
+                        match router.update(transmitting) {
+                            Ok(headsets) => {
+                                let active = headsets
+                                    .values()
+                                    .filter(|headset| headset.has_duplex_audio())
+                                    .count();
+                                eprintln!(
+                                    "INFO: {active}/{} headsets with duplex audio",
+                                    router.allowed.len()
+                                );
+                            }
+                            Err(error) => eprintln!("WARNING: Routing update failed: {error}"),
+                        }
                         last_update = Some(Instant::now());
                     }
                     thread::sleep(Duration::from_millis(100).min(interval));
                 }
                 Ok(())
             })();
+            stopped.store(true, Ordering::SeqCst);
+            let _ = shutdown.send(());
+            if let Some(connector) = connector {
+                let _ = connector.join();
+            }
             router.close();
             result?;
         }
@@ -361,7 +442,7 @@ mod tests {
             (Err("bluetoothctl info failed"), true),
         ] {
             let mut calls = Vec::new();
-            connect_disconnected(&allowed, |args, timeout| {
+            connect_disconnected(&allowed, &AtomicBool::new(false), |args, timeout| {
                 calls.push((
                     args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>(),
                     timeout,
@@ -439,5 +520,91 @@ mod tests {
             receiver.try_recv(),
             Err(TryRecvError::Disconnected)
         ));
+    }
+
+    #[test]
+    fn rejects_intervals_that_round_to_zero() {
+        assert!(
+            run_options(&[
+                "run".into(),
+                "AA:BB:CC:DD:EE:01".into(),
+                "--interval".into(),
+                "0.00000000001".into(),
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn connection_cancellation_skips_remaining_devices() {
+        let stopped = AtomicBool::new(false);
+        let allowed = ["AA:BB:CC:DD:EE:01".into(), "AA:BB:CC:DD:EE:02".into()].into();
+        let mut calls = 0;
+        connect_disconnected(&allowed, &stopped, |args, _| {
+            assert_eq!(args[1], "info");
+            calls += 1;
+            stopped.store(true, Ordering::SeqCst);
+            Err("cancelled".into())
+        });
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn reconnect_worker_retries_and_wakes_on_shutdown() {
+        let (shutdown, receiver) = mpsc::channel();
+        let (attempt, attempts) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            reconnect_worker(
+                ["AA:BB:CC:DD:EE:01".into()].into(),
+                Arc::new(AtomicBool::new(false)),
+                receiver,
+                Duration::from_millis(10),
+                |_, _| {
+                    attempt.send(()).unwrap();
+                    Ok("Connected: yes\n".into())
+                },
+            );
+        });
+        attempts.recv_timeout(Duration::from_secs(5)).unwrap();
+        attempts.recv_timeout(Duration::from_secs(5)).unwrap();
+        shutdown.send(()).unwrap();
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn commands_capture_output_errors_and_do_not_read_ptt_input() {
+        let timeout = Duration::from_secs(5);
+        assert_eq!(
+            command(&["sh", "-c", "cat; printf output"], timeout).unwrap(),
+            "output"
+        );
+        assert!(
+            command(&["sh", "-c", "printf failure >&2; exit 7"], timeout)
+                .unwrap_err()
+                .contains("failure")
+        );
+        assert_eq!(
+            command(&["head", "-c", "131072", "/dev/zero"], timeout)
+                .unwrap()
+                .len(),
+            131072
+        );
+    }
+
+    #[test]
+    fn commands_time_out_and_can_be_cancelled() {
+        assert!(
+            command(&["sleep", "30"], Duration::from_millis(20))
+                .unwrap_err()
+                .contains("timed out")
+        );
+        let stopped = Arc::new(AtomicBool::new(false));
+        let cancelled = Arc::clone(&stopped);
+        let worker = thread::spawn(move || {
+            command_cancellable(&["sleep", "30"], Duration::from_secs(60), Some(&cancelled))
+        });
+        thread::sleep(Duration::from_millis(50));
+        stopped.store(true, Ordering::SeqCst);
+        assert!(worker.join().unwrap().unwrap_err().contains("cancelled"));
     }
 }

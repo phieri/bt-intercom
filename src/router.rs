@@ -1,11 +1,39 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Duration;
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
 use crate::command;
 
 type Link = (u64, u64);
+const OWNER_PROPERTY: &str = "rpi-intercom.owner";
+static NEXT_ROUTER: AtomicUsize = AtomicUsize::new(0);
+
+trait LinkHandle {
+    fn is_running(&mut self) -> Result<bool, String>;
+}
+
+struct LinkProcess(Child);
+
+impl LinkHandle for LinkProcess {
+    fn is_running(&mut self) -> Result<bool, String> {
+        self.0
+            .try_wait()
+            .map(|status| status.is_none())
+            .map_err(|error| error.to_string())
+    }
+}
+
+impl Drop for LinkProcess {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+type StartLink = Box<dyn FnMut(&[&str]) -> Result<Box<dyn LinkHandle>, String>>;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Port {
@@ -150,8 +178,10 @@ pub fn desired_links(headsets: &BTreeMap<String, Headset>) -> BTreeSet<Link> {
 
 pub struct Router<F = fn(&[&str]) -> Result<String, String>> {
     pub allowed: BTreeSet<String>,
-    owned: BTreeSet<Link>,
+    owner: String,
     execute: F,
+    start_link: StartLink,
+    owned: BTreeMap<Link, (Box<dyn LinkHandle>, Instant)>,
 }
 
 fn default_command(args: &[&str]) -> Result<String, String> {
@@ -166,53 +196,135 @@ impl Router {
 
 impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
     pub fn with_executor(allowed: BTreeSet<String>, execute: F) -> Self {
+        Self::with_backend(
+            allowed,
+            execute,
+            Box::new(|args| {
+                Command::new(args[0])
+                    .args(&args[1..])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::inherit())
+                    .spawn()
+                    .map(|child| Box::new(LinkProcess(child)) as Box<dyn LinkHandle>)
+                    .map_err(|error| error.to_string())
+            }),
+        )
+    }
+
+    fn with_backend(allowed: BTreeSet<String>, execute: F, start_link: StartLink) -> Self {
         Self {
             allowed,
-            owned: BTreeSet::new(),
+            owner: format!(
+                "{}-{}-{}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos(),
+                NEXT_ROUTER.fetch_add(1, Ordering::Relaxed)
+            ),
             execute,
+            start_link,
+            owned: BTreeMap::new(),
         }
     }
 
     pub fn update(&mut self, transmitting: bool) -> Result<BTreeMap<String, Headset>, String> {
-        let (headsets, existing) = self.inspect()?;
+        let snapshot = self.snapshot()?;
+        let (headsets, existing) = topology(&snapshot, &self.allowed)?;
         let desired = if transmitting {
             desired_links(&headsets)
         } else {
             BTreeSet::new()
         };
-        for (output, input) in self.owned.difference(&desired).copied().collect::<Vec<_>>() {
-            if existing.contains(&(output, input)) {
-                (self.execute)(&["pw-link", "-d", &output.to_string(), &input.to_string()])?;
+        let mut failures = Vec::new();
+        let live = self.owned_links(&snapshot);
+        self.owned.retain(|link, (handle, started)| {
+            if !desired.contains(link) {
+                return false;
             }
-            self.owned.remove(&(output, input));
-        }
-        for &(output, input) in desired.difference(&existing) {
-            match (self.execute)(&["pw-link", &output.to_string(), &input.to_string()]) {
-                Ok(_) => {
-                    self.owned.insert((output, input));
+            match handle.is_running() {
+                Ok(true) if live.contains(link) || started.elapsed() < Duration::from_secs(15) => {
+                    true
+                }
+                Ok(true) => {
+                    failures.push(format!("Link did not appear for {} -> {}", link.0, link.1));
+                    false
+                }
+                Ok(false) => {
+                    failures.push(format!("Link process exited for {} -> {}", link.0, link.1));
+                    false
                 }
                 Err(error) => {
-                    eprintln!("WARNING: Could not link ports {output} -> {input}: {error}")
+                    failures.push(error);
+                    false
+                }
+            }
+        });
+        let properties = serde_json::json!({
+            OWNER_PROPERTY: self.owner,
+            "object.linger": false,
+        })
+        .to_string();
+        for &(output, input) in desired.difference(&existing) {
+            if self.owned.contains_key(&(output, input)) {
+                continue;
+            }
+            match (self.start_link)(&[
+                "pw-cli",
+                "-m",
+                "create-link",
+                "-",
+                &output.to_string(),
+                "-",
+                &input.to_string(),
+                &properties,
+            ]) {
+                Ok(handle) => {
+                    self.owned.insert((output, input), (handle, Instant::now()));
+                }
+                Err(error) => {
+                    failures.push(format!("Could not link ports {output} -> {input}: {error}"))
                 }
             }
         }
-        Ok(headsets)
+        if failures.is_empty() {
+            Ok(headsets)
+        } else {
+            Err(failures.join("; "))
+        }
     }
 
     pub fn inspect(&mut self) -> Result<(BTreeMap<String, Headset>, BTreeSet<Link>), String> {
-        let snapshot = serde_json::from_str(&(self.execute)(&["pw-dump"])?)
-            .map_err(|e| format!("invalid pw-dump JSON: {e}"))?;
+        let snapshot = self.snapshot()?;
         topology(&snapshot, &self.allowed)
     }
 
+    fn snapshot(&mut self) -> Result<Value, String> {
+        serde_json::from_str(&(self.execute)(&["pw-dump"])?)
+            .map_err(|e| format!("invalid pw-dump JSON: {e}"))
+    }
+
+    fn owned_links(&self, snapshot: &Value) -> BTreeSet<Link> {
+        snapshot
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|object| {
+                object["type"] == "PipeWire:Interface:Link"
+                    && object["info"]["props"][OWNER_PROPERTY].as_str() == Some(&self.owner)
+            })
+            .filter_map(|object| {
+                Some((
+                    object["info"]["output-port-id"].as_u64()?,
+                    object["info"]["input-port-id"].as_u64()?,
+                ))
+            })
+            .collect()
+    }
+
     pub fn close(&mut self) {
-        for &(output, input) in &self.owned {
-            if let Err(error) =
-                (self.execute)(&["pw-link", "-d", &output.to_string(), &input.to_string()])
-            {
-                eprintln!("WARNING: Could not unlink ports {output} -> {input}: {error}");
-            }
-        }
         self.owned.clear();
     }
 }
@@ -301,146 +413,270 @@ mod tests {
         assert!(!Headset::default().has_duplex_audio());
     }
 
-    #[test]
-    fn owns_only_created_links_and_cleans_up_on_disappearance() {
-        let objects = Rc::new(RefCell::new(fixture()));
-        objects.borrow_mut().push(json!({"type":"PipeWire:Interface:Link","id":100,"info":{"output-port-id":13,"input-port-id":24}}));
-        let calls = Rc::new(RefCell::new(Vec::<Vec<String>>::new()));
-        let snapshot = Rc::clone(&objects);
-        let recorded = Rc::clone(&calls);
-        let mut router = Router::with_executor(allowed(), move |args: &[&str]| {
-            recorded
+    #[derive(Clone)]
+    struct PipeWire {
+        objects: Rc<RefCell<Vec<Value>>>,
+        calls: Rc<RefCell<Vec<Vec<String>>>>,
+        fail_next: Rc<RefCell<bool>>,
+        fail_snapshot: Rc<RefCell<bool>>,
+        replace_after_snapshot: Rc<RefCell<bool>>,
+    }
+
+    impl PipeWire {
+        fn new() -> Self {
+            Self {
+                objects: Rc::new(RefCell::new(fixture())),
+                calls: Rc::default(),
+                fail_next: Rc::default(),
+                fail_snapshot: Rc::default(),
+                replace_after_snapshot: Rc::default(),
+            }
+        }
+
+        fn execute(&self, args: &[&str]) -> Result<String, String> {
+            self.calls
                 .borrow_mut()
                 .push(args.iter().map(|s| s.to_string()).collect());
             if args[0] == "pw-dump" {
-                Ok(json!(*snapshot.borrow()).to_string())
-            } else {
-                Ok(String::new())
+                if *self.fail_snapshot.borrow() {
+                    return Err("PipeWire unavailable".into());
+                }
+                let snapshot = json!(*self.objects.borrow()).to_string();
+                if self.replace_after_snapshot.replace(false) {
+                    for object in self.objects.borrow_mut().iter_mut() {
+                        if object["type"] == "PipeWire:Interface:Link" {
+                            object["info"]["props"] = json!({});
+                        }
+                    }
+                }
+                return Ok(snapshot);
             }
-        });
-        router.update(true).unwrap();
-        assert_eq!(router.owned.len(), 3);
-        assert!(
-            !calls
+            if self.fail_next.replace(false) {
+                return Err("simulated pw-cli failure".into());
+            }
+            let mut objects = self.objects.borrow_mut();
+            assert_eq!(&args[..4], ["pw-cli", "-m", "create-link", "-"]);
+            assert_eq!(args[5], "-");
+            let props: Value = serde_json::from_str(args[7]).unwrap();
+            assert!(props[OWNER_PROPERTY].as_str().is_some());
+            assert_eq!(props["object.linger"], false);
+            let output = args[4].parse::<u64>().unwrap();
+            let input = args[6].parse::<u64>().unwrap();
+            let id = objects
+                .iter()
+                .filter_map(|object| object["id"].as_u64())
+                .max()
+                .unwrap_or(0)
+                + 1;
+            objects.push(json!({"type":"PipeWire:Interface:Link","id":id,"info":{"output-port-id":output,"input-port-id":input,"props":props}}));
+            Ok(id.to_string())
+        }
+
+        fn router(&self) -> Router<impl FnMut(&[&str]) -> Result<String, String> + use<>> {
+            let snapshot = self.clone();
+            let links = self.clone();
+            Router::with_backend(
+                allowed(),
+                move |args| snapshot.execute(args),
+                Box::new(move |args| {
+                    let id = links.execute(args)?.parse::<u64>().unwrap();
+                    let object = links
+                        .objects
+                        .borrow()
+                        .iter()
+                        .find(|object| object["id"] == id)
+                        .unwrap()
+                        .clone();
+                    Ok(Box::new(TestLink {
+                        server: links.clone(),
+                        object,
+                    }))
+                }),
+            )
+        }
+
+        fn links(&self) -> usize {
+            self.objects
                 .borrow()
-                .contains(&vec!["pw-link".into(), "13".into(), "24".into()])
-        );
-        *objects.borrow_mut() = headset(10, A);
+                .iter()
+                .filter(|object| object["type"] == "PipeWire:Interface:Link")
+                .count()
+        }
+
+        fn external_link(&self) {
+            self.objects.borrow_mut().push(json!({"type":"PipeWire:Interface:Link","id":100,"info":{"output-port-id":13,"input-port-id":24}}));
+        }
+    }
+
+    struct TestLink {
+        server: PipeWire,
+        object: Value,
+    }
+
+    impl LinkHandle for TestLink {
+        fn is_running(&mut self) -> Result<bool, String> {
+            Ok(self.server.objects.borrow().contains(&self.object))
+        }
+    }
+
+    impl Drop for TestLink {
+        fn drop(&mut self) {
+            self.server
+                .objects
+                .borrow_mut()
+                .retain(|object| object != &self.object);
+        }
+    }
+
+    #[test]
+    fn owns_only_created_links_and_cleans_up_on_disappearance() {
+        let server = PipeWire::new();
+        server.external_link();
+        let mut router = server.router();
         router.update(true).unwrap();
-        assert!(router.owned.is_empty());
+        assert_eq!(server.links(), 4);
+        *server.objects.borrow_mut() = headset(10, A);
+        router.update(true).unwrap();
         router.close();
-        assert!(!calls.borrow().contains(&vec![
-            "pw-link".into(),
-            "-d".into(),
-            "13".into(),
-            "24".into()
-        ]));
+        assert!(
+            !server
+                .calls
+                .borrow()
+                .iter()
+                .any(|args| args.get(1).is_some_and(|arg| arg == "-d"))
+        );
     }
 
     #[test]
     fn failed_link_retries_and_close_only_unlinks_owned() {
-        let calls = Rc::new(RefCell::new(Vec::<Vec<String>>::new()));
-        let recorded = Rc::clone(&calls);
-        let mut failed = false;
-        let mut router = Router::with_executor(allowed(), move |args: &[&str]| {
-            recorded
-                .borrow_mut()
-                .push(args.iter().map(|s| s.to_string()).collect());
-            if args[0] == "pw-dump" {
-                return Ok(json!(fixture()).to_string());
-            }
-            if !failed {
-                failed = true;
-                return Err("failed".into());
-            }
-            Ok(String::new())
-        });
+        let server = PipeWire::new();
+        let mut router = server.router();
+        server.fail_next.replace(true);
+        assert!(router.update(true).is_err());
+        assert_eq!(server.links(), 3);
         router.update(true).unwrap();
-        assert_eq!(router.owned.len(), 3);
-        router.update(true).unwrap();
-        assert_eq!(router.owned.len(), 4);
+        assert_eq!(server.links(), 4);
+        server.external_link();
         router.close();
-        assert!(router.owned.is_empty());
-        assert_eq!(
-            calls
-                .borrow()
-                .iter()
-                .filter(|args| args.get(1).is_some_and(|s| s == "-d"))
-                .count(),
-            4
-        );
+        assert_eq!(server.links(), 1);
     }
 
     #[test]
     fn ptt_mutes_and_restores_only_owned_links() {
-        let calls = Rc::new(RefCell::new(Vec::<Vec<String>>::new()));
-        let recorded = Rc::clone(&calls);
-        let objects = Rc::new(RefCell::new(fixture()));
-        objects.borrow_mut().push(json!({"type":"PipeWire:Interface:Link","id":100,"info":{"output-port-id":13,"input-port-id":24}}));
-        let snapshot = Rc::clone(&objects);
-        let mut router = Router::with_executor(allowed(), move |args: &[&str]| {
-            recorded
-                .borrow_mut()
-                .push(args.iter().map(|s| s.to_string()).collect());
-            if args[0] == "pw-dump" {
-                Ok(json!(*snapshot.borrow()).to_string())
-            } else {
-                let (output, input) = if args[1] == "-d" {
-                    (
-                        args[2].parse::<u64>().unwrap(),
-                        args[3].parse::<u64>().unwrap(),
-                    )
-                } else {
-                    (
-                        args[1].parse::<u64>().unwrap(),
-                        args[2].parse::<u64>().unwrap(),
-                    )
-                };
-                if args[1] == "-d" {
-                    snapshot.borrow_mut().retain(|object| {
-                        object["info"]["output-port-id"] != output
-                            || object["info"]["input-port-id"] != input
-                    });
-                } else {
-                    snapshot.borrow_mut().push(json!({"type":"PipeWire:Interface:Link","id":100+output,"info":{"output-port-id":output,"input-port-id":input}}));
-                }
-                Ok(String::new())
-            }
-        });
+        let server = PipeWire::new();
+        server.external_link();
+        let mut router = server.router();
         router.update(false).unwrap();
-        assert!(router.owned.is_empty());
+        assert_eq!(server.links(), 1);
         router.update(true).unwrap();
-        assert_eq!(router.owned.len(), 3);
+        assert_eq!(server.links(), 4);
         router.update(false).unwrap();
+        assert_eq!(server.links(), 1);
+        router.update(true).unwrap();
+        assert_eq!(server.links(), 4);
+    }
+
+    #[test]
+    fn reused_ids_and_replacement_links_are_not_owned() {
+        for close in [false, true] {
+            let server = PipeWire::new();
+            let mut router = server.router();
+            router.update(true).unwrap();
+            for object in server.objects.borrow_mut().iter_mut() {
+                if object["type"] == "PipeWire:Interface:Link" {
+                    object["info"]["props"] = json!({});
+                }
+            }
+            if close {
+                router.close();
+            } else {
+                router.update(false).unwrap();
+            }
+            assert_eq!(server.links(), 4);
+        }
+    }
+
+    #[test]
+    fn replacement_after_snapshot_is_not_deleted_when_muting() {
+        let server = PipeWire::new();
+        let mut router = server.router();
+        router.update(true).unwrap();
+        server.replace_after_snapshot.replace(true);
+        router.update(false).unwrap();
+        assert_eq!(server.links(), 4);
         assert!(router.owned.is_empty());
-        assert!(objects.borrow().iter().any(|object| {
-            object["info"]["output-port-id"] == 13 && object["info"]["input-port-id"] == 24
-        }));
-        let deleted = calls
-            .borrow()
-            .iter()
-            .filter(|args| args.get(1).is_some_and(|s| s == "-d"))
-            .cloned()
-            .collect::<Vec<_>>();
-        assert_eq!(deleted.len(), 3);
-        assert!(!deleted.contains(&vec![
-            "pw-link".into(),
-            "-d".into(),
-            "13".into(),
-            "24".into()
-        ]));
-        assert_eq!(
-            objects
+    }
+
+    #[test]
+    fn dropping_router_releases_links_without_delete_commands() {
+        let server = PipeWire::new();
+        let mut router = server.router();
+        router.update(true).unwrap();
+        drop(router);
+        assert_eq!(server.links(), 0);
+        assert!(
+            !server
+                .calls
                 .borrow()
                 .iter()
-                .filter(|object| object["type"] == "PipeWire:Interface:Link")
-                .count(),
-            1
+                .any(|args| args.get(1) == Some(&"-d".into()))
         );
+    }
+
+    #[test]
+    fn separate_routers_do_not_own_each_others_links() {
+        let server = PipeWire::new();
+        let mut first = server.router();
+        let mut second = server.router();
+        first.update(true).unwrap();
+        second.update(true).unwrap();
+        second.close();
+        assert_eq!(server.links(), 4);
+        first.close();
+        assert_eq!(server.links(), 0);
+    }
+
+    #[test]
+    fn profile_changes_remove_owned_links_and_reconnect_restores_them() {
+        let server = PipeWire::new();
+        let mut router = server.router();
         router.update(true).unwrap();
-        assert_eq!(router.owned.len(), 3);
-        assert!(objects.borrow().iter().any(|object| {
-            object["info"]["output-port-id"] == 13 && object["info"]["input-port-id"] == 24
-        }));
+        for object in server.objects.borrow_mut().iter_mut() {
+            if object["type"] == "PipeWire:Interface:Node" {
+                object["info"]["props"]["api.bluez5.profile"] = json!("a2dp-sink");
+            }
+        }
+        router.update(true).unwrap();
+        assert_eq!(server.links(), 0);
+        *server.objects.borrow_mut() = fixture();
+        router.update(true).unwrap();
+        assert_eq!(server.links(), 4);
+    }
+
+    #[test]
+    fn cleanup_does_not_need_a_working_snapshot() {
+        let server = PipeWire::new();
+        let mut router = server.router();
+        router.update(true).unwrap();
+        server.fail_snapshot.replace(true);
+        assert!(router.update(false).is_err());
+        assert_eq!(server.links(), 4);
+        router.close();
+        assert_eq!(server.links(), 0);
+        server.fail_snapshot.replace(false);
+        router.update(true).unwrap();
+        assert_eq!(server.links(), 4);
+    }
+
+    #[test]
+    fn exited_link_processes_are_retried() {
+        let server = PipeWire::new();
+        let mut router = server.router();
+        router.update(true).unwrap();
+        *server.objects.borrow_mut() = fixture();
+        assert!(router.update(true).is_err());
+        assert_eq!(server.links(), 4);
+        router.close();
+        assert_eq!(server.links(), 0);
     }
 }
