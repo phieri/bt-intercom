@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rpi-intercom"
+version = "0.1.0"
+description = "Bluetooth headset intercom for Raspberry Pi"
+requires-python = ">=3.10"
+
+[project.scripts]
+rpi-intercom = "rpi_intercom.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["rpi_intercom*"]
