@@ -8,9 +8,9 @@ Bluetooth LE Audio.
 
 Watch an [illustrative CLI session](https://phieri.github.io/rpi-intercom/)
 replayed with the asciinema player. The `Deploy Pages` workflow downloads
-the pinned player during the website build and deploys it alongside `docs/`;
-the player is not stored in the repository. Set Pages source to
-**GitHub Actions** in the repository settings.
+the pinned player from its GitHub release during the website build and
+deploys it alongside `docs/`; the player is not stored in the repository.
+Set Pages source to **GitHub Actions** in the repository settings.
 
 Each allowlisted headset microphone is connected to the speakers of every
 *other* allowlisted headset. Audio is never sent to its own headset. The
