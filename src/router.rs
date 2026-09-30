@@ -19,6 +19,12 @@ pub struct Headset {
     pub sinks: Vec<Port>,
 }
 
+impl Headset {
+    pub fn has_duplex_audio(&self) -> bool {
+        !self.sources.is_empty() && !self.sinks.is_empty()
+    }
+}
+
 fn property<'a>(props: &'a Value, key: &str) -> Option<&'a str> {
     props.get(key)?.as_str()
 }
@@ -168,9 +174,7 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
     }
 
     pub fn update(&mut self, transmitting: bool) -> Result<BTreeMap<String, Headset>, String> {
-        let snapshot = serde_json::from_str(&(self.execute)(&["pw-dump"])?)
-            .map_err(|e| format!("invalid pw-dump JSON: {e}"))?;
-        let (headsets, existing) = topology(&snapshot, &self.allowed)?;
+        let (headsets, existing) = self.inspect()?;
         let desired = if transmitting {
             desired_links(&headsets)
         } else {
@@ -193,6 +197,12 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
             }
         }
         Ok(headsets)
+    }
+
+    pub fn inspect(&mut self) -> Result<(BTreeMap<String, Headset>, BTreeSet<Link>), String> {
+        let snapshot = serde_json::from_str(&(self.execute)(&["pw-dump"])?)
+            .map_err(|e| format!("invalid pw-dump JSON: {e}"))?;
+        topology(&snapshot, &self.allowed)
     }
 
     pub fn close(&mut self) {
