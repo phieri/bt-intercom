@@ -22,22 +22,17 @@ jobs:
       matrix:
         include:
           - target: arm-unknown-linux-gnueabihf
-            linker: arm-linux-gnueabihf-gcc
-            package: gcc-arm-linux-gnueabihf
           - target: aarch64-unknown-linux-gnu
-            linker: aarch64-linux-gnu-gcc
-            package: gcc-aarch64-linux-gnu
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - run: sudo apt-get update && sudo apt-get install -y ${{ matrix.package }}
+      # The cross ARM image uses an armv6 hard-float toolchain; Ubuntu's armhf
+      # cross linker defaults to armv7 and cannot run on the original Zero W.
+      - run: cargo install cross --version 0.2.5 --locked
       - name: Cross-compile release binary
-        env:
-          CARGO_TARGET_ARM_UNKNOWN_LINUX_GNUEABIHF_LINKER: arm-linux-gnueabihf-gcc
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-        run: cargo build --release --locked --target ${{ matrix.target }}
+        run: cross build --release --locked --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
           name: rpi-intercom-${{ matrix.target }}
