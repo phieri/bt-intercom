@@ -671,12 +671,9 @@ mod tests {
     fn timeout_does_not_wait_for_descendants_holding_output_pipes() {
         let start = Instant::now();
         assert!(
-            command(
-                &["sh", "-c", "sleep 2 & wait"],
-                Duration::from_millis(20)
-            )
-            .unwrap_err()
-            .contains("timed out")
+            command(&["sh", "-c", "sleep 2 & wait"], Duration::from_millis(20))
+                .unwrap_err()
+                .contains("timed out")
         );
         assert!(start.elapsed() < Duration::from_secs(1));
     }
