@@ -22,8 +22,74 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use bluez::{bluetooth_name, device_flag};
+use clap::{CommandFactory, Parser, Subcommand};
+use clap_complete::Shell;
 use dashboard::Dashboard;
 use router::{Headset, Router, has_active_intercom_connection, has_active_source_route};
+
+#[derive(Clone, Debug)]
+struct PttButton {
+    address: String,
+    path: String,
+}
+
+#[derive(Parser)]
+#[command(
+    name = "rpi-intercom",
+    version,
+    about = "A full-duplex Bluetooth headset intercom for Raspberry Pi",
+    arg_required_else_help = true
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: CliCommand,
+}
+
+#[derive(Subcommand)]
+enum CliCommand {
+    /// Scan for nearby Bluetooth devices.
+    Scan {
+        /// Scan duration in seconds.
+        #[arg(
+            long,
+            default_value_t = 15,
+            value_parser = clap::value_parser!(u64).range(1..=300)
+        )]
+        seconds: u64,
+    },
+    /// Pair, trust, and connect a headset.
+    Pair {
+        #[arg(value_parser = address)]
+        address: String,
+    },
+    /// Show Bluetooth headset audio status.
+    Status {
+        #[arg(required = true, value_parser = address)]
+        addresses: Vec<String>,
+    },
+    /// Route configured headset microphones to one another.
+    Run {
+        #[arg(value_parser = address)]
+        addresses: Vec<String>,
+        /// Routing update interval in seconds.
+        #[arg(long, default_value_t = 2.0, value_parser = parse_interval)]
+        interval: f64,
+        /// Reconnect disconnected headsets every 30 seconds.
+        #[arg(long)]
+        connect: bool,
+        /// Map a headset address to an evdev input path; repeat once per headset.
+        #[arg(long, value_name = "ADDRESS=/dev/input/eventX", value_parser = parse_ptt_binding)]
+        ptt: Vec<PttButton>,
+        /// Show the live terminal dashboard.
+        #[arg(long)]
+        dashboard: bool,
+    },
+    /// Generate shell completion definitions.
+    Completions {
+        #[arg(value_enum)]
+        shell: Shell,
+    },
+}
 
 /// Runs a command with captured output and a deadline.
 fn command(args: &[&str], timeout: Duration) -> Result<String, String> {
@@ -187,6 +253,32 @@ fn address(value: &str) -> Result<String, String> {
     Ok(value.to_ascii_uppercase())
 }
 
+fn parse_interval(value: &str) -> Result<f64, String> {
+    let interval = value
+        .parse::<f64>()
+        .map_err(|_| "--interval must be a positive finite number")?;
+    if !interval.is_finite() || interval <= 0.0 || interval >= u64::MAX as f64 {
+        return Err("--interval must be a positive finite number".into());
+    }
+    if Duration::from_secs_f64(interval).is_zero() {
+        return Err("--interval must be at least one nanosecond".into());
+    }
+    Ok(interval)
+}
+
+fn parse_ptt_binding(value: &str) -> Result<PttButton, String> {
+    let (device, path) = value
+        .split_once('=')
+        .ok_or("--ptt must be ADDRESS=/dev/input/eventX")?;
+    if path.is_empty() {
+        return Err("--ptt requires an input device path".into());
+    }
+    Ok(PttButton {
+        address: address(device)?,
+        path: path.into(),
+    })
+}
+
 /// Returns the path used to remember the configured intercom network.
 fn headset_network_path() -> Result<PathBuf, String> {
     let directory = env::var_os("XDG_CONFIG_HOME")
@@ -276,30 +368,17 @@ fn load_headsets(path: &Path) -> Result<BTreeSet<String>, String> {
     Ok(allowed)
 }
 
-/// Returns the command-line usage text.
-fn usage() -> &'static str {
-    "Usage: rpi-intercom scan [--seconds 1..300]\n       rpi-intercom pair ADDRESS\n       rpi-intercom status ADDRESS [ADDRESS ...]\n       rpi-intercom run [ADDRESS ...] [--interval SECONDS] [--connect] [--ptt ADDRESS=/dev/input/eventX ...] [--dashboard]"
-}
-
 /// Parses and validates one or more Bluetooth addresses.
 fn addresses(args: &[String]) -> Result<BTreeSet<String>, String> {
     if args.is_empty() {
-        return Err(usage().into());
+        return Err("at least one Bluetooth address is required".into());
     }
     args.iter().map(|value| address(value)).collect()
-}
-
-/// Associates a headset with its Linux evdev push-to-talk input device.
-struct PttButton {
-    address: String,
-    path: String,
 }
 
 /// Linux evdev key code emitted by supported headset play/pause buttons.
 const KEY_PLAYPAUSE: u16 = 164;
 
-/// Parsed `run` arguments: devices, polling interval, reconnect, PTT, dashboard.
-type RunOptions = (BTreeSet<String>, Duration, bool, Vec<PttButton>, bool);
 /// A button state update or an input-device failure.
 type PttEvent = Result<(String, bool), String>;
 
@@ -406,13 +485,13 @@ fn confirm_transmissions(
     for (address, speaker_node) in ready {
         pending.remove(&address);
         let Some(speaker_node) = speaker_node else {
-            eprintln!("WARNING: Could not play PTT confirmation for {address}: no speaker node");
+            log::warn!("Could not play PTT confirmation for {address}: no speaker node");
             continue;
         };
         if let Some(beep) = beep
             && let Err(error) = beep.play(speaker_node, stopped)
         {
-            eprintln!("WARNING: Could not play PTT confirmation for {address}: {error}");
+            log::warn!("Could not play PTT confirmation for {address}: {error}");
         }
     }
 }
@@ -431,15 +510,13 @@ fn confirm_connections(
         .collect();
     for address in current.difference(connected) {
         let Some(speaker_node) = headsets[address].speaker_node() else {
-            eprintln!(
-                "WARNING: Could not play intercom connection beep for {address}: no speaker node"
-            );
+            log::warn!("Could not play intercom connection beep for {address}: no speaker node");
             continue;
         };
         if let Some(beep) = beep
             && let Err(error) = beep.play(speaker_node, stopped)
         {
-            eprintln!("WARNING: Could not play intercom connection beep for {address}: {error}");
+            log::warn!("Could not play intercom connection beep for {address}: {error}");
         }
     }
     *connected = current;
@@ -463,57 +540,6 @@ fn validate_ptt(buttons: &[PttButton], allowed: &BTreeSet<String>) -> Result<(),
         return Err("--ptt requires a button mapping for every listed headset".into());
     }
     Ok(())
-}
-
-/// Parses `run` arguments and enforces unique, complete push-to-talk mappings.
-fn run_options(args: &[String]) -> Result<RunOptions, String> {
-    let mut allowed = BTreeSet::new();
-    let mut interval = 2.0_f64;
-    let mut connect = false;
-    let mut buttons: Vec<PttButton> = Vec::new();
-    let mut dashboard = false;
-    let mut index = 1;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--connect" => connect = true,
-            "--ptt" => {
-                index += 1;
-                let binding = args.get(index).ok_or_else(usage)?;
-                let (device, path) = binding.split_once('=').ok_or_else(usage)?;
-                if path.is_empty() {
-                    return Err(usage().into());
-                }
-                let address = address(device)?;
-                buttons.push(PttButton {
-                    address,
-                    path: path.into(),
-                });
-            }
-            "--dashboard" => dashboard = true,
-            "--interval" => {
-                index += 1;
-                interval = args
-                    .get(index)
-                    .ok_or_else(usage)?
-                    .parse()
-                    .map_err(|_| "--interval must be positive")?;
-            }
-            value if value.starts_with('-') => return Err(usage().into()),
-            value => {
-                allowed.insert(address(value)?);
-            }
-        }
-        index += 1;
-    }
-    validate_ptt(&buttons, &allowed)?;
-    if !interval.is_finite() || interval <= 0.0 || interval >= u64::MAX as f64 {
-        return Err("--interval must be positive and finite".into());
-    }
-    let interval = Duration::from_secs_f64(interval);
-    if interval.is_zero() {
-        return Err("--interval must be at least one nanosecond".into());
-    }
-    Ok((allowed, interval, connect, buttons, dashboard))
 }
 
 /// Reads evdev records, forwarding only play/pause press and release transitions.
@@ -582,7 +608,7 @@ fn connect_disconnected(
                 Duration::from_secs(35),
             )
         {
-            eprintln!("WARNING: Could not connect {device}: {error}");
+            log::warn!("Could not connect {device}: {error}");
         }
     }
 }
@@ -610,26 +636,9 @@ fn reconnect_worker(
 }
 
 /// Executes one CLI action, including the main polling and routing loop.
-fn run(args: &[String]) -> Result<(), String> {
-    let Some(action) = args.first().map(String::as_str) else {
-        return Err(usage().into());
-    };
-    if matches!(action, "-h" | "--help") {
-        println!("{}", usage());
-        return Ok(());
-    }
+fn run(action: CliCommand) -> Result<(), String> {
     match action {
-        "scan" => {
-            let seconds = match &args[1..] {
-                [] => 15,
-                [flag, value] if flag == "--seconds" => {
-                    value.parse::<u64>().map_err(|_| usage())?
-                }
-                _ => return Err(usage().into()),
-            };
-            if !(1..=300).contains(&seconds) {
-                return Err("--seconds must be between 1 and 300".into());
-            }
+        CliCommand::Scan { seconds } => {
             print!(
                 "{}",
                 command(
@@ -644,11 +653,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 )?
             );
         }
-        "pair" => {
-            if args.len() != 2 {
-                return Err(usage().into());
-            }
-            let device = address(&args[1])?;
+        CliCommand::Pair { address: device } => {
             pair_command(&device)?;
             if !device_flag(
                 &command(&["bluetoothctl", "info", &device], Duration::from_secs(15))?,
@@ -666,8 +671,8 @@ fn run(args: &[String]) -> Result<(), String> {
                 );
             }
         }
-        "status" => {
-            let allowed = addresses(&args[1..])?;
+        CliCommand::Status { addresses: devices } => {
+            let allowed = addresses(&devices)?;
             let mut router = Router::new(allowed);
             let (headsets, _) = router.inspect()?;
             for address in &router.allowed {
@@ -691,8 +696,16 @@ fn run(args: &[String]) -> Result<(), String> {
                 }
             }
         }
-        "run" => {
-            let (mut allowed, interval, connect, buttons, show_dashboard) = run_options(args)?;
+        CliCommand::Run {
+            addresses: devices,
+            interval,
+            connect,
+            ptt: buttons,
+            dashboard: show_dashboard,
+        } => {
+            let mut allowed = devices.into_iter().collect();
+            validate_ptt(&buttons, &allowed)?;
+            let interval = Duration::from_secs_f64(interval);
             if show_dashboard && !std::io::stderr().is_terminal() {
                 return Err("--dashboard requires an interactive terminal on stderr".into());
             }
@@ -739,7 +752,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let beep = match PttBeep::new() {
                 Ok(beep) => Some(beep),
                 Err(error) => {
-                    eprintln!("WARNING: Confirmation beeps unavailable: {error}");
+                    log::warn!("Confirmation beeps unavailable: {error}");
                     None
                 }
             };
@@ -748,7 +761,7 @@ fn run(args: &[String]) -> Result<(), String> {
             let mut pending_confirmations = BTreeSet::new();
             let mut connected_headsets = BTreeSet::new();
             if input.is_some() {
-                eprintln!(
+                log::info!(
                     "PTT: Hold your headset's play/pause button to transmit; release to mute."
                 );
             }
@@ -771,7 +784,7 @@ fn run(args: &[String]) -> Result<(), String> {
                                     last_update = None;
                                     redraw = true;
                                     if dashboard.is_none() {
-                                        eprintln!(
+                                        log::info!(
                                             "PTT {address}: {}",
                                             if state { "transmitting" } else { "muted" }
                                         );
@@ -830,12 +843,12 @@ fn run(args: &[String]) -> Result<(), String> {
                                         .values()
                                         .filter(|headset| headset.has_duplex_audio())
                                         .count();
-                                    eprintln!(
-                                        "INFO: {active}/{} headsets with duplex audio",
+                                    log::info!(
+                                        "{active}/{} headsets with duplex audio",
                                         router.allowed.len()
                                     );
                                 }
-                                Err(error) => eprintln!("WARNING: Routing update failed: {error}"),
+                                Err(error) => log::warn!("Routing update failed: {error}"),
                             }
                         }
                         if dashboard.is_none()
@@ -893,16 +906,34 @@ fn run(args: &[String]) -> Result<(), String> {
             router.close();
             result?;
         }
-        _ => return Err(usage().into()),
+        CliCommand::Completions { .. } => unreachable!("completions are handled before run"),
     }
     Ok(())
 }
 
 /// Reports command-line errors and exits unsuccessfully.
 fn main() {
-    if let Err(error) = run(&env::args().skip(1).collect::<Vec<_>>()) {
-        eprintln!("rpi-intercom: {error}");
-        std::process::exit(1);
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_secs()
+        .init();
+
+    let cli = Cli::try_parse().unwrap_or_else(|error| error.exit());
+    match cli.command {
+        CliCommand::Completions { shell } => {
+            let mut command = Cli::command();
+            clap_complete::generate(
+                shell,
+                &mut command,
+                "rpi-intercom",
+                &mut std::io::stdout().lock(),
+            );
+        }
+        command => {
+            if let Err(error) = run(command) {
+                eprintln!("rpi-intercom: {error}");
+                std::process::exit(1);
+            }
+        }
     }
 }
 
@@ -1051,96 +1082,96 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_cli_arguments() {
-        assert!(run(&["scan".into(), "--seconds".into(), "301".into()]).is_err());
-        assert!(
-            run(&[
-                "run".into(),
-                "AA:BB:CC:DD:EE:01".into(),
-                "--interval".into(),
-                "NaN".into()
-            ])
-            .is_err()
-        );
-        assert!(run_options(&["run".into()]).unwrap().0.is_empty());
-        assert!(run(&["status".into()]).is_err());
-        assert!(addresses(&["--connect".into()]).is_err());
-        assert!(run_options(&["run".into(), "--ptt".into()]).is_err());
-        assert!(
-            run_options(&["run".into(), "AA:BB:CC:DD:EE:01".into(), "--unknown".into()]).is_err()
-        );
+    fn clap_cli_validates_arguments_and_accepts_completion_shells() {
+        for args in [
+            vec!["rpi-intercom", "run", "invalid"],
+            vec!["rpi-intercom", "run", "--interval", "NaN"],
+            vec!["rpi-intercom", "run", "--interval", "0.00000000001"],
+            vec!["rpi-intercom", "scan", "--seconds", "301"],
+            vec!["rpi-intercom", "status"],
+            vec!["rpi-intercom", "run", "--unknown"],
+            vec!["rpi-intercom", "run", "--ptt"],
+            vec!["rpi-intercom", "run", "--ptt", "AA:BB:CC:DD:EE:01="],
+        ] {
+            assert_eq!(Cli::try_parse_from(args).err().unwrap().exit_code(), 2);
+        }
+        for shell in ["bash", "zsh", "fish", "elvish"] {
+            assert!(Cli::try_parse_from(["rpi-intercom", "completions", shell]).is_ok());
+        }
     }
 
     #[test]
     fn parses_ptt_without_changing_default_mode() {
         let address = "AA:BB:CC:DD:EE:01".to_string();
-        let (_, _, _, buttons, dashboard) = run_options(&["run".into(), address.clone()]).unwrap();
-        assert!(buttons.is_empty());
+        let default = Cli::try_parse_from(["rpi-intercom", "run", address.as_str()]).unwrap();
+        let CliCommand::Run { ptt, dashboard, .. } = default.command else {
+            panic!("expected run command");
+        };
+        assert!(ptt.is_empty());
         assert!(!dashboard);
-        let (allowed, _, connect, buttons, dashboard) = run_options(&[
-            "run".into(),
-            "--ptt".into(),
-            format!("{address}=/dev/input/event4"),
-            address,
-            "--connect".into(),
-            "--dashboard".into(),
+
+        let binding = format!("{address}=/dev/input/event4");
+        let configured = Cli::try_parse_from([
+            "rpi-intercom",
+            "run",
+            "--ptt",
+            binding.as_str(),
+            address.as_str(),
+            "--connect",
+            "--dashboard",
         ])
         .unwrap();
-        assert_eq!(allowed.len(), 1);
+        let CliCommand::Run {
+            addresses,
+            connect,
+            ptt,
+            dashboard,
+            ..
+        } = configured.command
+        else {
+            panic!("expected run command");
+        };
+        assert_eq!(addresses, [address]);
         assert!(connect && dashboard);
-        assert_eq!(buttons.len(), 1);
-        assert_eq!(buttons[0].path, "/dev/input/event4");
-        for mapping in ["AA:BB:CC:DD:EE:02=/dev/input/event4", "AA:BB:CC:DD:EE:01="] {
-            assert!(
-                run_options(&[
-                    "run".into(),
-                    "AA:BB:CC:DD:EE:01".into(),
-                    "--ptt".into(),
-                    mapping.into()
-                ])
-                .is_err()
-            );
-        }
-
-        assert!(
-            run_options(&[
-                "run".into(),
-                "AA:BB:CC:DD:EE:01".into(),
-                "AA:BB:CC:DD:EE:02".into(),
-                "--ptt".into(),
-                "AA:BB:CC:DD:EE:01=/dev/input/event4".into(),
-                "--ptt".into(),
-                "AA:BB:CC:DD:EE:02=/dev/input/event4".into()
-            ])
-            .is_err()
-        );
-        assert!(
-            run_options(&[
-                "run".into(),
-                "AA:BB:CC:DD:EE:01".into(),
-                "AA:BB:CC:DD:EE:02".into(),
-                "--ptt".into(),
-                "AA:BB:CC:DD:EE:01=/dev/input/event4".into()
-            ])
-            .is_err()
-        );
+        assert_eq!(ptt.len(), 1);
+        assert_eq!(ptt[0].path, "/dev/input/event4");
+        assert_eq!(ptt[0].address, "AA:BB:CC:DD:EE:01");
     }
 
     #[test]
     fn validates_ptt_bindings_against_restored_network() {
-        let address = "AA:BB:CC:DD:EE:01".to_string();
-        let buttons = vec![PttButton {
-            address: address.clone(),
-            path: "/dev/input/event4".into(),
-        }];
-        assert!(validate_ptt(&buttons, &BTreeSet::from([address.clone()])).is_ok());
-        assert!(
-            validate_ptt(
-                &buttons,
-                &BTreeSet::from([address, "AA:BB:CC:DD:EE:02".to_string()])
-            )
-            .is_err()
-        );
+        let first = "AA:BB:CC:DD:EE:01".to_string();
+        let second = "AA:BB:CC:DD:EE:02".to_string();
+        let network = BTreeSet::from([first.clone(), second.clone()]);
+        let buttons = vec![
+            PttButton {
+                address: first.clone(),
+                path: "/dev/input/event4".into(),
+            },
+            PttButton {
+                address: second.clone(),
+                path: "/dev/input/event5".into(),
+            },
+        ];
+        assert!(validate_ptt(&buttons, &network).is_ok());
+        assert!(validate_ptt(&buttons[..1], &network).is_err());
+        let duplicate_path = vec![
+            buttons[0].clone(),
+            PttButton {
+                address: second.clone(),
+                path: "/dev/input/event4".into(),
+            },
+        ];
+        assert!(validate_ptt(&duplicate_path, &network).is_err());
+        let duplicate_address = vec![
+            buttons[0].clone(),
+            PttButton {
+                address: first.clone(),
+                path: "/dev/input/event5".into(),
+            },
+        ];
+        assert!(validate_ptt(&duplicate_address, &network).is_err());
+        assert!(validate_ptt(&[buttons[0].clone()], &BTreeSet::from([first, second])).is_err());
     }
 
     #[test]
@@ -1206,15 +1237,7 @@ mod tests {
 
     #[test]
     fn rejects_intervals_that_round_to_zero() {
-        assert!(
-            run_options(&[
-                "run".into(),
-                "AA:BB:CC:DD:EE:01".into(),
-                "--interval".into(),
-                "0.00000000001".into(),
-            ])
-            .is_err()
-        );
+        assert!(parse_interval("0.00000000001").is_err());
     }
 
     #[test]
