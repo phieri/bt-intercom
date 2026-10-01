@@ -27,9 +27,7 @@ h1 { max-width: 14ch; margin: 0; font-size: clamp(2rem, 7vw, 5rem); line-height:
 #player { min-width: 0; max-width: 100%; overflow: hidden; }
 #player > p { margin: 0; padding: 1.25rem; }
 #player .ap-wrapper, #player .ap-player { max-width: 100%; }
-.transcript { margin-top: 1rem; }
-.transcript summary { cursor: pointer; color: #79dfc0; }
-.transcript pre { padding: 1rem; background: #000; border: 1px solid #304254; border-radius: .5rem; color: #e5eef5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: pre; border: 0; }
 .note { max-width: 75ch; color: #afc2cf; font-size: .9rem; }
 h2 { margin-top: 3rem; font-size: 1.5rem; }
 .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 1rem; padding: 0; list-style: none; }
@@ -42,6 +40,5 @@ footer { padding-block: 2rem; border-top: 1px solid #304254; color: #afc2cf; fon
   header, main, footer { width: min(100% - 1.5rem, 1000px); }
   .intro { font-size: 1rem; }
   .panel-heading { padding: .6rem .8rem; font-size: .8rem; }
-  .transcript pre { padding: .75rem; font-size: .8rem; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; } }
