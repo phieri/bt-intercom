@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="description" content="Watch the rpi-intercom command-line workflow in an asciinema terminal player.">
     <title>rpi-intercom · Terminal tour</title>
+    <link rel="preload" href="demo.cast" as="fetch" crossorigin>
     <link rel="stylesheet" href="vendor/asciinema-player.css">
     <link rel="stylesheet" href="style.css">
     <script src="vendor/asciinema-player.min.js" defer></script>
@@ -13,7 +14,7 @@
         if (window.AsciinemaPlayer) {
           const container = document.getElementById("player");
           container.replaceChildren();
-          AsciinemaPlayer.create("demo.cast", container, { fit: "width", cols: 86, rows: 18 });
+          AsciinemaPlayer.create("demo.cast", container, { fit: "width", cols: 86, rows: 18, loop: 3 });
         }
       });
     </script>
