@@ -721,6 +721,24 @@ mod tests {
         assert_eq!(address("aa:bb:cc:dd:ee:ff").unwrap(), "AA:BB:CC:DD:EE:FF");
     }
 
+    #[test]
+    fn validates_address_lists_and_rejects_mixed_invalid_input() {
+        let input = [
+            "aa:bb:cc:dd:ee:01".into(),
+            "AA:BB:CC:DD:EE:02".into(),
+            "aa:bb:cc:dd:ee:01".into(),
+        ];
+        assert_eq!(
+            addresses(&input).unwrap(),
+            BTreeSet::from([
+                "AA:BB:CC:DD:EE:01".to_string(),
+                "AA:BB:CC:DD:EE:02".to_string(),
+            ])
+        );
+        assert!(addresses(&[]).is_err());
+        assert!(addresses(&["AA:BB:CC:DD:EE:01".into(), "invalid".into()]).is_err());
+    }
+
     fn temporary_network_path() -> PathBuf {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
