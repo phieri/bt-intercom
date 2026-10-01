@@ -13,6 +13,7 @@ use serde_json::Value;
 
 use crate::command;
 
+/// A directed PipeWire link, represented as `(output_port_id, input_port_id)`.
 type Link = (u64, u64);
 const OWNER_PROPERTY: &str = "rpi-intercom.owner";
 static NEXT_ROUTER: AtomicUsize = AtomicUsize::new(0);
