@@ -27,6 +27,8 @@ use clap_complete::Shell;
 use dashboard::Dashboard;
 use router::{Headset, Router, has_active_intercom_connection, has_active_source_route};
 
+const PTT_BEEP_WAV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ptt-beep.wav"));
+
 #[derive(Clone, Debug)]
 struct PttButton {
 	address: String,
@@ -403,7 +405,7 @@ impl PttBeep {
 			.create_new(true)
 			.open(&path)
 			.map_err(|error| format!("could not create PTT beep: {error}"))?;
-		if let Err(error) = file.write_all(&double_beep_wav()) {
+		if let Err(error) = file.write_all(PTT_BEEP_WAV) {
 			drop(file);
 			let _ = fs::remove_file(&path);
 			return Err(format!("could not write PTT beep: {error}"));
@@ -427,44 +429,6 @@ impl Drop for PttBeep {
 	fn drop(&mut self) {
 		let _ = fs::remove_file(&self.path);
 	}
-}
-
-fn double_beep_wav() -> Vec<u8> {
-	let sample_rate = 48_000_u32;
-	let beep_samples = sample_rate * 90 / 1_000;
-	let gap_samples = sample_rate * 75 / 1_000;
-	let sample_count = beep_samples * 2 + gap_samples;
-	let mut samples = Vec::with_capacity(sample_count as usize * 2);
-	let fade_samples = sample_rate / 200;
-	for index in 0..sample_count {
-		let position = index % (beep_samples + gap_samples);
-		let sample = if position < beep_samples {
-			let fade_in = position as f32 / fade_samples as f32;
-			let fade_out = (beep_samples - position - 1) as f32 / fade_samples as f32;
-			let envelope = fade_in.min(fade_out).min(1.0);
-			let phase = std::f32::consts::TAU * 880.0 * position as f32 / sample_rate as f32;
-			(phase.sin() * envelope * 0.2 * i16::MAX as f32) as i16
-		} else {
-			0
-		};
-		samples.extend_from_slice(&sample.to_le_bytes());
-	}
-
-	let mut wav = Vec::with_capacity(44 + samples.len());
-	wav.extend_from_slice(b"RIFF");
-	wav.extend_from_slice(&(36 + samples.len() as u32).to_le_bytes());
-	wav.extend_from_slice(b"WAVEfmt ");
-	wav.extend_from_slice(&16_u32.to_le_bytes());
-	wav.extend_from_slice(&1_u16.to_le_bytes());
-	wav.extend_from_slice(&1_u16.to_le_bytes());
-	wav.extend_from_slice(&sample_rate.to_le_bytes());
-	wav.extend_from_slice(&(sample_rate * 2).to_le_bytes());
-	wav.extend_from_slice(&2_u16.to_le_bytes());
-	wav.extend_from_slice(&16_u16.to_le_bytes());
-	wav.extend_from_slice(b"data");
-	wav.extend_from_slice(&(samples.len() as u32).to_le_bytes());
-	wav.extend_from_slice(&samples);
-	wav
 }
 
 fn confirm_transmissions(
@@ -1175,7 +1139,7 @@ mod tests {
 
 	#[test]
 	fn creates_a_short_double_beep_waveform() {
-		let wav = double_beep_wav();
+		let wav = PTT_BEEP_WAV;
 		assert_eq!(&wav[..4], b"RIFF");
 		assert_eq!(
 			u32::from_le_bytes(wav[4..8].try_into().unwrap()),
