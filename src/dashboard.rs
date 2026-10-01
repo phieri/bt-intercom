@@ -14,9 +14,25 @@ use crate::{command_cancellable, device_flag};
 #[derive(Debug, PartialEq, Eq)]
 /// Bluetooth pairing, connection, and optional signal-strength information.
 pub struct Bluetooth {
+    name: Option<String>,
     paired: bool,
     connected: bool,
     rssi: Option<i32>,
+}
+
+pub(crate) fn bluetooth_name(info: &str) -> Option<String> {
+    ["Alias", "Name"].into_iter().find_map(|field| {
+        let value = info.lines().find_map(|line| {
+            let (key, value) = line.trim().split_once(':')?;
+            (key == field).then_some(value.trim())
+        })?;
+        let name: String = value
+            .chars()
+            .filter(|character| !character.is_control())
+            .collect();
+        let name = name.trim();
+        (!name.is_empty()).then(|| name.to_owned())
+    })
 }
 
 fn bluetooth_info(info: &str) -> Bluetooth {
@@ -25,6 +41,7 @@ fn bluetooth_info(info: &str) -> Bluetooth {
         (key == "RSSI").then(|| value.split_whitespace().next()?.parse().ok())?
     });
     Bluetooth {
+        name: bluetooth_name(info),
         paired: device_flag(info, "Paired"),
         connected: device_flag(info, "Connected"),
         rssi,
@@ -110,7 +127,7 @@ impl Dashboard {
         )?;
         writeln!(
             output,
-            "ADDRESS             PAIRED  CONNECTED  DUPLEX  TX/RX LINKS  SIGNAL"
+            "HEADSET NAME             ADDRESS             PAIRED  CONNECTED  DUPLEX  TX/RX LINKS  SIGNAL"
         )?;
         for address in allowed {
             let bluetooth = self.state.get(address).and_then(Option::as_ref);
@@ -148,7 +165,13 @@ impl Dashboard {
                 );
             writeln!(
                 output,
-                "{address}  {:<6}  {:<9}  {:<6}  {tx:>2}/{rx:<2}         {signal}",
+                "{:<24} {address}  {:<6}  {:<9}  {:<6}  {tx:>2}/{rx:<2}         {signal}",
+                bluetooth
+                    .and_then(|info| info.name.as_deref())
+                    .unwrap_or("—")
+                    .chars()
+                    .take(24)
+                    .collect::<String>(),
                 status(bluetooth.map(|info| info.paired)),
                 status(bluetooth.map(|info| info.connected)),
                 status(headset.map(Headset::has_duplex_audio))
@@ -188,14 +211,25 @@ mod tests {
     #[test]
     fn parses_bluetooth_status_and_optional_signal() {
         assert_eq!(
-            bluetooth_info("Paired: yes\nConnected: yes\nRSSI: -67 (0xffffffbd)\n"),
+            bluetooth_info(
+                "Name: Generic headset\nAlias: Alex's headset\nPaired: yes\nConnected: yes\nRSSI: -67 (0xffffffbd)\n"
+            ),
             Bluetooth {
+                name: Some("Alex's headset".into()),
                 paired: true,
                 connected: true,
                 rssi: Some(-67)
             }
         );
         assert_eq!(bluetooth_info("RSSI: unavailable\n").rssi, None);
+        assert_eq!(
+            bluetooth_name("Name: Device name\nAlias: \n"),
+            Some("Device name".into())
+        );
+        assert_eq!(
+            bluetooth_name("Alias: Unsafe\u{1b}[31m name"),
+            Some("Unsafe[31m name".into())
+        );
     }
 
     #[test]
@@ -263,6 +297,7 @@ mod tests {
                 (
                     format!("AA:BB:CC:DD:EE:{:02}", index + 1),
                     Some(Bluetooth {
+                        name: None,
                         paired: true,
                         connected: true,
                         rssi: Some(*rssi),
@@ -272,6 +307,7 @@ mod tests {
             .chain([(
                 disconnected.clone(),
                 Some(Bluetooth {
+                    name: None,
                     paired: true,
                     connected: false,
                     rssi: Some(-40),
@@ -304,8 +340,44 @@ mod tests {
         }
         let disconnected_row = text
             .lines()
-            .find(|line| line.starts_with(&disconnected))
+            .find(|line| line.contains(&disconnected))
             .unwrap();
         assert!(disconnected_row.contains("unknown"));
+    }
+
+    #[test]
+    fn renders_bluetooth_alias_with_the_address() {
+        let address = "AA:BB:CC:DD:EE:01".to_string();
+        let allowed = BTreeSet::from([address.clone()]);
+        let (sender, receiver) = mpsc::channel();
+        drop(sender);
+        let (shutdown, _) = mpsc::channel();
+        let dashboard = Dashboard {
+            receiver,
+            state: BTreeMap::from([(
+                address,
+                Some(Bluetooth {
+                    name: Some("Alex's headset".into()),
+                    paired: true,
+                    connected: true,
+                    rssi: None,
+                }),
+            )]),
+            shutdown,
+            worker: None,
+        };
+        let mut output = Vec::new();
+        dashboard
+            .draw(
+                &allowed,
+                &BTreeMap::new(),
+                &BTreeSet::new(),
+                false,
+                None,
+                &mut output,
+            )
+            .unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("Alex's headset           AA:BB:CC:DD:EE:01"));
     }
 }

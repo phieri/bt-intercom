@@ -100,10 +100,11 @@ Check whether PipeWire sees duplex audio for each headset before routing:
 rpi-intercom status AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02
 ```
 
-This reports microphone and speaker port counts, or that an address is not
-found in PipeWire. It does not create links or connect devices. A device with
-no duplex audio needs its Bluetooth connection and HFP/HSP profile checked
-using `bluetoothctl info ADDRESS` and `wpctl status`.
+This reports the Bluetooth device alias (or name) alongside its address and
+microphone and speaker port counts, or that it is not found in PipeWire. It does
+not create links or connect devices. A device with no duplex audio needs its
+Bluetooth connection and HFP/HSP profile checked using
+`bluetoothctl info ADDRESS` and `wpctl status`.
 
 Start the intercom with the paired addresses:
 
@@ -165,14 +166,15 @@ not a privacy/security boundary.
 
 For an opt-in live console view, add `--dashboard` to `run` in an interactive
 terminal (it requires a terminal on stderr). The view refreshes as routing and
-Bluetooth status change and shows each requested headset's paired/connected
-status, duplex availability, owned active PipeWire link counts (outgoing and
-incoming), and Bluetooth RSSI when BlueZ reports it. `?` means Bluetooth
-status has not been obtained; `unknown` signal means RSSI is unavailable,
-not necessarily a poor connection. Link counts show established routes,
-**not** measured speech, throughput, or packet loss. The display does not
-change pairing, connections, profiles, or audio routing. Omit `--dashboard`
-for a systemd service or redirected logs. It works with headset-button PTT.
+Bluetooth status change and shows each requested headset's Bluetooth alias (or
+name) and address, paired/connected status, duplex availability, owned active
+PipeWire link counts (outgoing and incoming), and Bluetooth RSSI when BlueZ
+reports it. `?` means Bluetooth status has not been obtained; `unknown` signal
+means RSSI is unavailable, not necessarily a poor connection. Link counts show
+established routes, **not** measured speech, throughput, or packet loss. The
+display does not change pairing, connections, profiles, or audio routing. Omit
+`--dashboard` for a systemd service or redirected logs. It works with
+headset-button PTT.
 
 If a headset is silent, inspect `wpctl status` and `pw-dump` to confirm that it
 has both `Audio/Source` and `Audio/Sink` nodes and that the duplex profile is

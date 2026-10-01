@@ -527,9 +527,14 @@ fn run(args: &[String]) -> Result<(), String> {
             let mut router = Router::new(allowed);
             let (headsets, _) = router.inspect()?;
             for address in &router.allowed {
+                let name = command(&["bluetoothctl", "info", address], Duration::from_secs(15))
+                    .ok()
+                    .and_then(|info| dashboard::bluetooth_name(&info));
+                let identity =
+                    name.map_or_else(|| address.clone(), |name| format!("{name} ({address})"));
                 match headsets.get(address) {
                     Some(headset) => println!(
-                        "{address}: {} ({} microphone ports, {} speaker ports)",
+                        "{identity}: {} ({} microphone ports, {} speaker ports)",
                         if headset.has_duplex_audio() {
                             "duplex ready"
                         } else {
@@ -538,7 +543,7 @@ fn run(args: &[String]) -> Result<(), String> {
                         headset.sources.len(),
                         headset.sinks.len()
                     ),
-                    None => println!("{address}: not found in PipeWire"),
+                    None => println!("{identity}: not found in PipeWire"),
                 }
             }
         }
