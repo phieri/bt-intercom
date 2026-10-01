@@ -59,10 +59,10 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: rpi-intercom-${{ matrix.target }}-deb
-          path: target/${{ matrix.target }}/debian/*.deb
+          path: target/debian/*.deb
           if-no-files-found: error
       - uses: actions/upload-artifact@v7
         with:
           name: rpi-intercom-${{ matrix.target }}-rpm
-          path: target/generate-rpm/*.rpm
+          path: target/${{ matrix.target }}/generate-rpm/*.rpm
           if-no-files-found: error

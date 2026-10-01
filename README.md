@@ -79,9 +79,10 @@ service sends stdout and stderr to the journal.
 requirements, and a systemd user unit. Install `cargo-deb` and
 `cargo-generate-rpm`, then build packages with `cargo deb` and
 `cargo generate-rpm` (add `--target TARGET` for a configured cross-compilation
-target). The `.deb` is written to `target/debian/` (or the target-specific
-`debian/` directory when cross-compiling); the `.rpm` is written to
-`target/generate-rpm/`. CI publishes both packages for each supported target.
+target). The `.deb` is written to `target/debian/`; the `.rpm` is written to
+`target/TARGET/generate-rpm/` when a target is specified, or
+`target/generate-rpm/` otherwise. CI publishes both packages for each supported
+target.
 
 Install the package with your distribution's package manager. The systemd user
 unit is installed but not enabled automatically. After configuring the saved
