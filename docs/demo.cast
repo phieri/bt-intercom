@@ -5,7 +5,7 @@
 [0.44,"o","com "]
 [0.52,"o","--he"]
 [0.6,"o","lp\r\n"]
-[0.9,"o","Usage: rpi-intercom scan [--seconds 1..300]\r\n       rpi-intercom pair ADDRESS\r\n       rpi-intercom status ADDRESS [ADDRESS ...]\r\n       rpi-intercom run ADDRESS [ADDRESS ...] [--interval SECONDS] [--connect] [--ptt ADDRESS=/dev/input/eventX ...] [--dashboard]\r\n"]
+[0.9,"o","Usage: rpi-intercom scan [--seconds 1..300]\r\n       rpi-intercom pair ADDRESS\r\n       rpi-intercom status ADDRESS [ADDRESS ...]\r\n       rpi-intercom run [ADDRESS ...] [--interval SECONDS] [--connect] [--ptt ADDRESS=/dev/input/eventX ...] [--dashboard]\r\n"]
 [0.12,"o","$ "]
 [4.2,"o","rpi-"]
 [4.28,"o","intercom "]
