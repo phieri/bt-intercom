@@ -24,12 +24,18 @@ keeps them muted until a headset button is held.
 On Raspberry Pi OS with PipeWire packages:
 
 ```sh
-sudo apt install bluez pipewire wireplumber libspa-0.2-bluetooth
+sudo apt install bluez pipewire pipewire-bin wireplumber libspa-0.2-bluetooth
 systemctl --user status pipewire wireplumber
 ```
 
 Start PipeWire and WirePlumber for your login user if they are not running.
 Build on the Pi:
+
+```sh
+cargo install --path . --locked
+```
+
+Alternatively, build and install the executable directly:
 
 ```sh
 cargo build --release --locked
@@ -38,6 +44,51 @@ install -Dm755 target/release/rpi-intercom ~/.local/bin/rpi-intercom
 
 Alternatively, download the executable from a successful build artifact and
 install it as `~/.local/bin/rpi-intercom`.
+
+### Shell completions and logging
+
+Completions are generated from the CLI definition at runtime. Save the output in
+the completion directory for your shell:
+
+```sh
+mkdir -p ~/.local/share/bash-completion/completions
+rpi-intercom completions bash > ~/.local/share/bash-completion/completions/rpi-intercom
+
+mkdir -p ~/.zfunc
+rpi-intercom completions zsh > ~/.zfunc/_rpi-intercom
+
+mkdir -p ~/.config/fish/completions
+rpi-intercom completions fish > ~/.config/fish/completions/rpi-intercom.fish
+
+mkdir -p ~/.config/elvish/lib
+rpi-intercom completions elvish > ~/.config/elvish/lib/rpi-intercom.elv
+```
+
+For Zsh, add `fpath=(~/.zfunc $fpath)` before `compinit` in `~/.zshrc`. For
+Elvish, add `use rpi-intercom` to `~/.config/elvish/rc.elv`. Restart the shell
+after configuring completions.
+
+Runtime diagnostics are written to stderr and respect `RUST_LOG`. The default
+level is `info`; set `RUST_LOG=warn` to show warnings only. A systemd user
+service sends stdout and stderr to the journal.
+
+### Debian package
+
+`Cargo.toml` includes `cargo-deb` metadata for the binary, man page, runtime
+requirements, and a systemd user unit. Install `cargo-deb` with
+`cargo install cargo-deb`, then build a package with `cargo deb` (or
+`cargo deb --target TARGET` for a configured cross-compilation target). Install
+the resulting package from `target/debian/` with your package manager. The unit
+is installed but not enabled automatically. After configuring the saved headset
+network, start it with:
+
+```sh
+systemctl --user daemon-reload
+systemctl --user enable --now rpi-intercom.service
+```
+
+The packaged unit runs `/usr/bin/rpi-intercom`; the example unit below remains
+for manual installations under `~/.local/bin`.
 
 Choose an artifact for both the Pi and OS architecture:
 

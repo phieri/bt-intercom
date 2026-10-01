@@ -1,0 +1,14 @@
+[Unit]
+Description=Bluetooth headset intercom
+Wants=pipewire.service wireplumber.service
+After=pipewire.service wireplumber.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/rpi-intercom run --connect
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=90
+
+[Install]
+WantedBy=default.target
