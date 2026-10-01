@@ -89,7 +89,9 @@ restore them. `--connect` retries disconnected headsets every 30 seconds; omit
 it if another Bluetooth manager keeps them connected. Routing is polled every
 two seconds by default; change that with `--interval SECONDS`. Ctrl-C or SIGTERM
 closes links created by this process. Existing PipeWire links are not modified.
-Best-effort beeps confirm when an intercom route becomes active.
+Best-effort beeps confirm when an intercom route becomes active. Their temporary
+WAV file is created under `XDG_RUNTIME_DIR` when it is an absolute path, falling
+back to the system temporary directory otherwise; it is removed during shutdown.
 
 ### Push-to-talk
 

@@ -9,6 +9,7 @@ mod router;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{IsTerminal, Read, Write};
 use std::os::unix::process::CommandExt;
@@ -196,6 +197,14 @@ fn headset_network_path() -> Result<PathBuf, String> {
     Ok(directory.join("rpi-intercom").join("headsets"))
 }
 
+/// Returns the session runtime directory, falling back to the system temp directory.
+fn ptt_runtime_directory(xdg_runtime_dir: Option<&OsStr>) -> PathBuf {
+    xdg_runtime_dir
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .unwrap_or_else(env::temp_dir)
+}
+
 /// Atomically saves the allowed headset addresses for the next run.
 fn save_headsets(path: &Path, allowed: &BTreeSet<String>) -> Result<(), String> {
     if allowed.is_empty() {
@@ -301,11 +310,12 @@ struct PttBeep {
 
 impl PttBeep {
     fn new() -> Result<Self, String> {
+        let runtime_dir = ptt_runtime_directory(env::var_os("XDG_RUNTIME_DIR").as_deref());
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let path = env::temp_dir().join(format!(
+        let path = runtime_dir.join(format!(
             "rpi-intercom-ptt-{}-{nonce}.wav",
             std::process::id()
         ));
@@ -933,6 +943,19 @@ mod tests {
             "rpi-intercom-headsets-{}-{nonce}/headsets",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn uses_absolute_xdg_runtime_dir_for_ptt_beeps() {
+        assert_eq!(
+            ptt_runtime_directory(Some(OsStr::new("/run/user/1000"))),
+            PathBuf::from("/run/user/1000")
+        );
+        assert_eq!(
+            ptt_runtime_directory(Some(OsStr::new("relative"))),
+            env::temp_dir()
+        );
+        assert_eq!(ptt_runtime_directory(None), env::temp_dir());
     }
 
     #[test]
