@@ -6,6 +6,7 @@ on:
     paths:
       - docs/**
       - .github/workflows/pages.yml
+      - .github/scripts/generate-demo-transcript.py
   workflow_dispatch:
 
 permissions:
@@ -26,6 +27,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/configure-pages@v6
+      - name: Generate accessible demo transcript
+        run: python3 .github/scripts/generate-demo-transcript.py
       - name: Download asciinema player
         run: |
           mkdir -p docs/vendor
