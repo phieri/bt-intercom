@@ -26,6 +26,7 @@ assets = [
 ]
 
 [package.metadata.generate-rpm]
+license = "LicenseRef-Unknown"
 assets = [
     { source = "target/release/rpi-intercom", dest = "/usr/bin/rpi-intercom", mode = "755" },
     { source = "packaging/rpi-intercom.service", dest = "/usr/lib/systemd/user/rpi-intercom.service", mode = "644" },
