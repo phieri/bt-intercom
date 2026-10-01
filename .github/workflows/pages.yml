@@ -25,7 +25,7 @@ jobs:
     runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
       - name: Download asciinema player
         run: |
           mkdir -p docs/vendor
@@ -35,8 +35,8 @@ jobs:
           echo "f619fe17597043564f03b2c6918b3daf890ee8b912fb408542fba11afade4fdb  docs/vendor/asciinema-player.css" | sha256sum -c -
           echo "a13c37632e1b5c49fe9128417b9319a9b5bc64cb457dd5ae52cbba8a3aceb880  docs/vendor/asciinema-player.min.js" | sha256sum -c -
           echo "63422284ed65be54ab38d8a94e7518d27e222fbb26c9ae4cd984c63926e91c12  docs/vendor/LICENSE.asciinema-player" | sha256sum -c -
-      - uses: actions/upload-pages-artifact@v4
+      - uses: actions/upload-pages-artifact@v5
         with:
           path: docs
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
