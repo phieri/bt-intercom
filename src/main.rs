@@ -3,6 +3,7 @@
 //! External commands are bounded by timeouts; the long-running `run` mode also
 //! supports cancellation, reconnecting, push-to-talk input, and a terminal view.
 
+mod bluez;
 mod dashboard;
 mod router;
 
@@ -19,6 +20,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use bluez::{bluetooth_name, device_flag};
 use dashboard::Dashboard;
 use router::{Headset, Router, has_active_intercom_connection, has_active_source_route};
 
@@ -263,15 +265,6 @@ fn load_headsets(path: &Path) -> Result<BTreeSet<String>, String> {
         ));
     }
     Ok(allowed)
-}
-
-/// Returns whether BlueZ's device information reports the named flag as `yes`.
-fn device_flag(info: &str, flag: &str) -> bool {
-    info.lines().any(|line| {
-        line.trim()
-            .split_once(':')
-            .is_some_and(|(key, value)| key.trim() == flag && value.trim() == "yes")
-    })
 }
 
 /// Returns the command-line usage text.
@@ -670,7 +663,7 @@ fn run(args: &[String]) -> Result<(), String> {
             for address in &router.allowed {
                 let name = command(&["bluetoothctl", "info", address], Duration::from_secs(15))
                     .ok()
-                    .and_then(|info| dashboard::bluetooth_name(&info));
+                    .and_then(|info| bluetooth_name(&info));
                 let identity =
                     name.map_or_else(|| address.clone(), |name| format!("{name} ({address})"));
                 match headsets.get(address) {

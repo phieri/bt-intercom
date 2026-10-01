@@ -8,8 +8,9 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use crate::bluez::{bluetooth_name, device_flag, property};
+use crate::command_cancellable;
 use crate::router::Headset;
-use crate::{command_cancellable, device_flag};
 
 #[derive(Debug, PartialEq, Eq)]
 /// Bluetooth pairing, connection, and optional signal-strength information.
@@ -20,26 +21,9 @@ pub struct Bluetooth {
     rssi: Option<i32>,
 }
 
-pub(crate) fn bluetooth_name(info: &str) -> Option<String> {
-    ["Alias", "Name"].into_iter().find_map(|field| {
-        let value = info.lines().find_map(|line| {
-            let (key, value) = line.trim().split_once(':')?;
-            (key == field).then_some(value.trim())
-        })?;
-        let name: String = value
-            .chars()
-            .filter(|character| !character.is_control())
-            .collect();
-        let name = name.trim();
-        (!name.is_empty()).then(|| name.to_owned())
-    })
-}
-
 fn bluetooth_info(info: &str) -> Bluetooth {
-    let rssi = info.lines().find_map(|line| {
-        let (key, value) = line.trim().split_once(':')?;
-        (key == "RSSI").then(|| value.split_whitespace().next()?.parse().ok())?
-    });
+    let rssi =
+        property(info, "RSSI").and_then(|value| value.split_whitespace().next()?.parse().ok());
     Bluetooth {
         name: bluetooth_name(info),
         paired: device_flag(info, "Paired"),
@@ -150,7 +134,8 @@ impl Dashboard {
                 )
             });
             let signal = bluetooth
-                .and_then(|info| info.connected.then_some(info.rssi).flatten())
+                .filter(|info| info.connected)
+                .and_then(|info| info.rssi)
                 .map_or_else(
                     || "unknown".to_string(),
                     |rssi| {
