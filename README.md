@@ -8,7 +8,7 @@ keeps them muted until a headset button is held.
 
 [Watch the illustrative CLI demo](https://phieri.github.io/rpi-intercom/).
 
-## Requirements and installation
+## Requirements
 
 - A Raspberry Pi with Bluetooth Classic: Zero W, Zero 2 W, Pi 3, Pi 4 and Pi 5
   have onboard radios. Pi 1, Pi 2 and the original Pi Zero need a compatible USB
@@ -17,8 +17,9 @@ keeps them muted until a headset button is held.
   and WirePlumber. Run as the same user as PipeWire, **not with `sudo`**.
 - At least two Bluetooth Classic headsets that expose both microphone and
   speaker audio through the HFP/HSP `headset-head-unit` profile. A2DP alone is
-  playback-only. Check or select the duplex profile with `wpctl status`; the
-  program does not change profiles.
+  playback-only. Check profiles with `wpctl status`; select the duplex profile
+  with `wpctl set-profile DEVICE_ID PROFILE_INDEX`. The program does not change
+  profiles.
 
 On Raspberry Pi OS with PipeWire packages:
 
@@ -28,12 +29,15 @@ systemctl --user status pipewire wireplumber
 ```
 
 Start PipeWire and WirePlumber for your login user if they are not running.
-Build on the Pi, or install the binary from a successful GitHub Actions build:
+Build on the Pi:
 
 ```sh
 cargo build --release --locked
 install -Dm755 target/release/rpi-intercom ~/.local/bin/rpi-intercom
 ```
+
+Alternatively, download the executable from a successful build artifact and
+install it as `~/.local/bin/rpi-intercom`.
 
 Choose an artifact for both the Pi and OS architecture:
 
@@ -57,9 +61,11 @@ rpi-intercom pair AA:BB:CC:DD:EE:01
 rpi-intercom pair AA:BB:CC:DD:EE:02
 ```
 
-Pairing opens BlueZ's interactive `KeyboardDisplay` agent. Follow its prompts,
-then the program verifies pairing, trusts and connects the device. Verify
-PipeWire exposes duplex audio:
+Run `pair` in an interactive shell. At the BlueZ `KeyboardDisplay` prompt, enter
+the printed `pair ADDRESS` command, answer any PIN or confirmation prompts, then
+type `quit`; the program verifies pairing, trusts and connects the device. If a
+headset is incompatible with the agent, pair it through the desktop's Bluetooth
+UI or `bluetoothctl`. Verify PipeWire exposes duplex audio:
 
 ```sh
 rpi-intercom status AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02
@@ -126,10 +132,14 @@ journalctl --user -u rpi-intercom.service -f
 ```
 
 The unit uses `run --connect` and saved addresses; it does not enable PTT. The
-user's PipeWire/WirePlumber session must be available. For startup without a
-login, enable systemd lingering and configure WirePlumber's Bluetooth seat
-policy for headless use. Stop with `systemctl --user stop rpi-intercom.service`
-to release the routes.
+user's PipeWire/WirePlumber session must be available. To start before login,
+enable lingering with `sudo loginctl enable-linger "$USER"` and configure
+WirePlumber's Bluetooth seat policy for headless use. Stop the unit to release
+its routes:
+
+```sh
+systemctl --user stop rpi-intercom.service
+```
 
 ## Limits and development
 
