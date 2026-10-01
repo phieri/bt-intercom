@@ -13,10 +13,9 @@ use crate::command_cancellable;
 use crate::router::Headset;
 
 #[derive(Debug, PartialEq, Eq)]
-/// Bluetooth pairing, connection, and optional signal-strength information.
+/// Bluetooth connection and optional signal-strength information.
 pub struct Bluetooth {
 	name: Option<String>,
-	paired: bool,
 	connected: bool,
 	rssi: Option<i32>,
 }
@@ -26,7 +25,6 @@ fn bluetooth_info(info: &str) -> Bluetooth {
 		property(info, "RSSI").and_then(|value| value.split_whitespace().next()?.parse().ok());
 	Bluetooth {
 		name: bluetooth_name(info),
-		paired: device_flag(info, "Paired"),
 		connected: device_flag(info, "Connected"),
 		rssi,
 	}
@@ -111,7 +109,7 @@ impl Dashboard {
 		)?;
 		writeln!(
 			output,
-			"HEADSET NAME             ADDRESS             PAIRED  CONNECTED  DUPLEX  TX/RX LINKS  SIGNAL"
+			"HEADSET NAME             ADDRESS             CONNECTED  DUPLEX  TX/RX LINKS  SIGNAL"
 		)?;
 		for address in allowed {
 			let bluetooth = self.state.get(address).and_then(Option::as_ref);
@@ -150,14 +148,13 @@ impl Dashboard {
 				);
 			writeln!(
 				output,
-				"{:<24} {address}  {:<6}  {:<9}  {:<6}  {tx:>2}/{rx:<2}         {signal}",
+				"{:<24} {address}  {:<9}  {:<6}  {tx:>2}/{rx:<2}         {signal}",
 				bluetooth
 					.and_then(|info| info.name.as_deref())
 					.unwrap_or("—")
 					.chars()
 					.take(24)
 					.collect::<String>(),
-				status(bluetooth.map(|info| info.paired)),
 				status(bluetooth.map(|info| info.connected)),
 				status(headset.map(Headset::has_duplex_audio))
 			)?;
@@ -201,7 +198,6 @@ mod tests {
 			),
 			Bluetooth {
 				name: Some("Alex's headset".into()),
-				paired: true,
 				connected: true,
 				rssi: Some(-67)
 			}
@@ -248,6 +244,8 @@ mod tests {
 			.unwrap();
 		let text = String::from_utf8(output).unwrap();
 		assert!(text.contains("muted | 1 owned active links"));
+		assert!(text.contains("HEADSET NAME             ADDRESS             CONNECTED"));
+		assert!(!text.contains("PAIRED"));
 		assert!(text.contains("AA:BB:CC:DD:EE:01  ?"));
 		assert!(text.contains("no"));
 		assert!(text.contains("1/0"));
@@ -283,7 +281,6 @@ mod tests {
 					format!("AA:BB:CC:DD:EE:{:02}", index + 1),
 					Some(Bluetooth {
 						name: None,
-						paired: true,
 						connected: true,
 						rssi: Some(*rssi),
 					}),
@@ -293,7 +290,6 @@ mod tests {
 				disconnected.clone(),
 				Some(Bluetooth {
 					name: None,
-					paired: true,
 					connected: false,
 					rssi: Some(-40),
 				}),
@@ -343,7 +339,6 @@ mod tests {
 				address,
 				Some(Bluetooth {
 					name: Some("Alex's headset".into()),
-					paired: true,
 					connected: true,
 					rssi: None,
 				}),
