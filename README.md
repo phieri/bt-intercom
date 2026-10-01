@@ -64,9 +64,9 @@ mkdir -p ~/.config/elvish/lib
 rpi-intercom completions elvish > ~/.config/elvish/lib/rpi-intercom.elv
 ```
 
-For Zsh, add `fpath=(~/.zfunc $fpath)` before `compinit` in `~/.zshrc`, then
-restart the shell. Bash, Fish, and Elvish load completions from the paths above
-when their completion support is enabled.
+For Zsh, add `fpath=(~/.zfunc $fpath)` before `compinit` in `~/.zshrc`. For
+Elvish, add `use rpi-intercom` to `~/.config/elvish/rc.elv`. Restart the shell
+after configuring completions.
 
 Runtime diagnostics are written to stderr and respect `RUST_LOG`. The default
 level is `info`; set `RUST_LOG=warn` to show warnings only. A systemd user
