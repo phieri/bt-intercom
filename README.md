@@ -110,6 +110,12 @@ Start the intercom with the paired addresses:
 rpi-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 --connect
 ```
 
+The addresses supplied to `run` are saved in
+`${XDG_CONFIG_HOME:-~/.config}/rpi-intercom/headsets`. Supplying addresses again
+replaces the saved network; subsequent starts can omit them and run
+`rpi-intercom run --connect`. The file stores only Bluetooth addresses; BlueZ
+continues to manage pairing and credentials.
+
 Leave it running in the foreground; Ctrl-C removes the links created by this
 process. With `--connect`, a background worker checks BlueZ and retries
 disconnected headsets, waiting 30 seconds between passes; omit it if your
@@ -178,14 +184,13 @@ systemd **user** service after PipeWire and WirePlumber start, not as root.
 
 An example unit is supplied in `examples/rpi-intercom.service`. Install the
 binary as above, pair/trust the headsets, and select their duplex profiles first.
-From the repository directory:
+Run the command above once to save the network if you have not already started
+it with explicit addresses. The service then restores that saved network
+without a separate address list. From the repository directory:
 
 ```sh
-mkdir -p ~/.config/systemd/user ~/.config/rpi-intercom
+mkdir -p ~/.config/systemd/user
 cp examples/rpi-intercom.service ~/.config/systemd/user/
-printf 'HEADSETS="AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02"\n' \
-  > ~/.config/rpi-intercom/environment
-# Replace the example addresses with your own before starting.
 systemctl --user daemon-reload
 systemctl --user enable --now rpi-intercom.service
 journalctl --user -u rpi-intercom.service -f

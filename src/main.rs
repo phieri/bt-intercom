@@ -8,9 +8,10 @@ mod router;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
-use std::fs::File;
-use std::io::{IsTerminal, Read};
+use std::fs::{self, File};
+use std::io::{IsTerminal, Read, Write};
 use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -183,6 +184,87 @@ fn address(value: &str) -> Result<String, String> {
     Ok(value.to_ascii_uppercase())
 }
 
+/// Returns the path used to remember the configured intercom network.
+fn headset_network_path() -> Result<PathBuf, String> {
+    let directory = env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
+        .ok_or("could not determine the config directory; set XDG_CONFIG_HOME or HOME")?;
+    Ok(directory.join("rpi-intercom").join("headsets"))
+}
+
+/// Atomically saves the allowed headset addresses for the next run.
+fn save_headsets(path: &Path, allowed: &BTreeSet<String>) -> Result<(), String> {
+    if allowed.is_empty() {
+        return Err("cannot save an empty headset network".into());
+    }
+    let directory = path
+        .parent()
+        .ok_or_else(|| format!("invalid headset network path: {}", path.display()))?;
+    fs::create_dir_all(directory)
+        .map_err(|error| format!("could not create {}: {error}", directory.display()))?;
+
+    let mut temporary = path.as_os_str().to_os_string();
+    temporary.push(format!(".{}.tmp", std::process::id()));
+    let temporary = PathBuf::from(temporary);
+    let contents = format!(
+        "{}\n",
+        allowed.iter().cloned().collect::<Vec<_>>().join("\n")
+    );
+    let result = (|| {
+        let mut file = File::create(&temporary)?;
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)
+    })();
+    if let Err(error) = result {
+        let _ = fs::remove_file(&temporary);
+        return Err(format!(
+            "could not save headset network to {}: {error}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+/// Loads and validates the headset addresses saved by an earlier run.
+fn load_headsets(path: &Path) -> Result<BTreeSet<String>, String> {
+    let contents = fs::read_to_string(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            format!(
+                "no saved headset network at {}; run with headset addresses first",
+                path.display()
+            )
+        } else {
+            format!(
+                "could not read headset network from {}: {error}",
+                path.display()
+            )
+        }
+    })?;
+    let mut allowed = BTreeSet::new();
+    for (index, line) in contents.lines().enumerate() {
+        let line = line.trim();
+        if !line.is_empty() {
+            allowed.insert(address(line).map_err(|error| {
+                format!(
+                    "invalid headset network at {}:{}: {error}",
+                    path.display(),
+                    index + 1
+                )
+            })?);
+        }
+    }
+    if allowed.is_empty() {
+        return Err(format!(
+            "saved headset network at {} is empty",
+            path.display()
+        ));
+    }
+    Ok(allowed)
+}
+
 /// Returns whether BlueZ's device information reports the named flag as `yes`.
 fn device_flag(info: &str, flag: &str) -> bool {
     info.lines().any(|line| {
@@ -194,7 +276,7 @@ fn device_flag(info: &str, flag: &str) -> bool {
 
 /// Returns the command-line usage text.
 fn usage() -> &'static str {
-    "Usage: rpi-intercom scan [--seconds 1..300]\n       rpi-intercom pair ADDRESS\n       rpi-intercom status ADDRESS [ADDRESS ...]\n       rpi-intercom run ADDRESS [ADDRESS ...] [--interval SECONDS] [--connect] [--ptt ADDRESS=/dev/input/eventX ...] [--dashboard]"
+    "Usage: rpi-intercom scan [--seconds 1..300]\n       rpi-intercom pair ADDRESS\n       rpi-intercom status ADDRESS [ADDRESS ...]\n       rpi-intercom run [ADDRESS ...] [--interval SECONDS] [--connect] [--ptt ADDRESS=/dev/input/eventX ...] [--dashboard]"
 }
 
 /// Parses and validates one or more Bluetooth addresses.
@@ -218,6 +300,26 @@ const KEY_PLAYPAUSE: u16 = 164;
 type RunOptions = (BTreeSet<String>, Duration, bool, Vec<PttButton>, bool);
 /// A button state update or an input-device failure.
 type PttEvent = Result<(String, bool), String>;
+
+/// Validates that PTT bindings uniquely cover the configured headset network.
+fn validate_ptt(buttons: &[PttButton], allowed: &BTreeSet<String>) -> Result<(), String> {
+    let mut configured = BTreeSet::new();
+    let mut paths = BTreeSet::new();
+    for button in buttons {
+        if (!allowed.is_empty() && !allowed.contains(&button.address))
+            || !configured.insert(button.address.clone())
+        {
+            return Err("--ptt requires one unique button mapping per listed headset".into());
+        }
+        if !paths.insert(&button.path) {
+            return Err("--ptt requires a separate input device for each headset".into());
+        }
+    }
+    if !buttons.is_empty() && !allowed.is_empty() && configured != *allowed {
+        return Err("--ptt requires a button mapping for every listed headset".into());
+    }
+    Ok(())
+}
 
 /// Parses `run` arguments and enforces unique, complete push-to-talk mappings.
 fn run_options(args: &[String]) -> Result<RunOptions, String> {
@@ -259,22 +361,7 @@ fn run_options(args: &[String]) -> Result<RunOptions, String> {
         }
         index += 1;
     }
-    if allowed.is_empty() {
-        return Err(usage().into());
-    }
-    let mut configured = BTreeSet::new();
-    let mut paths = BTreeSet::new();
-    for button in &buttons {
-        if !allowed.contains(&button.address) || !configured.insert(button.address.clone()) {
-            return Err("--ptt requires one unique button mapping per listed headset".into());
-        }
-        if !paths.insert(&button.path) {
-            return Err("--ptt requires a separate input device for each headset".into());
-        }
-    }
-    if !buttons.is_empty() && configured != allowed {
-        return Err("--ptt requires a button mapping for every listed headset".into());
-    }
+    validate_ptt(&buttons, &allowed)?;
     if !interval.is_finite() || interval <= 0.0 || interval >= u64::MAX as f64 {
         return Err("--interval must be positive and finite".into());
     }
@@ -456,9 +543,17 @@ fn run(args: &[String]) -> Result<(), String> {
             }
         }
         "run" => {
-            let (allowed, interval, connect, buttons, show_dashboard) = run_options(args)?;
+            let (mut allowed, interval, connect, buttons, show_dashboard) = run_options(args)?;
             if show_dashboard && !std::io::stderr().is_terminal() {
                 return Err("--dashboard requires an interactive terminal on stderr".into());
+            }
+            let explicit_network = !allowed.is_empty();
+            let network_path = headset_network_path()?;
+            if explicit_network {
+                save_headsets(&network_path, &allowed)?;
+            } else {
+                allowed = load_headsets(&network_path)?;
+                validate_ptt(&buttons, &allowed)?;
             }
             let stopped = Arc::new(AtomicBool::new(false));
             let signal = Arc::clone(&stopped);
@@ -621,6 +716,55 @@ mod tests {
         assert_eq!(address("aa:bb:cc:dd:ee:ff").unwrap(), "AA:BB:CC:DD:EE:FF");
     }
 
+    fn temporary_network_path() -> PathBuf {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        env::temp_dir().join(format!(
+            "rpi-intercom-headsets-{}-{nonce}/headsets",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn saves_and_restores_headset_network() {
+        let path = temporary_network_path();
+        let allowed = BTreeSet::from([
+            "AA:BB:CC:DD:EE:02".to_string(),
+            "AA:BB:CC:DD:EE:01".to_string(),
+        ]);
+        save_headsets(&path, &allowed).unwrap();
+        assert_eq!(load_headsets(&path).unwrap(), allowed);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "AA:BB:CC:DD:EE:01\nAA:BB:CC:DD:EE:02\n"
+        );
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn loads_normalized_addresses_and_rejects_invalid_network_files() {
+        let path = temporary_network_path();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "\naa:bb:cc:dd:ee:01\nAA:BB:CC:DD:EE:01\n \n").unwrap();
+        assert_eq!(
+            load_headsets(&path).unwrap(),
+            BTreeSet::from(["AA:BB:CC:DD:EE:01".to_string()])
+        );
+        fs::write(&path, "not-a-bluetooth-address\n").unwrap();
+        assert!(load_headsets(&path).is_err());
+        fs::write(&path, "\n \n").unwrap();
+        assert!(load_headsets(&path).is_err());
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn missing_saved_network_explains_how_to_create_it() {
+        let error = load_headsets(&temporary_network_path()).unwrap_err();
+        assert!(error.contains("run with headset addresses first"));
+    }
+
     #[test]
     fn confirms_bluetooth_device_flags() {
         assert!(!device_flag("  Paired: no\n", "Paired"));
@@ -687,7 +831,7 @@ mod tests {
             ])
             .is_err()
         );
-        assert!(run(&["run".into()]).is_err());
+        assert!(run_options(&["run".into()]).unwrap().0.is_empty());
         assert!(run(&["status".into()]).is_err());
         assert!(addresses(&["--connect".into()]).is_err());
         assert!(run_options(&["run".into(), "--ptt".into()]).is_err());
@@ -726,6 +870,7 @@ mod tests {
                 .is_err()
             );
         }
+
         assert!(
             run_options(&[
                 "run".into(),
@@ -746,6 +891,23 @@ mod tests {
                 "--ptt".into(),
                 "AA:BB:CC:DD:EE:01=/dev/input/event4".into()
             ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn validates_ptt_bindings_against_restored_network() {
+        let address = "AA:BB:CC:DD:EE:01".to_string();
+        let buttons = vec![PttButton {
+            address: address.clone(),
+            path: "/dev/input/event4".into(),
+        }];
+        assert!(validate_ptt(&buttons, &BTreeSet::from([address.clone()])).is_ok());
+        assert!(
+            validate_ptt(
+                &buttons,
+                &BTreeSet::from([address, "AA:BB:CC:DD:EE:02".to_string()])
+            )
             .is_err()
         );
     }
