@@ -8,7 +8,7 @@ mod router;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{IsTerminal, Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -20,7 +20,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use dashboard::Dashboard;
-use router::Router;
+use router::{Headset, Router, has_active_intercom_connection, has_active_source_route};
 
 /// Runs a command with captured output and a deadline.
 fn command(args: &[&str], timeout: Duration) -> Result<String, String> {
@@ -300,6 +300,147 @@ const KEY_PLAYPAUSE: u16 = 164;
 type RunOptions = (BTreeSet<String>, Duration, bool, Vec<PttButton>, bool);
 /// A button state update or an input-device failure.
 type PttEvent = Result<(String, bool), String>;
+
+/// WAV feedback played to the headset whose microphone became active.
+struct PttBeep {
+    path: PathBuf,
+}
+
+impl PttBeep {
+    fn new() -> Result<Self, String> {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let path = env::temp_dir().join(format!(
+            "rpi-intercom-ptt-{}-{nonce}.wav",
+            std::process::id()
+        ));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .map_err(|error| format!("could not create PTT beep: {error}"))?;
+        if let Err(error) = file.write_all(&double_beep_wav()) {
+            drop(file);
+            let _ = fs::remove_file(&path);
+            return Err(format!("could not write PTT beep: {error}"));
+        }
+        Ok(Self { path })
+    }
+
+    fn play(&self, speaker_node: u64, stopped: &AtomicBool) -> Result<(), String> {
+        let target = format!("--target={speaker_node}");
+        let path = self.path.to_string_lossy().into_owned();
+        command_cancellable(
+            &["pw-play", &target, &path],
+            Duration::from_secs(2),
+            Some(stopped),
+        )
+        .map(|_| ())
+    }
+}
+
+impl Drop for PttBeep {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn double_beep_wav() -> Vec<u8> {
+    let sample_rate = 48_000_u32;
+    let beep_samples = sample_rate * 90 / 1_000;
+    let gap_samples = sample_rate * 75 / 1_000;
+    let sample_count = beep_samples * 2 + gap_samples;
+    let mut samples = Vec::with_capacity(sample_count as usize * 2);
+    let fade_samples = sample_rate / 200;
+    for index in 0..sample_count {
+        let position = index % (beep_samples + gap_samples);
+        let sample = if position < beep_samples {
+            let fade_in = position as f32 / fade_samples as f32;
+            let fade_out = (beep_samples - position - 1) as f32 / fade_samples as f32;
+            let envelope = fade_in.min(fade_out).min(1.0);
+            let phase = std::f32::consts::TAU * 880.0 * position as f32 / sample_rate as f32;
+            (phase.sin() * envelope * 0.2 * i16::MAX as f32) as i16
+        } else {
+            0
+        };
+        samples.extend_from_slice(&sample.to_le_bytes());
+    }
+
+    let mut wav = Vec::with_capacity(44 + samples.len());
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + samples.len() as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16_u32.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+    wav.extend_from_slice(&2_u16.to_le_bytes());
+    wav.extend_from_slice(&16_u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(samples.len() as u32).to_le_bytes());
+    wav.extend_from_slice(&samples);
+    wav
+}
+
+fn confirm_transmissions(
+    pending: &mut BTreeSet<String>,
+    headsets: &BTreeMap<String, Headset>,
+    links: &BTreeSet<(u64, u64)>,
+    beep: Option<&PttBeep>,
+    stopped: &AtomicBool,
+) {
+    let ready = pending
+        .iter()
+        .filter_map(|address| {
+            let headset = headsets.get(address)?;
+            has_active_source_route(address, headsets, links)
+                .then(|| (address.clone(), headset.speaker_node()))
+        })
+        .collect::<Vec<_>>();
+    for (address, speaker_node) in ready {
+        pending.remove(&address);
+        let Some(speaker_node) = speaker_node else {
+            eprintln!("WARNING: Could not play PTT confirmation for {address}: no speaker node");
+            continue;
+        };
+        if let Some(beep) = beep
+            && let Err(error) = beep.play(speaker_node, stopped)
+        {
+            eprintln!("WARNING: Could not play PTT confirmation for {address}: {error}");
+        }
+    }
+}
+
+fn confirm_connections(
+    connected: &mut BTreeSet<String>,
+    headsets: &BTreeMap<String, Headset>,
+    links: &BTreeSet<(u64, u64)>,
+    beep: Option<&PttBeep>,
+    stopped: &AtomicBool,
+) {
+    let current: BTreeSet<_> = headsets
+        .keys()
+        .filter(|address| has_active_intercom_connection(address, headsets, links))
+        .cloned()
+        .collect();
+    for address in current.difference(connected) {
+        let Some(speaker_node) = headsets[address].speaker_node() else {
+            eprintln!(
+                "WARNING: Could not play intercom connection beep for {address}: no speaker node"
+            );
+            continue;
+        };
+        if let Some(beep) = beep
+            && let Err(error) = beep.play(speaker_node, stopped)
+        {
+            eprintln!("WARNING: Could not play intercom connection beep for {address}: {error}");
+        }
+    }
+    *connected = current;
+}
 
 /// Validates that PTT bindings uniquely cover the configured headset network.
 fn validate_ptt(buttons: &[PttButton], allowed: &BTreeSet<String>) -> Result<(), String> {
@@ -592,8 +733,17 @@ fn run(args: &[String]) -> Result<(), String> {
             } else {
                 Some(ptt_input(buttons)?)
             };
+            let beep = match PttBeep::new() {
+                Ok(beep) => Some(beep),
+                Err(error) => {
+                    eprintln!("WARNING: Confirmation beeps unavailable: {error}");
+                    None
+                }
+            };
             let mut transmitting = input.is_none();
             let mut active_sources = BTreeSet::new();
+            let mut pending_confirmations = BTreeSet::new();
+            let mut connected_headsets = BTreeSet::new();
             if input.is_some() {
                 eprintln!(
                     "PTT: Hold your headset's play/pause button to transmit; release to mute."
@@ -607,9 +757,12 @@ fn run(args: &[String]) -> Result<(), String> {
                             match input.try_recv() {
                                 Ok(Ok((address, state))) => {
                                     if state {
-                                        active_sources.insert(address.clone());
+                                        if active_sources.insert(address.clone()) {
+                                            pending_confirmations.insert(address.clone());
+                                        }
                                     } else {
                                         active_sources.remove(&address);
+                                        pending_confirmations.remove(&address);
                                     }
                                     transmitting = !active_sources.is_empty();
                                     last_update = None;
@@ -641,6 +794,23 @@ fn run(args: &[String]) -> Result<(), String> {
                                 Ok((current, active)) => {
                                     headsets = current;
                                     links = active;
+                                    if input.is_some() {
+                                        confirm_transmissions(
+                                            &mut pending_confirmations,
+                                            &headsets,
+                                            &links,
+                                            beep.as_ref(),
+                                            &stopped,
+                                        );
+                                    } else {
+                                        confirm_connections(
+                                            &mut connected_headsets,
+                                            &headsets,
+                                            &links,
+                                            beep.as_ref(),
+                                            &stopped,
+                                        );
+                                    }
                                 }
                                 Err(error) => {
                                     headsets.clear();
@@ -663,6 +833,28 @@ fn run(args: &[String]) -> Result<(), String> {
                                     );
                                 }
                                 Err(error) => eprintln!("WARNING: Routing update failed: {error}"),
+                            }
+                        }
+                        if dashboard.is_none()
+                            && (input.is_none() || !pending_confirmations.is_empty())
+                            && let Ok((current, active)) = router.inspect_owned()
+                        {
+                            if input.is_some() {
+                                confirm_transmissions(
+                                    &mut pending_confirmations,
+                                    &current,
+                                    &active,
+                                    beep.as_ref(),
+                                    &stopped,
+                                );
+                            } else {
+                                confirm_connections(
+                                    &mut connected_headsets,
+                                    &current,
+                                    &active,
+                                    beep.as_ref(),
+                                    &stopped,
+                                );
                             }
                         }
                         last_update = Some(Instant::now());
@@ -932,6 +1124,23 @@ mod tests {
                 &BTreeSet::from([address, "AA:BB:CC:DD:EE:02".to_string()])
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn creates_a_short_double_beep_waveform() {
+        let wav = double_beep_wav();
+        assert_eq!(&wav[..4], b"RIFF");
+        assert_eq!(
+            u32::from_le_bytes(wav[4..8].try_into().unwrap()),
+            wav.len() as u32 - 8
+        );
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), 48_000);
+        assert_eq!(&wav[36..40], b"data");
+        assert_eq!(
+            u32::from_le_bytes(wav[40..44].try_into().unwrap()),
+            48_000_u32 * 255 / 1_000 * 2
         );
     }
 

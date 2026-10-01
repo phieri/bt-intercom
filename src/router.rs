@@ -48,6 +48,7 @@ type StartLink = Box<dyn FnMut(&[&str]) -> Result<Box<dyn LinkHandle>, String>>;
 /// A PipeWire audio port and the channel it carries.
 pub struct Port {
     pub(crate) id: u64,
+    node_id: Option<u64>,
     channel: String,
 }
 
@@ -64,6 +65,11 @@ impl Headset {
     /// Returns whether PipeWire exposes both microphone and speaker ports.
     pub fn has_duplex_audio(&self) -> bool {
         !self.sources.is_empty() && !self.sinks.is_empty()
+    }
+
+    /// Returns the PipeWire node ID for playback to this headset.
+    pub fn speaker_node(&self) -> Option<u64> {
+        self.sinks.iter().find_map(|port| port.node_id)
     }
 }
 
@@ -162,11 +168,20 @@ pub fn topology(
         let Some(address) = devices.get(device_id) else {
             continue;
         };
+        let node_id = node_id.parse().ok();
         let headset = headsets.get_mut(address).expect("known device");
         if *class == "Audio/Source" && direction == "out" {
-            headset.sources.push(Port { id, channel });
+            headset.sources.push(Port {
+                id,
+                node_id,
+                channel,
+            });
         } else if *class == "Audio/Sink" && direction == "in" {
-            headset.sinks.push(Port { id, channel });
+            headset.sinks.push(Port {
+                id,
+                node_id,
+                channel,
+            });
         }
     }
     Ok((headsets, links))
@@ -196,6 +211,49 @@ pub fn desired_links(headsets: &BTreeMap<String, Headset>) -> BTreeSet<Link> {
         }
     }
     desired
+}
+
+/// Returns whether a headset's microphone has a live route to another headset.
+pub fn has_active_source_route(
+    address: &str,
+    headsets: &BTreeMap<String, Headset>,
+    links: &BTreeSet<(u64, u64)>,
+) -> bool {
+    let Some(source) = headsets.get(address) else {
+        return false;
+    };
+    let source_ports: BTreeSet<_> = source.sources.iter().map(|port| port.id).collect();
+    desired_links(headsets)
+        .iter()
+        .any(|link| source_ports.contains(&link.0) && links.contains(link))
+}
+
+/// Returns whether a headset has live microphone and speaker routes with a peer.
+pub fn has_active_intercom_connection(
+    address: &str,
+    headsets: &BTreeMap<String, Headset>,
+    links: &BTreeSet<(u64, u64)>,
+) -> bool {
+    let Some(headset) = headsets.get(address) else {
+        return false;
+    };
+    let desired = desired_links(headsets);
+    let source_ports: BTreeSet<_> = headset.sources.iter().map(|port| port.id).collect();
+    let sink_ports: BTreeSet<_> = headset.sinks.iter().map(|port| port.id).collect();
+    headsets.iter().any(|(peer_address, peer)| {
+        if peer_address == address {
+            return false;
+        }
+        let peer_sources: BTreeSet<_> = peer.sources.iter().map(|port| port.id).collect();
+        let peer_sinks: BTreeSet<_> = peer.sinks.iter().map(|port| port.id).collect();
+        let sends_to_peer = desired.iter().any(|link| {
+            source_ports.contains(&link.0) && peer_sinks.contains(&link.1) && links.contains(link)
+        });
+        let receives_from_peer = desired.iter().any(|link| {
+            peer_sources.contains(&link.0) && sink_ports.contains(&link.1) && links.contains(link)
+        });
+        sends_to_peer && receives_from_peer
+    })
 }
 
 /// Reconciles desired headset routes with PipeWire while tracking owned links.
@@ -422,12 +480,41 @@ mod tests {
     fn routes_only_other_allowlisted_headsets() {
         let (headsets, links) = topology(&json!(fixture()), &allowed()).unwrap();
         assert!(links.is_empty());
+        assert_eq!(headsets[A].speaker_node(), Some(12));
+        assert_eq!(headsets[B].speaker_node(), Some(22));
         assert_eq!(
             desired_links(&headsets),
             [(13, 24), (13, 25), (23, 14), (23, 15)].into()
         );
         let (headsets, _) = topology(&json!(fixture()), &[A.to_string()].into()).unwrap();
         assert!(desired_links(&headsets).is_empty());
+    }
+
+    #[test]
+    fn detects_live_routes_from_each_headset_microphone() {
+        let (headsets, _) = topology(&json!(fixture()), &allowed()).unwrap();
+        let links = desired_links(&headsets);
+        assert!(has_active_source_route(A, &headsets, &links));
+        assert!(has_active_source_route(B, &headsets, &links));
+        let links = links
+            .into_iter()
+            .filter(|(output, _)| *output != 13)
+            .collect();
+        assert!(!has_active_source_route(A, &headsets, &links));
+        assert!(has_active_source_route(B, &headsets, &links));
+    }
+
+    #[test]
+    fn detects_bidirectional_intercom_connections() {
+        let (headsets, _) = topology(&json!(fixture()), &allowed()).unwrap();
+        let links = desired_links(&headsets);
+        assert!(has_active_intercom_connection(A, &headsets, &links));
+        assert!(has_active_intercom_connection(B, &headsets, &links));
+        let one_way = [(13, 24), (13, 25)].into();
+        assert!(!has_active_intercom_connection(A, &headsets, &one_way));
+        assert!(!has_active_intercom_connection(B, &headsets, &one_way));
+        let (single, _) = topology(&json!(headset(10, A)), &[A.to_string()].into()).unwrap();
+        assert!(!has_active_intercom_connection(A, &single, &links));
     }
 
     #[test]
