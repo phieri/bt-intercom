@@ -5,8 +5,7 @@ After=pipewire.service wireplumber.service
 
 [Service]
 Type=simple
-EnvironmentFile=%h/.config/rpi-intercom/environment
-ExecStart=%h/.local/bin/rpi-intercom run $HEADSETS --connect
+ExecStart=%h/.local/bin/rpi-intercom run --connect
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=90
