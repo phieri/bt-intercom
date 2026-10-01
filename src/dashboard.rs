@@ -234,4 +234,78 @@ mod tests {
         assert!(text.contains("1/0"));
         assert!(text.contains("unknown"));
     }
+
+    #[test]
+    fn renders_rssi_quality_boundaries_and_hides_disconnected_signal() {
+        let levels = [
+            (-60, "strong"),
+            (-61, "good"),
+            (-70, "good"),
+            (-71, "fair"),
+            (-80, "fair"),
+            (-81, "weak"),
+        ];
+        let addresses = levels
+            .iter()
+            .enumerate()
+            .map(|(index, _)| format!("AA:BB:CC:DD:EE:{:02}", index + 1))
+            .collect::<BTreeSet<_>>();
+        let disconnected = "AA:BB:CC:DD:EE:07".to_string();
+        let allowed = addresses
+            .iter()
+            .cloned()
+            .chain([disconnected.clone()])
+            .collect();
+        let state = levels
+            .iter()
+            .enumerate()
+            .map(|(index, (rssi, _))| {
+                (
+                    format!("AA:BB:CC:DD:EE:{:02}", index + 1),
+                    Some(Bluetooth {
+                        paired: true,
+                        connected: true,
+                        rssi: Some(*rssi),
+                    }),
+                )
+            })
+            .chain([(
+                disconnected.clone(),
+                Some(Bluetooth {
+                    paired: true,
+                    connected: false,
+                    rssi: Some(-40),
+                }),
+            )])
+            .collect();
+        let (sender, receiver) = mpsc::channel();
+        drop(sender);
+        let (shutdown, _) = mpsc::channel();
+        let dashboard = Dashboard {
+            receiver,
+            state,
+            shutdown,
+            worker: None,
+        };
+        let mut output = Vec::new();
+        dashboard
+            .draw(
+                &allowed,
+                &BTreeMap::new(),
+                &BTreeSet::new(),
+                false,
+                None,
+                &mut output,
+            )
+            .unwrap();
+        let text = String::from_utf8(output).unwrap();
+        for (rssi, quality) in levels {
+            assert!(text.contains(&format!("{rssi} dBm ({quality})")));
+        }
+        let disconnected_row = text
+            .lines()
+            .find(|line| line.starts_with(&disconnected))
+            .unwrap();
+        assert!(disconnected_row.contains("unknown"));
+    }
 }
