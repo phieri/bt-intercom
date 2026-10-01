@@ -43,10 +43,26 @@ jobs:
       # The cross ARM image uses an armv6 hard-float toolchain; Ubuntu's armhf
       # cross linker defaults to armv7 and cannot run on the Zero or Zero W.
       - run: cargo install cross --version 0.2.5
+      - run: cargo install cargo-deb --version 3.8.0
+      - run: cargo install cargo-generate-rpm --version 0.21.0
       - name: Cross-compile release binary
         run: cross build --release --locked --target ${{ matrix.target }}
+      - name: Build Debian and RPM packages
+        run: |
+          cargo deb --no-build --target ${{ matrix.target }}
+          cargo generate-rpm --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v7
         with:
           name: rpi-intercom-${{ matrix.target }}
           path: target/${{ matrix.target }}/release/rpi-intercom
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rpi-intercom-${{ matrix.target }}-deb
+          path: target/${{ matrix.target }}/debian/*.deb
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rpi-intercom-${{ matrix.target }}-rpm
+          path: target/generate-rpm/*.rpm
           if-no-files-found: error
