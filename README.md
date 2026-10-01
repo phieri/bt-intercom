@@ -1,84 +1,55 @@
 # rpi-intercom
 
-A local, full-duplex **Bluetooth Classic** intercom between headsets connected
-to one Raspberry Pi. It uses BlueZ for pairing and
-PipeWire/WirePlumber for HFP/HSP headset audio. The application does not
-implement Bluetooth codecs or profiles itself. It does **not** support
-Bluetooth LE Audio.
+A local, full-duplex Bluetooth Classic intercom for two or more headsets on one
+Raspberry Pi. BlueZ manages Bluetooth; PipeWire and WirePlumber provide headset
+audio. Each headset microphone routes to every other configured headset, never
+back to itself. By default all microphones are live; optional push-to-talk (PTT)
+keeps them muted until a headset button is held.
 
-Watch an [illustrative CLI session](https://phieri.github.io/rpi-intercom/)
-replayed with the asciinema player. The `Deploy Pages` workflow downloads
-the pinned player from its GitHub release during the website build and
-generates the screen-reader transcript from the asciicast recording. It
-deploys the player alongside `docs/`; the player is not stored in the repository.
-Set Pages source to **GitHub Actions** in the repository settings.
+[Watch the illustrative CLI demo](https://phieri.github.io/rpi-intercom/).
 
-Each allowlisted headset microphone is connected to the speakers of every
-*other* allowlisted headset. Audio is never sent to its own headset. The
-router automatically follows headset disconnections and reconnections; it
-only removes links it created. Each link belongs to a monitored `pw-cli`
-connection; closing that connection releases the link without deleting a
-numeric ID that PipeWire could have reused. Per-instance ownership properties
-also identify the links in diagnostic snapshots.
+## Requirements and installation
 
-## Requirements
+- A Raspberry Pi with Bluetooth Classic: Zero W, Zero 2 W, Pi 3, Pi 4 and Pi 5
+  have onboard radios. Pi 1, Pi 2 and the original Pi Zero need a compatible USB
+  adapter.
+- Linux with BlueZ (`bluetoothctl`), PipeWire (`pw-dump`, `pw-cli`, `pw-play`)
+  and WirePlumber. Run as the same user as PipeWire, **not with `sudo`**.
+- At least two Bluetooth Classic headsets that expose both microphone and
+  speaker audio through the HFP/HSP `headset-head-unit` profile. A2DP alone is
+  playback-only. Check or select the duplex profile with `wpctl status`; the
+  program does not change profiles.
 
-- Raspberry Pi with a Bluetooth Classic radio: Zero W, Zero 2 W, Pi 3, Pi 4
-  and Pi 5 have onboard Bluetooth. Pi 1, Pi 2 and the original Pi Zero
-  require a compatible USB Bluetooth Classic adapter. The software does not
-  depend on model-specific GPIO or audio hardware; availability of the
-  required audio stack and simultaneous headset connections must be checked
-  on your particular Pi and OS.
-- Linux with BlueZ (`bluetoothctl`), PipeWire (`pw-dump`, `pw-cli`, and
-  `pw-play` for connection confirmation beeps), and WirePlumber. Run the
-  intercom in the **same user session** as PipeWire. Install the distribution's
-  Bluetooth/PipeWire packages and enable the Bluetooth and user audio services.
-- Two or more Bluetooth Classic headsets offering **both** a microphone and
-  speaker to PipeWire. Select the bidirectional HFP/HSP headset profile
-  (`headset-head-unit`); A2DP is playback-only. Check `wpctl status` and, if
-  necessary, choose the duplex profile with
-  `wpctl set-profile DEVICE_ID PROFILE_INDEX`. The router only uses nodes
-  reporting `api.bluez5.profile = headset-head-unit`; it ignores other
-  profiles even if they provide audio ports.
-
-On a Debian-based Raspberry Pi OS with PipeWire packages available, install
-BlueZ and the PipeWire Bluetooth plugin:
+On Raspberry Pi OS with PipeWire packages:
 
 ```sh
 sudo apt install bluez pipewire wireplumber libspa-0.2-bluetooth
+systemctl --user status pipewire wireplumber
 ```
 
-Start PipeWire and WirePlumber for your login user. Verify that
-`systemctl --user status pipewire wireplumber` shows running services before
-starting the intercom. Do **not** start this app with `sudo`: root's PipeWire
-session will not have your headset nodes.
-
-Install Rust and build the command-line binary on the Pi:
+Start PipeWire and WirePlumber for your login user if they are not running.
+Build on the Pi, or install the binary from a successful GitHub Actions build:
 
 ```sh
 cargo build --release --locked
 install -Dm755 target/release/rpi-intercom ~/.local/bin/rpi-intercom
 ```
 
-Alternatively, download the appropriate binary from a successful GitHub Actions
-build artifact and install it as `~/.local/bin/rpi-intercom`. Choose by both
-the Pi model and the installed OS:
+Choose an artifact for both the Pi and OS architecture:
 
-| Pi model | Raspberry Pi OS | Build artifact target |
+| Pi model | OS | Artifact target |
 | --- | --- | --- |
 | Pi 1, original Zero, Zero W | 32-bit | `arm-unknown-linux-gnueabihf` (ARMv6) |
 | Pi 2, Zero 2 W, Pi 3, Pi 4 | 32-bit | `armv7-unknown-linux-gnueabihf` (ARMv7) |
-| Zero 2 W, Pi 3, Pi 4, Pi 5 | 64-bit | `aarch64-unknown-linux-gnu` (ARM64) |
+| Zero 2 W, Pi 3, Pi 4, Pi 5 | 64-bit | `aarch64-unknown-linux-gnu` |
 
-The ARMv6 artifact also runs on compatible 32-bit ARMv7 systems, but the
-ARMv7 artifact does not run on ARMv6 Pis. Pi 5 installations should use a
-64-bit OS. Build artifacts are dynamically linked against glibc; build on
-the Pi if the artifact is incompatible with your OS. A USB Bluetooth Classic
-adapter is required on Pi 1, Pi 2 and the original Zero.
+Pi 5 should use a 64-bit OS. ARMv6 binaries also run on compatible 32-bit ARMv7
+systems; ARMv7 binaries do not run on ARMv6. Artifacts require a compatible
+glibc.
 
 ## Usage
 
-Discover devices, place each headset in pairing mode, and pair each one:
+Put each headset in pairing mode, then scan and pair it:
 
 ```sh
 rpi-intercom scan --seconds 20
@@ -86,25 +57,18 @@ rpi-intercom pair AA:BB:CC:DD:EE:01
 rpi-intercom pair AA:BB:CC:DD:EE:02
 ```
 
-Only pair devices you own and recognize. Pairing uses BlueZ's local
-KeyboardDisplay agent in an interactive shell. Enter the displayed
-`pair ADDRESS` command, answer PIN/confirmation prompts, then enter `quit`;
-the app verifies pairing before trusting and connecting that address. The shell
-has a five-minute limit. Some headsets must instead be
-paired using the desktop's Bluetooth UI or `bluetoothctl`. BlueZ stores bonds
-and trust settings; this program does not store credentials.
-
-Check whether PipeWire sees duplex audio for each headset before routing:
+Pairing opens BlueZ's interactive `KeyboardDisplay` agent. Follow its prompts,
+then the program verifies pairing, trusts and connects the device. Verify
+PipeWire exposes duplex audio:
 
 ```sh
 rpi-intercom status AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02
 ```
 
-This reports the Bluetooth device alias (or name) alongside its address and
-microphone and speaker port counts, or that it is not found in PipeWire. It does
-not create links or connect devices. A device with no duplex audio needs its
-Bluetooth connection and HFP/HSP profile checked using
-`bluetoothctl info ADDRESS` and `wpctl status`.
+`status` reports each headset's name/address and microphone and speaker ports;
+it does not connect devices or create routes. Pair and trust only devices you
+own. BlueZ stores pairing credentials; this program stores only headset
+addresses.
 
 Start the intercom with the paired addresses:
 
@@ -112,28 +76,20 @@ Start the intercom with the paired addresses:
 rpi-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 --connect
 ```
 
-The addresses supplied to `run` are saved in
-`${XDG_CONFIG_HOME:-~/.config}/rpi-intercom/headsets`. Supplying addresses again
-replaces the saved network; subsequent starts can omit them and run
-`rpi-intercom run --connect`. The file stores only Bluetooth addresses; BlueZ
-continues to manage pairing and credentials.
+Addresses are saved in `${XDG_CONFIG_HOME:-~/.config}/rpi-intercom/headsets`.
+If `XDG_CONFIG_HOME` is unset or not an absolute path, they are saved under
+`~/.config/rpi-intercom/headsets`. Later, run `rpi-intercom run --connect` to
+restore them. `--connect` retries disconnected headsets every 30 seconds; omit
+it if another Bluetooth manager keeps them connected. Routing is polled every
+two seconds by default; change that with `--interval SECONDS`. Ctrl-C or SIGTERM
+closes links created by this process. Existing PipeWire links are not modified.
+Best-effort beeps confirm when an intercom route becomes active.
 
-Leave it running in the foreground; Ctrl-C removes the links created by this
-process. With `--connect`, a background worker checks BlueZ and retries
-disconnected headsets, waiting 30 seconds between passes; omit it if your
-Bluetooth manager connects devices automatically. Each headset can take up to
-50 seconds to check/connect, but this does not block routing or headset-button
-push-to-talk. Shutdown cancels an in-flight Bluetooth command. Each audio
-link uses one monitored `pw-cli` subprocess. Each extra headset increases the
-number of simultaneous audio links. The Bluetooth adapter's ability to maintain
-two or more concurrent HFP/HSP headset connections depends on firmware,
-controller capacity and the installed audio stack; it is **not guaranteed**,
-and has not been verified across these Pi models.
+### Push-to-talk
 
-For opt-in push-to-talk, map **each** headset's play/pause button to its Linux
-input event device. The app listens only for `KEY_PLAYPAUSE` (code 164), not
-the headset's call/answer button. For example, if both headsets expose
-play/pause through separate `/dev/input/event*` devices:
+Map each headset to its own Linux input event device. PTT listens only for
+`KEY_PLAYPAUSE` press/release events (code 164), not call/answer buttons or
+keyboard input:
 
 ```sh
 rpi-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 \
@@ -141,58 +97,25 @@ rpi-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 \
   --ptt AA:BB:CC:DD:EE:02=/dev/input/event5
 ```
 
-Identify each headset's play/pause event device with `evtest` or
-`libinput debug-events`; prefer a stable `/dev/input/by-id/` or
-`/dev/input/by-path/` symlink when available. The account running the intercom
-needs permission to read those devices. Bluetooth headset buttons are **not**
-universally exposed as Linux input events: this mode only works when your
-headset and Bluetooth stack expose distinct `KEY_PLAYPAUSE` press and release
-events for each headset. A headset that exposes only a call button is not
-supported for PTT.
-Do not map a keyboard input device. An unmapped or unreadable button prevents
-PTT from starting.
+Hold a headset's play/pause button to transmit from that headset's microphone;
+release to mute it. A double beep confirms when its microphone route is active.
+Find event devices with `evtest` or `libinput debug-events`.
+Use stable `/dev/input/by-id/` or `/dev/input/by-path/` paths where available.
+The running user needs permission to read the devices, and the Bluetooth stack
+must expose distinct play/pause press and release events. Missing or unreadable
+devices stop PTT from starting; a device failure while running exits and cleans
+up. PTT is not a privacy boundary: a failed mute can leave audio active until a
+retry succeeds.
 
-All headset microphones start muted. Holding a headset's play/pause button connects
-**that headset's microphone** to the other headsets; releasing disconnects it.
-In PTT mode, a quick double beep plays through the pressing headset once its
-microphone route is active. Without PTT, each headset beeps when its bidirectional
-intercom route becomes active, including after reconnection. Repeated key events
-are ignored. Enter on the Pi does nothing. If an event device closes or fails,
-the command exits and releases its links. Only links
-created by this process are controlled; pre-existing PipeWire links between
-headsets are not modified. Routing is polled every two seconds (adjust with
-`--interval SECONDS`), with button events checked every 100 ms. PipeWire
-command execution can add latency; this is not hard real-time PTT.
-Routing failures are logged and retried, including when PipeWire restarts.
-If a mute operation fails, audio may continue until a retry succeeds: PTT is
-not a privacy/security boundary.
+### Dashboard and user service
 
-For an opt-in live console view, add `--dashboard` to `run` in an interactive
-terminal (it requires a terminal on stderr). The view refreshes as routing and
-Bluetooth status change and shows each requested headset's Bluetooth alias (or
-name) and address, paired/connected status, duplex availability, owned active
-PipeWire link counts (outgoing and incoming), and Bluetooth RSSI when BlueZ
-reports it. `?` means Bluetooth status has not been obtained; `unknown` signal
-means RSSI is unavailable, not necessarily a poor connection. Link counts show
-established routes, **not** measured speech, throughput, or packet loss. The
-display does not change pairing, connections, profiles, or audio routing. Omit
-`--dashboard` for a systemd service or redirected logs. It works with
-headset-button PTT.
+Add `--dashboard` to `run` for a live terminal view of Bluetooth status, duplex
+availability, owned route counts and optional RSSI. It requires an interactive
+terminal on stderr and is not intended for a service. Route counts show links,
+not measured speech or audio quality.
 
-If a headset is silent, inspect `wpctl status` and `pw-dump` to confirm that it
-has both `Audio/Source` and `Audio/Sink` nodes and that the duplex profile is
-active. This program does not force a Bluetooth profile: doing so could
-override an existing user session. Without a duplex profile there is no
-microphone to route. For a persistent installation, run the command as a
-systemd **user** service after PipeWire and WirePlumber start, not as root.
-
-### Unattended user service
-
-An example unit is supplied in `examples/rpi-intercom.service`. Install the
-binary as above, pair/trust the headsets, and select their duplex profiles first.
-Run the command above once to save the network if you have not already started
-it with explicit addresses. The service then restores that saved network
-without a separate address list. From the repository directory:
+An example full-duplex user service is in `examples/rpi-intercom.service`. Pair
+and configure the headsets first, then install and enable it:
 
 ```sh
 mkdir -p ~/.config/systemd/user
@@ -202,53 +125,27 @@ systemctl --user enable --now rpi-intercom.service
 journalctl --user -u rpi-intercom.service -f
 ```
 
-The unit uses full-duplex mode, not headset-button PTT. For startup without an
-interactive login, an administrator can enable lingering with
-`sudo loginctl enable-linger "$USER"`. WirePlumber's Bluetooth seat policy must
-also permit this user's headsets when no graphical session is active; consult
-your installed WirePlumber version's BlueZ monitor/seat-monitoring settings.
-Do not run competing desktop and headless audio sessions for the same adapter.
-Stop with `systemctl --user stop rpi-intercom.service` to allow link cleanup.
-The service manager also terminates helper processes if the main process
-crashes. Outside the service, SIGKILL can leave orphaned `pw-cli -m` helpers:
-terminate those specific helpers to release their links. New processes do not
-take ownership of an earlier process's links. Normal cleanup does not require
-a working `pw-dump`.
+The unit uses `run --connect` and saved addresses; it does not enable PTT. The
+user's PipeWire/WirePlumber session must be available. For startup without a
+login, enable systemd lingering and configure WirePlumber's Bluetooth seat
+policy for headless use. Stop with `systemctl --user stop rpi-intercom.service`
+to release the routes.
 
-The Pi needs no local microphone or speaker. Audio remains on the Pi and its
-paired headsets; this is not a network intercom or walkie-talkie protocol.
-Codec negotiation, encryption and connection limits are determined by BlueZ
-and PipeWire. Headsets need acoustic isolation to avoid feedback.
+## Limits and development
 
-## Hardware validation and remaining limits
+Bluetooth connection capacity and audio behavior depend on the adapter,
+firmware, OS and headset; simultaneous HFP/HSP connections are not guaranteed.
+The Pi needs no local microphone or speaker, but this is not a network
+intercom. There is no GPIO control, automatic profile switching, echo
+cancellation or audio processing. Headsets need acoustic isolation to avoid
+feedback. Host tests use synthetic PipeWire graphs and do not verify Bluetooth
+hardware or audio transport; test the actual devices, reconnects, PTT and
+shutdown behavior before relying on a deployment.
 
-The tests exercise synthetic PipeWire graphs and subprocess behavior, not
-Bluetooth radios or audio transport. Before relying on a deployment:
-
-1. Verify each headset individually exposes both microphone and speaker ports
-   with `status`, then verify both remain duplex-ready when connected together.
-2. Test speech in both directions, isolation from each headset's own microphone,
-   and PTT mute/unmute. Keep volume low initially to avoid feedback.
-3. Power-cycle each headset, change its profile, and restart PipeWire; check that
-   routing recovers and unrelated user-created links remain intact.
-4. Test SIGINT/SIGTERM cleanup and the user service after a reboot without login.
-5. Measure latency, dropouts, CPU use, and simultaneous SCO/eSCO connection
-   capacity on the actual controller/firmware. More than two participants also
-   needs verification of PipeWire input mixing, levels, and clipping.
-
-No GPIO button control, automatic profile switching, echo cancellation,
-gain normalization, or network transport is implemented. GPIO PTT needs a
-specified pin/wiring and control policy; profile and audio policy remain with
-BlueZ/WirePlumber. Direct links use PipeWire's format negotiation and mixing;
-the application does not add a separate resampling or DSP pipeline.
-
-## Development
+Run the same checks as CI:
 
 ```sh
 cargo fmt --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 ```
-
-GitHub Actions runs these checks on Linux and cross-compiles release binaries
-for ARMv6, ARMv7 and 64-bit ARM Raspberry Pis.
