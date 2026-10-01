@@ -1,3 +1,5 @@
+//! Background Bluetooth status polling and terminal dashboard rendering.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 use std::sync::Arc;
@@ -10,6 +12,7 @@ use crate::router::Headset;
 use crate::{command_cancellable, device_flag};
 
 #[derive(Debug, PartialEq, Eq)]
+/// Bluetooth pairing, connection, and optional signal-strength information.
 pub struct Bluetooth {
     paired: bool,
     connected: bool,
@@ -28,6 +31,9 @@ fn bluetooth_info(info: &str) -> Bluetooth {
     }
 }
 
+/// Collects Bluetooth status updates and draws the current routing state.
+///
+/// The polling worker can be stopped explicitly with [`Dashboard::stop`].
 pub struct Dashboard {
     receiver: Receiver<(String, Option<Bluetooth>)>,
     state: BTreeMap<String, Option<Bluetooth>>,
@@ -36,6 +42,7 @@ pub struct Dashboard {
 }
 
 impl Dashboard {
+    /// Starts polling each allowlisted device until shutdown or cancellation.
     pub fn start(allowed: BTreeSet<String>, stopped: Arc<AtomicBool>) -> Self {
         let (sender, receiver) = mpsc::channel();
         let (shutdown, wake) = mpsc::channel();
@@ -71,6 +78,7 @@ impl Dashboard {
         }
     }
 
+    /// Applies queued worker updates and reports whether the displayed state changed.
     pub fn refresh(&mut self) -> bool {
         let mut changed = false;
         while let Ok((address, info)) = self.receiver.try_recv() {
@@ -80,6 +88,7 @@ impl Dashboard {
         changed
     }
 
+    /// Renders the latest Bluetooth and routing state to the supplied writer.
     pub fn draw(
         &self,
         allowed: &BTreeSet<String>,
@@ -162,6 +171,7 @@ impl Dashboard {
         output.flush()
     }
 
+    /// Signals the polling worker to exit and waits for it to finish.
     pub fn stop(&mut self) {
         let _ = self.shutdown.send(());
         if let Some(worker) = self.worker.take() {

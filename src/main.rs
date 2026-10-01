@@ -1,3 +1,8 @@
+//! Command-line entry point for Bluetooth setup, status, and intercom routing.
+//!
+//! External commands are bounded by timeouts; the long-running `run` mode also
+//! supports cancellation, reconnecting, push-to-talk input, and a terminal view.
+
 mod dashboard;
 mod router;
 
@@ -16,6 +21,7 @@ use std::time::{Duration, Instant};
 use dashboard::Dashboard;
 use router::Router;
 
+/// Runs a command with captured output and a deadline.
 fn command(args: &[&str], timeout: Duration) -> Result<String, String> {
     command_cancellable(args, timeout, None)
 }
@@ -33,6 +39,7 @@ enum KillMode {
     ProcessGroup,
 }
 
+/// Waits for a child process, enforcing its timeout and optional cancellation.
 fn wait_child(
     child: &mut Child,
     name: &str,
@@ -81,6 +88,10 @@ fn kill_process_group(child: &mut Child) {
     }
 }
 
+/// Runs a cancellable command, draining both output streams while it executes.
+///
+/// Commands run in their own process group so timeout or cancellation also
+/// terminates descendants that might otherwise keep the captured pipes open.
 fn command_cancellable(
     args: &[&str],
     timeout: Duration,
@@ -132,6 +143,7 @@ fn command_cancellable(
     Ok(String::from_utf8_lossy(&stdout).into_owned())
 }
 
+/// Opens an interactive BlueZ agent session to pair the specified device.
 fn pair_command(device: &str) -> Result<(), String> {
     eprintln!("At the Bluetooth prompt, enter: pair {device}");
     eprintln!("Answer any PIN/confirmation prompts, then enter: quit");
@@ -156,6 +168,7 @@ fn pair_command(device: &str) -> Result<(), String> {
     }
 }
 
+/// Validates and normalizes a Bluetooth MAC address.
 fn address(value: &str) -> Result<String, String> {
     if value.len() != 17
         || value.split(':').count() != 6
@@ -170,6 +183,7 @@ fn address(value: &str) -> Result<String, String> {
     Ok(value.to_ascii_uppercase())
 }
 
+/// Returns whether BlueZ's device information reports the named flag as `yes`.
 fn device_flag(info: &str, flag: &str) -> bool {
     info.lines().any(|line| {
         line.trim()
@@ -178,10 +192,12 @@ fn device_flag(info: &str, flag: &str) -> bool {
     })
 }
 
+/// Returns the command-line usage text.
 fn usage() -> &'static str {
     "Usage: rpi-intercom scan [--seconds 1..300]\n       rpi-intercom pair ADDRESS\n       rpi-intercom status ADDRESS [ADDRESS ...]\n       rpi-intercom run ADDRESS [ADDRESS ...] [--interval SECONDS] [--connect] [--ptt ADDRESS=/dev/input/eventX ...] [--dashboard]"
 }
 
+/// Parses and validates one or more Bluetooth addresses.
 fn addresses(args: &[String]) -> Result<BTreeSet<String>, String> {
     if args.is_empty() {
         return Err(usage().into());
@@ -189,16 +205,21 @@ fn addresses(args: &[String]) -> Result<BTreeSet<String>, String> {
     args.iter().map(|value| address(value)).collect()
 }
 
+/// Associates a headset with its Linux evdev push-to-talk input device.
 struct PttButton {
     address: String,
     path: String,
 }
 
+/// Linux evdev key code emitted by supported headset play/pause buttons.
 const KEY_PLAYPAUSE: u16 = 164;
 
+/// Parsed `run` arguments: devices, polling interval, reconnect, PTT, dashboard.
 type RunOptions = (BTreeSet<String>, Duration, bool, Vec<PttButton>, bool);
+/// A button state update or an input-device failure.
 type PttEvent = Result<(String, bool), String>;
 
+/// Parses `run` arguments and enforces unique, complete push-to-talk mappings.
 fn run_options(args: &[String]) -> Result<RunOptions, String> {
     let mut allowed = BTreeSet::new();
     let mut interval = 2.0_f64;
@@ -264,6 +285,7 @@ fn run_options(args: &[String]) -> Result<RunOptions, String> {
     Ok((allowed, interval, connect, buttons, dashboard))
 }
 
+/// Reads evdev records, forwarding only play/pause press and release transitions.
 fn ptt_input_from<R: Read>(mut input: R, address: String, sender: mpsc::Sender<PttEvent>) {
     let mut pressed = false;
     let mut event = vec![0; std::mem::size_of::<libc::timeval>() + 8];
@@ -292,6 +314,7 @@ fn ptt_input_from<R: Read>(mut input: R, address: String, sender: mpsc::Sender<P
     }
 }
 
+/// Opens each configured PTT device and starts one event-reading worker per device.
 fn ptt_input(buttons: Vec<PttButton>) -> Result<Receiver<PttEvent>, String> {
     let inputs = buttons
         .into_iter()
@@ -309,6 +332,7 @@ fn ptt_input(buttons: Vec<PttButton>) -> Result<Receiver<PttEvent>, String> {
     Ok(receiver)
 }
 
+/// Connects allowlisted devices that are currently disconnected or unavailable.
 fn connect_disconnected(
     allowed: &BTreeSet<String>,
     stopped: &AtomicBool,
@@ -332,6 +356,7 @@ fn connect_disconnected(
     }
 }
 
+/// Repeats connection checks until cancelled or explicitly woken for shutdown.
 fn reconnect_worker(
     allowed: BTreeSet<String>,
     stopped: Arc<AtomicBool>,
@@ -353,6 +378,7 @@ fn reconnect_worker(
     }
 }
 
+/// Executes one CLI action, including the main polling and routing loop.
 fn run(args: &[String]) -> Result<(), String> {
     let Some(action) = args.first().map(String::as_str) else {
         return Err(usage().into());
@@ -577,6 +603,7 @@ fn run(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+/// Reports command-line errors and exits unsuccessfully.
 fn main() {
     if let Err(error) = run(&env::args().skip(1).collect::<Vec<_>>()) {
         eprintln!("rpi-intercom: {error}");

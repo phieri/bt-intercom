@@ -1,3 +1,9 @@
+//! PipeWire topology discovery and ownership-safe inter-headset audio routing.
+//!
+//! Routing is limited to allowlisted Bluetooth devices using the duplex HFP/HSP
+//! profile. Each created link is owned by a monitored `pw-cli` client, so
+//! dropping that client releases the link without relying on reusable object IDs.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -7,14 +13,17 @@ use serde_json::Value;
 
 use crate::command;
 
+/// A directed PipeWire link, represented as `(output_port_id, input_port_id)`.
 type Link = (u64, u64);
 const OWNER_PROPERTY: &str = "rpi-intercom.owner";
 static NEXT_ROUTER: AtomicUsize = AtomicUsize::new(0);
 
+/// A live `pw-cli` client that owns a PipeWire link.
 trait LinkHandle {
     fn is_running(&mut self) -> Result<bool, String>;
 }
 
+/// The production link handle; dropping it terminates its owning `pw-cli`.
 struct LinkProcess(Child);
 
 impl LinkHandle for LinkProcess {
@@ -36,18 +45,23 @@ impl Drop for LinkProcess {
 type StartLink = Box<dyn FnMut(&[&str]) -> Result<Box<dyn LinkHandle>, String>>;
 
 #[derive(Debug, PartialEq, Eq)]
+/// A PipeWire audio port and the channel it carries.
 pub struct Port {
     pub(crate) id: u64,
     channel: String,
 }
 
 #[derive(Debug, Default)]
+/// Audio ports belonging to one allowlisted Bluetooth headset.
 pub struct Headset {
+    /// Microphone output ports exposed by the headset.
     pub sources: Vec<Port>,
+    /// Speaker input ports exposed by the headset.
     pub sinks: Vec<Port>,
 }
 
 impl Headset {
+    /// Returns whether PipeWire exposes both microphone and speaker ports.
     pub fn has_duplex_audio(&self) -> bool {
         !self.sources.is_empty() && !self.sinks.is_empty()
     }
@@ -65,6 +79,10 @@ fn id_string(value: &Value) -> Option<String> {
     }
 }
 
+/// Extract allowlisted headset ports and existing links from a `pw-dump` snapshot.
+///
+/// Nodes are included only when they belong to a listed Bluetooth device and
+/// use PipeWire's `headset-head-unit` profile.
 pub fn topology(
     objects: &Value,
     allowed: &BTreeSet<String>,
@@ -154,6 +172,10 @@ pub fn topology(
     Ok((headsets, links))
 }
 
+/// Build cross-headset source-to-sink links whose channels are compatible.
+///
+/// A headset is never linked to itself; mono ports are compatible with every
+/// channel on the opposite endpoint.
 pub fn desired_links(headsets: &BTreeMap<String, Headset>) -> BTreeSet<Link> {
     let mut desired = BTreeSet::new();
     for (source_address, source) in headsets {
@@ -176,7 +198,9 @@ pub fn desired_links(headsets: &BTreeMap<String, Headset>) -> BTreeSet<Link> {
     desired
 }
 
+/// Reconciles desired headset routes with PipeWire while tracking owned links.
 pub struct Router<F = fn(&[&str]) -> Result<String, String>> {
+    /// Bluetooth addresses that may be discovered or routed.
     pub allowed: BTreeSet<String>,
     owner: String,
     execute: F,
@@ -189,12 +213,17 @@ fn default_command(args: &[&str]) -> Result<String, String> {
 }
 
 impl Router {
+    /// Creates a router using the system `pw-dump` and `pw-cli` commands.
     pub fn new(allowed: BTreeSet<String>) -> Self {
         Self::with_executor(allowed, default_command)
     }
 }
 
 impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
+    /// Creates a router with a custom command executor.
+    ///
+    /// The executor is useful for tests and must return the command's stdout
+    /// or an error. Link creation still uses the production `pw-cli` backend.
     pub fn with_executor(allowed: BTreeSet<String>, execute: F) -> Self {
         Self::with_backend(
             allowed,
@@ -230,6 +259,8 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
         }
     }
 
+    /// Routes every allowlisted microphone when transmitting, or removes all
+    /// owned routes when muted.
     pub fn update(&mut self, transmitting: bool) -> Result<BTreeMap<String, Headset>, String> {
         let sources = if transmitting {
             self.allowed.clone()
@@ -239,6 +270,10 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
         self.update_sources(&sources)
     }
 
+    /// Reconciles owned routes so only the specified headsets' microphones transmit.
+    ///
+    /// Returns the currently discovered headset topology, or combined errors
+    /// from link ownership checks and link creation.
     pub fn update_sources(
         &mut self,
         sources: &BTreeSet<String>,
@@ -312,11 +347,13 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
         }
     }
 
+    /// Reads the current allowlisted headset topology and all observed links.
     pub fn inspect(&mut self) -> Result<(BTreeMap<String, Headset>, BTreeSet<Link>), String> {
         let snapshot = self.snapshot()?;
         topology(&snapshot, &self.allowed)
     }
 
+    /// Reads headset topology and only links owned by this router instance.
     pub fn inspect_owned(&mut self) -> Result<(BTreeMap<String, Headset>, BTreeSet<Link>), String> {
         let snapshot = self.snapshot()?;
         let (headsets, _) = topology(&snapshot, &self.allowed)?;
@@ -346,6 +383,7 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
             .collect()
     }
 
+    /// Releases every link created by this router.
     pub fn close(&mut self) {
         self.owned.clear();
     }
