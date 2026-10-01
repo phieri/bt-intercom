@@ -8,8 +8,8 @@ indent_style = tab
 indent_size = tab
 
 [*.rs]
-indent_style = space
-indent_size = 4
+indent_style = tab
+indent_size = tab
 
 [*.py]
 indent_style = space
