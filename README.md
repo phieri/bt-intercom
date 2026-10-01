@@ -43,7 +43,8 @@ install -Dm755 target/release/rpi-intercom ~/.local/bin/rpi-intercom
 ```
 
 Alternatively, download the executable from a successful build artifact and
-install it as `~/.local/bin/rpi-intercom`.
+install it as `~/.local/bin/rpi-intercom`. Each build also publishes `.deb` and
+`.rpm` packages for the same target.
 
 ### Shell completions and logging
 
@@ -72,15 +73,19 @@ Runtime diagnostics are written to stderr and respect `RUST_LOG`. The default
 level is `info`; set `RUST_LOG=warn` to show warnings only. A systemd user
 service sends stdout and stderr to the journal.
 
-### Debian package
+### Debian and RPM packages
 
-`Cargo.toml` includes `cargo-deb` metadata for the binary, man page, runtime
-requirements, and a systemd user unit. Install `cargo-deb` with
-`cargo install cargo-deb`, then build a package with `cargo deb` (or
-`cargo deb --target TARGET` for a configured cross-compilation target). Install
-the resulting package from `target/debian/` with your package manager. The unit
-is installed but not enabled automatically. After configuring the saved headset
-network, start it with:
+`Cargo.toml` includes packaging metadata for the binary, man page, runtime
+requirements, and a systemd user unit. Install `cargo-deb` and
+`cargo-generate-rpm`, then build packages with `cargo deb` and
+`cargo generate-rpm` (add `--target TARGET` for a configured cross-compilation
+target). The `.deb` is written to `target/debian/` (or the target-specific
+`debian/` directory when cross-compiling); the `.rpm` is written to
+`target/generate-rpm/`. CI publishes both packages for each supported target.
+
+Install the package with your distribution's package manager. The systemd user
+unit is installed but not enabled automatically. After configuring the saved
+headset network, start it with:
 
 ```sh
 systemctl --user daemon-reload
