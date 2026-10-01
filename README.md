@@ -29,10 +29,10 @@ also identify the links in diagnostic snapshots.
   depend on model-specific GPIO or audio hardware; availability of the
   required audio stack and simultaneous headset connections must be checked
   on your particular Pi and OS.
-- Linux with BlueZ (`bluetoothctl`), PipeWire (`pw-dump`, `pw-cli`),
-  and WirePlumber. Run the intercom in the **same user session** as PipeWire.
-  Install the distribution's Bluetooth/PipeWire packages and enable the
-  Bluetooth and user audio services.
+- Linux with BlueZ (`bluetoothctl`), PipeWire (`pw-dump`, `pw-cli`, and
+  `pw-play` for PTT confirmation beeps), and WirePlumber. Run the intercom in
+  the **same user session** as PipeWire. Install the distribution's
+  Bluetooth/PipeWire packages and enable the Bluetooth and user audio services.
 - Two or more Bluetooth Classic headsets offering **both** a microphone and
   speaker to PipeWire. Select the bidirectional HFP/HSP headset profile
   (`headset-head-unit`); A2DP is playback-only. Check `wpctl status` and, if
@@ -154,8 +154,10 @@ PTT from starting.
 
 All headset microphones start muted. Holding a headset's play/pause button connects
 **that headset's microphone** to the other headsets; releasing disconnects it.
-Repeated key events are ignored. Enter on the Pi does nothing. If an event
-device closes or fails, the command exits and releases its links. Only links
+When the microphone is successfully routed, a quick double beep plays through
+the headset that pressed the button. Repeated key events are ignored. Enter on
+the Pi does nothing. If an event device closes or fails, the command exits and
+releases its links. Only links
 created by this process are controlled; pre-existing PipeWire links between
 headsets are not modified. Routing is polled every two seconds (adjust with
 `--interval SECONDS`), with button events checked every 100 ms. PipeWire
