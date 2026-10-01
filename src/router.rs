@@ -228,6 +228,34 @@ pub fn has_active_source_route(
         .any(|link| source_ports.contains(&link.0) && links.contains(link))
 }
 
+/// Returns whether a headset has live microphone and speaker routes with a peer.
+pub fn has_active_intercom_connection(
+    address: &str,
+    headsets: &BTreeMap<String, Headset>,
+    links: &BTreeSet<(u64, u64)>,
+) -> bool {
+    let Some(headset) = headsets.get(address) else {
+        return false;
+    };
+    let desired = desired_links(headsets);
+    let source_ports: BTreeSet<_> = headset.sources.iter().map(|port| port.id).collect();
+    let sink_ports: BTreeSet<_> = headset.sinks.iter().map(|port| port.id).collect();
+    headsets.iter().any(|(peer_address, peer)| {
+        if peer_address == address {
+            return false;
+        }
+        let peer_sources: BTreeSet<_> = peer.sources.iter().map(|port| port.id).collect();
+        let peer_sinks: BTreeSet<_> = peer.sinks.iter().map(|port| port.id).collect();
+        let sends_to_peer = desired.iter().any(|link| {
+            source_ports.contains(&link.0) && peer_sinks.contains(&link.1) && links.contains(link)
+        });
+        let receives_from_peer = desired.iter().any(|link| {
+            peer_sources.contains(&link.0) && sink_ports.contains(&link.1) && links.contains(link)
+        });
+        sends_to_peer && receives_from_peer
+    })
+}
+
 /// Reconciles desired headset routes with PipeWire while tracking owned links.
 pub struct Router<F = fn(&[&str]) -> Result<String, String>> {
     /// Bluetooth addresses that may be discovered or routed.
@@ -474,6 +502,19 @@ mod tests {
             .collect();
         assert!(!has_active_source_route(A, &headsets, &links));
         assert!(has_active_source_route(B, &headsets, &links));
+    }
+
+    #[test]
+    fn detects_bidirectional_intercom_connections() {
+        let (headsets, _) = topology(&json!(fixture()), &allowed()).unwrap();
+        let links = desired_links(&headsets);
+        assert!(has_active_intercom_connection(A, &headsets, &links));
+        assert!(has_active_intercom_connection(B, &headsets, &links));
+        let one_way = [(13, 24), (13, 25)].into();
+        assert!(!has_active_intercom_connection(A, &headsets, &one_way));
+        assert!(!has_active_intercom_connection(B, &headsets, &one_way));
+        let (single, _) = topology(&json!(headset(10, A)), &[A.to_string()].into()).unwrap();
+        assert!(!has_active_intercom_connection(A, &single, &links));
     }
 
     #[test]

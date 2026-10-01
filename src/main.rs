@@ -20,7 +20,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use dashboard::Dashboard;
-use router::{Headset, Router, has_active_source_route};
+use router::{Headset, Router, has_active_intercom_connection, has_active_source_route};
 
 /// Runs a command with captured output and a deadline.
 fn command(args: &[&str], timeout: Duration) -> Result<String, String> {
@@ -414,6 +414,34 @@ fn confirm_transmissions(
     }
 }
 
+fn confirm_connections(
+    connected: &mut BTreeSet<String>,
+    headsets: &BTreeMap<String, Headset>,
+    links: &BTreeSet<(u64, u64)>,
+    beep: Option<&PttBeep>,
+    stopped: &AtomicBool,
+) {
+    let current: BTreeSet<_> = headsets
+        .keys()
+        .filter(|address| has_active_intercom_connection(address, headsets, links))
+        .cloned()
+        .collect();
+    for address in current.difference(connected) {
+        let Some(speaker_node) = headsets[address].speaker_node() else {
+            eprintln!(
+                "WARNING: Could not play intercom connection beep for {address}: no speaker node"
+            );
+            continue;
+        };
+        if let Some(beep) = beep
+            && let Err(error) = beep.play(speaker_node, stopped)
+        {
+            eprintln!("WARNING: Could not play intercom connection beep for {address}: {error}");
+        }
+    }
+    *connected = current;
+}
+
 /// Validates that PTT bindings uniquely cover the configured headset network.
 fn validate_ptt(buttons: &[PttButton], allowed: &BTreeSet<String>) -> Result<(), String> {
     let mut configured = BTreeSet::new();
@@ -705,20 +733,17 @@ fn run(args: &[String]) -> Result<(), String> {
             } else {
                 Some(ptt_input(buttons)?)
             };
-            let beep = if input.is_some() {
-                match PttBeep::new() {
-                    Ok(beep) => Some(beep),
-                    Err(error) => {
-                        eprintln!("WARNING: PTT confirmation beeps unavailable: {error}");
-                        None
-                    }
+            let beep = match PttBeep::new() {
+                Ok(beep) => Some(beep),
+                Err(error) => {
+                    eprintln!("WARNING: Confirmation beeps unavailable: {error}");
+                    None
                 }
-            } else {
-                None
             };
             let mut transmitting = input.is_none();
             let mut active_sources = BTreeSet::new();
             let mut pending_confirmations = BTreeSet::new();
+            let mut connected_headsets = BTreeSet::new();
             if input.is_some() {
                 eprintln!(
                     "PTT: Hold your headset's play/pause button to transmit; release to mute."
@@ -769,13 +794,23 @@ fn run(args: &[String]) -> Result<(), String> {
                                 Ok((current, active)) => {
                                     headsets = current;
                                     links = active;
-                                    confirm_transmissions(
-                                        &mut pending_confirmations,
-                                        &headsets,
-                                        &links,
-                                        beep.as_ref(),
-                                        &stopped,
-                                    );
+                                    if input.is_some() {
+                                        confirm_transmissions(
+                                            &mut pending_confirmations,
+                                            &headsets,
+                                            &links,
+                                            beep.as_ref(),
+                                            &stopped,
+                                        );
+                                    } else {
+                                        confirm_connections(
+                                            &mut connected_headsets,
+                                            &headsets,
+                                            &links,
+                                            beep.as_ref(),
+                                            &stopped,
+                                        );
+                                    }
                                 }
                                 Err(error) => {
                                     headsets.clear();
@@ -801,16 +836,26 @@ fn run(args: &[String]) -> Result<(), String> {
                             }
                         }
                         if dashboard.is_none()
-                            && !pending_confirmations.is_empty()
+                            && (input.is_none() || !pending_confirmations.is_empty())
                             && let Ok((current, active)) = router.inspect_owned()
                         {
-                            confirm_transmissions(
-                                &mut pending_confirmations,
-                                &current,
-                                &active,
-                                beep.as_ref(),
-                                &stopped,
-                            );
+                            if input.is_some() {
+                                confirm_transmissions(
+                                    &mut pending_confirmations,
+                                    &current,
+                                    &active,
+                                    beep.as_ref(),
+                                    &stopped,
+                                );
+                            } else {
+                                confirm_connections(
+                                    &mut connected_headsets,
+                                    &current,
+                                    &active,
+                                    beep.as_ref(),
+                                    &stopped,
+                                );
+                            }
                         }
                         last_update = Some(Instant::now());
                     }
