@@ -1,11 +1,13 @@
 # rpi-intercom
 
-A local, full-duplex Bluetooth Classic intercom for two or more headsets on one
+A local Bluetooth Classic intercom with selectable semi-duplex and full-duplex
+modes for two or more headsets on one
 Raspberry Pi. BlueZ manages Bluetooth; PipeWire and WirePlumber provide headset
 audio. Each headset microphone routes to other configured headsets in its talk
 groups, never back to itself. With no talk groups configured, all headsets share
 the original all-to-all intercom. By default all microphones are live; optional
-push-to-talk (PTT) keeps them muted until a headset button is held.
+push-to-talk (PTT) keeps them muted until a headset button is held. Semi-duplex
+queues talk requests and allows only one headset microphone at a time.
 
 [Watch the illustrative CLI demo](https://phieri.github.io/rpi-intercom/).
 
@@ -183,7 +185,14 @@ group with it. Headsets not assigned to a group are not routed when any groups
 exist. With no groups, routing remains all-to-all. The panel is included in the
 standard CLI and cross-compiled packages.
 
-### Push-to-talk
+### Duplex modes and push-to-talk
+
+Select `--mode full-duplex` (the default) or `--mode semi-duplex` on `run`.
+Full-duplex without button mappings starts with every microphone always open.
+With mappings, each headset starts in PTT mode; its user can independently switch
+between PTT and always-open by pressing the play/pause button three times within
+one second. Switching back to PTT mutes the microphone when the button is
+released. These choices last until the process exits.
 
 Map each headset to its own Linux input event device. PTT listens only for
 `KEY_PLAYPAUSE` press/release events (code 164), not call/answer buttons or
@@ -195,8 +204,23 @@ rpi-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 \
   --ptt AA:BB:CC:DD:EE:02=/dev/input/event5
 ```
 
-Hold a headset's play/pause button to transmit from that headset's microphone;
+In PTT mode, hold a headset's play/pause button to transmit from its microphone;
 release to mute it. A double beep confirms when its microphone route is active.
+
+For semi-duplex, add `--mode semi-duplex` to the command above. Button mappings
+are required for every headset. Hold play/pause to request a turn: if another
+headset is transmitting, your request waits in first-in, first-out order.
+Keep holding while queued and wait for the double beep before talking.
+Releasing the button cancels a queued request or ends your turn, allowing the
+next waiting headset to transmit. Triple presses do not enable always-open
+microphones in semi-duplex. The queue is shared across the entire intercom,
+including separate talk groups; group membership still limits who hears you.
+Semi-duplex routing failures stop the run and release its owned links rather
+than risk leaving the previous talker active. Existing external links remain
+untouched, so exclusivity applies only to routes managed by this process.
+When a mapped headset loses duplex audio, its request and always-open choice
+are reset; after reconnecting, release and press again to talk.
+
 Find event devices with `evtest` or `libinput debug-events`.
 Use stable `/dev/input/by-id/` or `/dev/input/by-path/` paths where available.
 The running user needs permission to read the devices, and the Bluetooth stack

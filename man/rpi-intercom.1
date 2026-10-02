@@ -1,6 +1,6 @@
 .TH RPI-INTERCOM 1
 .SH NAME
-rpi-intercom \- full-duplex Bluetooth headset intercom
+rpi-intercom \- semi-duplex or full-duplex Bluetooth headset intercom
 .SH SYNOPSIS
 .B rpi-intercom
 .I COMMAND
@@ -48,10 +48,28 @@ Set the routing update interval (default: 2 seconds).
 .B run --connect
 Retry disconnected headsets every 30 seconds.
 .TP
+.BI run " --mode MODE"
+Select full-duplex (default) or semi-duplex. Semi-duplex requires a play/pause
+input mapping for every headset and grants one microphone at a time.
+.TP
 .BI run " --ptt ADDRESS=/dev/input/eventX"
 Map a headset to its Linux evdev push-to-talk input. Repeat once for every
 configured headset. Only the headset's play/pause key press and release events
 are used.
+.PP
+Hold play/pause to talk in PTT mode; release to mute. In semi-duplex, requests
+wait in first-in, first-out order while another headset transmits. Keep holding
+until a double beep confirms an active microphone route; releasing cancels a
+queued request or ends the current turn. The queue is shared across talk groups.
+Semi-duplex routing failures stop the run and release owned links. External
+links remain untouched; exclusivity applies only to this process's routes.
+.PP
+In full-duplex, mapped headsets start in PTT mode. Press play/pause three times
+within one second to toggle that headset independently between PTT and
+always-open. Choices reset when the process exits. Without mappings, full-duplex
+starts with all microphones open.
+Losing duplex audio resets a mapped headset's request and always-open choice;
+release and press again after reconnecting.
 .TP
 .B run --dashboard
 Show the live terminal dashboard on standard error. Requires an interactive
