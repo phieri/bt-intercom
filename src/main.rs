@@ -5,6 +5,7 @@
 //! External commands are bounded by timeouts; the long-running `run` mode also
 //! supports cancellation, reconnecting, push-to-talk input, and a terminal view.
 
+mod atomic_file;
 mod bluez;
 mod dashboard;
 mod groups;
@@ -323,26 +324,16 @@ fn save_headsets(path: &Path, allowed: &BTreeSet<String>) -> Result<(), String> 
 	fs::create_dir_all(directory)
 		.map_err(|error| format!("could not create {}: {error}", directory.display()))?;
 
-	let mut temporary = path.as_os_str().to_os_string();
-	temporary.push(format!(".{}.tmp", std::process::id()));
-	let temporary = PathBuf::from(temporary);
 	let contents = format!(
 		"{}\n",
 		allowed.iter().cloned().collect::<Vec<_>>().join("\n")
 	);
-	let result = (|| {
-		let mut file = File::create(&temporary)?;
-		file.write_all(contents.as_bytes())?;
-		file.sync_all()?;
-		fs::rename(&temporary, path)
-	})();
-	if let Err(error) = result {
-		let _ = fs::remove_file(&temporary);
-		return Err(format!(
+	atomic_file::write(path, contents.as_bytes()).map_err(|error| {
+		format!(
 			"could not save headset network to {}: {error}",
 			path.display()
-		));
-	}
+		)
+	})?;
 	Ok(())
 }
 
