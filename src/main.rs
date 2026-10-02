@@ -41,6 +41,11 @@ struct PttButton {
 #[command(
 	name = "rpi-intercom",
 	version,
+	long_version = concat!(
+		env!("CARGO_PKG_VERSION"),
+		"\nBuild datetime: ",
+		env!("RPI_INTERCOM_BUILD_DATETIME")
+	),
 	about = "A full-duplex Bluetooth headset intercom for Raspberry Pi",
 	arg_required_else_help = true
 )]
@@ -1063,6 +1068,15 @@ mod tests {
 		for shell in ["bash", "zsh", "fish", "elvish"] {
 			assert!(Cli::try_parse_from(["rpi-intercom", "completions", shell]).is_ok());
 		}
+	}
+
+	#[test]
+	fn long_version_includes_package_version_and_build_datetime() {
+		let command = Cli::command();
+		assert_eq!(command.get_version(), Some(env!("CARGO_PKG_VERSION")));
+		let long_version = command.get_long_version().unwrap().to_string();
+		assert!(long_version.contains(env!("CARGO_PKG_VERSION")));
+		assert!(long_version.contains(env!("RPI_INTERCOM_BUILD_DATETIME")));
 	}
 
 	#[test]
