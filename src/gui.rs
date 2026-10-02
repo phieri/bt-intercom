@@ -10,9 +10,9 @@ use iced::widget::{button, checkbox, column, container, row, scrollable, text, t
 use iced::{Element, Length, Subscription, Task};
 
 use crate::bluez::{bluetooth_name, device_flag, property};
+use crate::command;
 use crate::groups::{TalkGroup, load, save};
 use crate::router::Router;
-use crate::command;
 
 #[derive(Clone, Debug)]
 struct HeadsetStatus {
@@ -131,9 +131,10 @@ impl ControlPanel {
 			} else {
 				"unavailable"
 			};
-			let signal = status
-				.and_then(|status| status.rssi)
-				.map_or_else(|| "unknown signal".to_string(), |rssi| format!("{rssi} dBm"));
+			let signal = status.and_then(|status| status.rssi).map_or_else(
+				|| "unknown signal".to_string(),
+				|rssi| format!("{rssi} dBm"),
+			);
 			content = content.push(text(format!(
 				"{name} ({address}) — {connected}, duplex {duplex}, {signal}"
 			)));
@@ -213,7 +214,10 @@ pub fn run(allowed: BTreeSet<String>, groups_path: PathBuf) -> Result<(), String
 		.run_with(move || {
 			(
 				state,
-				Task::perform(async move { poll_status(&status_allowed) }, Message::StatusUpdated),
+				Task::perform(
+					async move { poll_status(&status_allowed) },
+					Message::StatusUpdated,
+				),
 			)
 		})
 		.map_err(|error| error.to_string())

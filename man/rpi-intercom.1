@@ -7,9 +7,10 @@ rpi-intercom \- full-duplex Bluetooth headset intercom
 .RI [ OPTIONS ]
 .SH DESCRIPTION
 .B rpi-intercom
-routes the microphone audio of configured Bluetooth Classic headsets to every
-other configured headset using BlueZ, PipeWire, and WirePlumber. Run it as the
-same user that owns the PipeWire session; do not run it with
+routes configured Bluetooth Classic headsets using BlueZ, PipeWire, and
+WirePlumber. When talk groups are configured, a microphone is routed only to
+other members of its groups; otherwise all headsets share the intercom. Run it
+as the same user that owns the PipeWire session; do not run it with
 .BR sudo .
 The program does not change headset profiles or modify PipeWire links it does
 not own.
@@ -31,6 +32,12 @@ previously saved network is restored.
 .BI completions " SHELL"
 Write shell completion definitions to standard output. Supported shells include
 Bash, Zsh, Fish, and Elvish.
+.TP
+.B gui
+Open the optional graphical control panel to monitor headsets and edit talk
+groups. Available only in builds compiled with the
+.B gui
+feature.
 .SH OPTIONS
 .TP
 .BI scan " --seconds SECONDS"
@@ -51,6 +58,9 @@ are used.
 Show the live terminal dashboard on standard error. Requires an interactive
 terminal.
 .TP
+.B cargo install --path . --locked --features gui
+Build and install the optional Iced control panel.
+.TP
 .B -h, --help
 Show command help.
 .TP
@@ -66,6 +76,15 @@ when
 is unset or not absolute. Temporary PTT confirmation audio uses
 .B XDG_RUNTIME_DIR
 when it is absolute and otherwise uses the system temporary directory.
+.PP
+Talk groups are stored in
+.IR $XDG_CONFIG_HOME/rpi-intercom/talk-groups.json ,
+or
+.IR ~/.config/rpi-intercom/talk-groups.json
+when
+.B XDG_CONFIG_HOME
+is unset or not absolute. A running intercom reloads group changes on the next
+routing update.
 .PP
 Runtime log levels are controlled by
 .BR RUST_LOG .

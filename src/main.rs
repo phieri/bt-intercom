@@ -615,7 +615,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 		CliCommand::Gui => {
 			let network_path = headset_network_path()?;
 			let allowed = load_headsets(&network_path)?;
-			gui::run(allowed, talk_groups_path(&network_path)?);
+			gui::run(allowed, talk_groups_path(&network_path)?)?;
 		}
 		CliCommand::Scan { seconds } => {
 			print!(
@@ -792,7 +792,11 @@ fn run(action: CliCommand) -> Result<(), String> {
 						} else {
 							router.allowed.clone()
 						};
-						let update = router.update_sources_in_groups(&sources, &groups);
+						let update = if groups.is_empty() && input.is_none() {
+							router.update(true)
+						} else {
+							router.update_sources_in_groups(&sources, &groups)
+						};
 						if dashboard.is_some() {
 							let mut inspect_error = None;
 							match router.inspect_owned() {

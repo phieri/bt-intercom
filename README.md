@@ -2,9 +2,10 @@
 
 A local, full-duplex Bluetooth Classic intercom for two or more headsets on one
 Raspberry Pi. BlueZ manages Bluetooth; PipeWire and WirePlumber provide headset
-audio. Each headset microphone routes to every other configured headset, never
-back to itself. By default all microphones are live; optional push-to-talk (PTT)
-keeps them muted until a headset button is held.
+audio. Each headset microphone routes to other configured headsets in its talk
+groups, never back to itself. With no talk groups configured, all headsets share
+the original all-to-all intercom. By default all microphones are live; optional
+push-to-talk (PTT) keeps them muted until a headset button is held.
 
 [Watch the illustrative CLI demo](https://phieri.github.io/rpi-intercom/).
 
@@ -155,6 +156,26 @@ closes links created by this process. Existing PipeWire links are not modified.
 Best-effort beeps confirm when an intercom route becomes active. Their temporary
 WAV file is created under `XDG_RUNTIME_DIR` when it is an absolute path, falling
 back to the system temporary directory otherwise; it is removed during shutdown.
+
+### Graphical control panel and talk groups
+
+Build with the optional Iced GUI feature and start the panel after saving a
+headset network:
+
+```sh
+cargo install --path . --locked --features gui
+rpi-intercom gui
+```
+
+The panel shows Bluetooth connection and signal status plus PipeWire duplex
+availability. Create and remove talk groups, then add or remove configured
+headsets from each group. Group settings are saved to
+`${XDG_CONFIG_HOME:-~/.config}/rpi-intercom/talk-groups.json`; changes are
+picked up by a running `rpi-intercom run` process on its next routing update.
+A headset's microphone is routed only to other headsets sharing at least one
+group with it. Headsets not assigned to a group are not routed when any groups
+exist. With no groups, routing remains all-to-all. The standard CLI and
+cross-compiled packages do not include the GUI feature.
 
 ### Push-to-talk
 

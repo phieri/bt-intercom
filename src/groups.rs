@@ -3,10 +3,14 @@
 //! Persistent talk-group configuration.
 
 use std::collections::BTreeSet;
-use std::fs::{self, File};
+use std::fs;
+#[cfg(any(feature = "gui", test))]
+use std::fs::File;
+#[cfg(any(feature = "gui", test))]
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+#[cfg(any(feature = "gui", test))]
 use serde_json::json;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -30,9 +34,12 @@ pub fn load(path: &Path) -> Result<Vec<TalkGroup>, String> {
 	};
 	let value: serde_json::Value = serde_json::from_str(&contents)
 		.map_err(|error| format!("invalid talk-group file {}: {error}", path.display()))?;
-	let entries = value["groups"]
-		.as_array()
-		.ok_or_else(|| format!("invalid talk-group file {}: missing groups array", path.display()))?;
+	let entries = value["groups"].as_array().ok_or_else(|| {
+		format!(
+			"invalid talk-group file {}: missing groups array",
+			path.display()
+		)
+	})?;
 	let mut groups = Vec::with_capacity(entries.len());
 	let mut names = BTreeSet::new();
 	for entry in entries {
@@ -41,7 +48,10 @@ pub fn load(path: &Path) -> Result<Vec<TalkGroup>, String> {
 			.map(str::trim)
 			.filter(|name| !name.is_empty())
 			.ok_or_else(|| {
-				format!("invalid talk-group file {}: group name is empty", path.display())
+				format!(
+					"invalid talk-group file {}: group name is empty",
+					path.display()
+				)
 			})?
 			.to_string();
 		if !names.insert(name.to_lowercase()) {
@@ -79,6 +89,7 @@ pub fn load(path: &Path) -> Result<Vec<TalkGroup>, String> {
 	Ok(groups)
 }
 
+#[cfg(any(feature = "gui", test))]
 pub fn save(path: &Path, groups: &[TalkGroup]) -> Result<(), String> {
 	let mut names = BTreeSet::new();
 	for group in groups {
@@ -136,8 +147,7 @@ fn validate_address(address: &str) -> Option<String> {
 			} else {
 				byte.is_ascii_hexdigit()
 			}
-		})
-	{
+		}) {
 		return None;
 	}
 	Some(address.to_ascii_uppercase())
