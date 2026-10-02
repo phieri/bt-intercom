@@ -23,6 +23,8 @@ profile rpi-intercom /usr/bin/rpi-intercom {
   @{HOME}/.config/rpi-intercom/ rw,
   @{HOME}/.config/rpi-intercom/headsets rwk,
   @{HOME}/.config/rpi-intercom/headsets.* rwk,
+  @{HOME}/.config/rpi-intercom/talk-groups.json rwk,
+  @{HOME}/.config/rpi-intercom/talk-groups.json.*.tmp rwk,
 
   /run/user/[0-9]*/ rw,
   /run/user/[0-9]*/rpi-intercom-ptt-*.wav rw,

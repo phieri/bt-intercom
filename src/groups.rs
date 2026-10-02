@@ -50,7 +50,7 @@ pub fn load(path: &Path) -> Result<Vec<TalkGroup>, String> {
 				)
 			})?
 			.to_string();
-		if !names.insert(name.to_lowercase()) {
+		if !names.insert(normalize_name(&name)) {
 			return Err(format!(
 				"invalid talk-group file {}: duplicate group name",
 				path.display()
@@ -88,7 +88,7 @@ pub fn load(path: &Path) -> Result<Vec<TalkGroup>, String> {
 pub fn save(path: &Path, groups: &[TalkGroup]) -> Result<(), String> {
 	let mut names = BTreeSet::new();
 	for group in groups {
-		if group.name.trim().is_empty() || !names.insert(group.name.trim().to_lowercase()) {
+		if group.name.trim().is_empty() || !names.insert(normalize_name(&group.name)) {
 			return Err("talk-group names must be non-empty and unique".into());
 		}
 		if group
@@ -131,6 +131,10 @@ pub fn save(path: &Path, groups: &[TalkGroup]) -> Result<(), String> {
 		));
 	}
 	Ok(())
+}
+
+pub fn normalize_name(name: &str) -> String {
+	name.trim().to_lowercase()
 }
 
 fn validate_address(address: &str) -> Option<String> {
