@@ -7,6 +7,8 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
+use crate::groups::TalkGroup;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum Mode {
 	SemiDuplex,
@@ -25,7 +27,9 @@ struct Button {
 pub struct Transmit {
 	mode: Mode,
 	buttons: BTreeMap<String, Button>,
-	queue: VecDeque<String>,
+	groups: Vec<TalkGroup>,
+	queues: BTreeMap<Option<String>, VecDeque<String>>,
+	group_sources: BTreeMap<Option<String>, BTreeSet<String>>,
 	active: BTreeSet<String>,
 	pub pending: BTreeSet<String>,
 }
@@ -35,14 +39,35 @@ impl Transmit {
 		Self {
 			mode,
 			buttons: mapped.into_iter().map(|a| (a, Button::default())).collect(),
-			queue: VecDeque::new(),
+			groups: Vec::new(),
+			queues: BTreeMap::new(),
+			group_sources: BTreeMap::new(),
 			active: BTreeSet::new(),
 			pending: BTreeSet::new(),
 		}
 	}
 
+	/// Replace talk groups. Semi-duplex requests are retired when membership
+	/// changes so a held button must be released and pressed again.
+	pub fn set_groups(&mut self, groups: &[TalkGroup]) -> bool {
+		if self.groups == groups {
+			return false;
+		}
+		self.groups = groups.to_vec();
+		if self.mode == Mode::SemiDuplex {
+			self.queues.clear();
+			for button in self.buttons.values_mut() {
+				button.requested = false;
+			}
+			self.pending.clear();
+			self.refresh();
+		}
+		true
+	}
+
 	/// Returns whether a genuine transition was processed.
 	pub fn event(&mut self, address: &str, pressed: bool, at: Instant) -> bool {
+		let memberships = self.memberships(address);
 		let Some(button) = self.buttons.get_mut(address) else {
 			return false;
 		};
@@ -54,9 +79,16 @@ impl Transmit {
 		match self.mode {
 			Mode::SemiDuplex => {
 				if pressed {
-					self.queue.push_back(address.to_owned());
+					for membership in memberships {
+						self.queues
+							.entry(membership)
+							.or_default()
+							.push_back(address.to_owned());
+					}
 				} else {
-					self.queue.retain(|a| a != address);
+					for queue in self.queues.values_mut() {
+						queue.retain(|queued| queued != address);
+					}
 				}
 			}
 			Mode::FullDuplex if pressed => {
@@ -86,7 +118,9 @@ impl Transmit {
 				button.requested = false;
 				button.open = false;
 				button.presses.clear();
-				self.queue.retain(|a| a != address);
+				for queue in self.queues.values_mut() {
+					queue.retain(|queued| queued != address);
+				}
 			}
 		}
 		self.refresh();
@@ -94,28 +128,59 @@ impl Transmit {
 	}
 
 	fn refresh(&mut self) {
-		let next = match self.mode {
-			Mode::SemiDuplex => self.queue.front().cloned().into_iter().collect(),
-			Mode::FullDuplex => self
-				.buttons
-				.iter()
-				.filter(|(_, b)| b.requested || b.open)
-				.map(|(a, _)| a.clone())
-				.collect::<BTreeSet<_>>(),
+		let (next, group_sources) = match self.mode {
+			Mode::SemiDuplex => {
+				let group_sources = self
+					.queues
+					.iter()
+					.filter_map(|(group, queue)| {
+						queue
+							.front()
+							.map(|address| (group.clone(), BTreeSet::from([address.clone()])))
+					})
+					.collect::<BTreeMap<_, _>>();
+				let active = group_sources.values().flatten().cloned().collect();
+				(active, group_sources)
+			}
+			Mode::FullDuplex => (
+				self.buttons
+					.iter()
+					.filter(|(_, b)| b.requested || b.open)
+					.map(|(a, _)| a.clone())
+					.collect::<BTreeSet<_>>(),
+				BTreeMap::new(),
+			),
 		};
 		self.pending.retain(|a| next.contains(a));
 		self.pending.extend(next.difference(&self.active).cloned());
 		self.active = next;
+		self.group_sources = group_sources;
+	}
+
+	fn memberships(&self, address: &str) -> Vec<Option<String>> {
+		if self.groups.is_empty() {
+			return vec![None];
+		}
+		self.groups
+			.iter()
+			.filter(|group| group.members.contains(address))
+			.map(|group| Some(group.name.clone()))
+			.collect()
 	}
 
 	pub fn sources(&self) -> &BTreeSet<String> {
 		&self.active
+	}
+
+	pub fn group_sources(&self) -> &BTreeMap<Option<String>, BTreeSet<String>> {
+		&self.group_sources
 	}
 }
 
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::groups::TalkGroup;
 
 	fn setup(mode: Mode) -> (Transmit, Instant) {
 		(
@@ -126,6 +191,13 @@ mod tests {
 
 	fn set(addresses: &[&str]) -> BTreeSet<String> {
 		addresses.iter().map(|a| (*a).into()).collect()
+	}
+
+	fn group(name: &str, members: &[&str]) -> TalkGroup {
+		TalkGroup {
+			name: name.into(),
+			members: set(members),
+		}
 	}
 
 	fn press(t: &mut Transmit, a: &str, base: Instant, ms: u64) {
@@ -165,6 +237,49 @@ mod tests {
 		assert_eq!(t.sources(), &set(&["b"]));
 		release(&mut t, "b", now, 4);
 		assert_eq!(t.sources(), &set(&["a"]));
+	}
+
+	#[test]
+	fn semi_duplex_queues_are_independent_per_talk_group() {
+		let (mut t, now) = setup(Mode::SemiDuplex);
+		t.set_groups(&[group("Red", &["a", "b"]), group("Blue", &["c", "d"])]);
+		press(&mut t, "a", now, 0);
+		press(&mut t, "b", now, 1);
+		press(&mut t, "c", now, 2);
+		press(&mut t, "d", now, 3);
+		assert_eq!(t.sources(), &set(&["a", "c"]));
+		assert_eq!(
+			t.group_sources(),
+			&BTreeMap::from([
+				(Some("Blue".into()), set(&["c"])),
+				(Some("Red".into()), set(&["a"])),
+			])
+		);
+		release(&mut t, "a", now, 4);
+		assert_eq!(t.sources(), &set(&["b", "c"]));
+	}
+
+	#[test]
+	fn semi_duplex_ignores_requests_without_a_group_membership() {
+		let (mut t, now) = setup(Mode::SemiDuplex);
+		t.set_groups(&[group("Team", &["a", "b"])]);
+		press(&mut t, "c", now, 0);
+		press(&mut t, "a", now, 1);
+		assert_eq!(t.sources(), &set(&["a"]));
+	}
+
+	#[test]
+	fn changing_groups_retires_requests_until_buttons_are_repressed() {
+		let (mut t, now) = setup(Mode::SemiDuplex);
+		t.set_groups(&[group("Team", &["a", "b"])]);
+		press(&mut t, "a", now, 0);
+		press(&mut t, "b", now, 1);
+		assert!(t.set_groups(&[group("Team", &["b", "c"])]));
+		assert!(t.sources().is_empty());
+		assert!(!t.event("a", true, now + Duration::from_millis(2)));
+		release(&mut t, "b", now, 3);
+		press(&mut t, "b", now, 4);
+		assert_eq!(t.sources(), &set(&["b"]));
 	}
 
 	#[test]
