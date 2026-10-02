@@ -3,8 +3,7 @@
 //! Persistent talk-group configuration.
 
 use std::collections::BTreeSet;
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::json;
@@ -114,23 +113,8 @@ pub fn save(path: &Path, groups: &[TalkGroup]) -> Result<(), String> {
 		})).collect::<Vec<_>>(),
 	})
 	.to_string();
-	let mut temporary = path.as_os_str().to_os_string();
-	temporary.push(format!(".{}.tmp", std::process::id()));
-	let temporary = PathBuf::from(temporary);
-	let result = (|| {
-		let mut file = File::create(&temporary)?;
-		file.write_all(contents.as_bytes())?;
-		file.sync_all()?;
-		fs::rename(&temporary, path)
-	})();
-	if let Err(error) = result {
-		let _ = fs::remove_file(&temporary);
-		return Err(format!(
-			"could not save talk groups to {}: {error}",
-			path.display()
-		));
-	}
-	Ok(())
+	crate::atomic_file::write(path, contents.as_bytes())
+		.map_err(|error| format!("could not save talk groups to {}: {error}", path.display()))
 }
 
 pub fn normalize_name(name: &str) -> String {
