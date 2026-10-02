@@ -781,6 +781,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 				.map_err(|e| e.to_string())?;
 			let mut transmit =
 				Transmit::new(mode, buttons.iter().map(|button| button.address.clone()));
+			transmit.set_groups(&groups);
 			// Open all inputs before any background workers start. A startup
 			// failure must not leave a connector or dashboard running.
 			let input = if buttons.is_empty() {
@@ -841,6 +842,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 					if last_update.is_none_or(|updated| updated.elapsed() >= interval) {
 						let config_error = match load_talk_groups(&groups_path) {
 							Ok(current) => {
+								transmit.set_groups(&current);
 								groups = current;
 								None
 							}
@@ -867,6 +869,8 @@ fn run(action: CliCommand) -> Result<(), String> {
 						};
 						let update = if groups.is_empty() && input.is_none() {
 							router.update(true)
+						} else if mode == Mode::SemiDuplex && !groups.is_empty() {
+							router.update_group_sources_in_groups(transmit.group_sources(), &groups)
 						} else {
 							router.update_sources_in_groups(&sources, &groups)
 						};

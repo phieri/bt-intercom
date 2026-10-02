@@ -253,6 +253,43 @@ pub fn desired_links_in_groups(
 		.collect()
 }
 
+/// Build routes only for sources granted a floor in the corresponding group.
+///
+/// With no configured groups, the `None` entry represents the shared floor.
+pub fn desired_links_by_group(
+	headsets: &BTreeMap<String, Headset>,
+	group_sources: &BTreeMap<Option<String>, BTreeSet<String>>,
+	groups: &[TalkGroup],
+) -> BTreeSet<Link> {
+	if groups.is_empty() {
+		let sources = group_sources.get(&None).cloned().unwrap_or_default();
+		return desired_links(headsets)
+			.into_iter()
+			.filter(|(output, _)| {
+				headsets.iter().any(|(address, headset)| {
+					sources.contains(address)
+						&& headset.sources.iter().any(|port| port.id == *output)
+				})
+			})
+			.collect();
+	}
+
+	groups
+		.iter()
+		.filter_map(|group| {
+			let sources = group_sources.get(&Some(group.name.clone()))?;
+			let links = desired_links_in_groups(headsets, std::slice::from_ref(group));
+			Some(links.into_iter().filter(move |(output, _)| {
+				headsets.iter().any(|(address, headset)| {
+					sources.contains(address)
+						&& headset.sources.iter().any(|port| port.id == *output)
+				})
+			}))
+		})
+		.flatten()
+		.collect()
+}
+
 /// Returns whether a headset's microphone has a live route to another headset.
 pub fn has_active_source_route(
 	address: &str,
@@ -385,17 +422,26 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 		sources: &BTreeSet<String>,
 		groups: &[TalkGroup],
 	) -> Result<BTreeMap<String, Headset>, String> {
+		let group_sources = if groups.is_empty() {
+			BTreeMap::from([(None, sources.clone())])
+		} else {
+			groups
+				.iter()
+				.map(|group| (Some(group.name.clone()), sources.clone()))
+				.collect()
+		};
+		self.update_group_sources_in_groups(&group_sources, groups)
+	}
+
+	/// Reconciles routes for sources granted a floor in each talk group.
+	pub fn update_group_sources_in_groups(
+		&mut self,
+		group_sources: &BTreeMap<Option<String>, BTreeSet<String>>,
+		groups: &[TalkGroup],
+	) -> Result<BTreeMap<String, Headset>, String> {
 		let snapshot = self.snapshot()?;
 		let (headsets, existing) = topology(&snapshot, &self.allowed)?;
-		let desired = desired_links_in_groups(&headsets, groups)
-			.into_iter()
-			.filter(|(output, _)| {
-				headsets.iter().any(|(address, headset)| {
-					sources.contains(address)
-						&& headset.sources.iter().any(|port| port.id == *output)
-				})
-			})
-			.collect::<BTreeSet<_>>();
+		let desired = desired_links_by_group(&headsets, group_sources, groups);
 		let mut failures = Vec::new();
 		let live = self.owned_links(&snapshot);
 		self.owned.retain(|link, (handle, started)| {
@@ -556,6 +602,31 @@ mod tests {
 		assert_eq!(
 			desired_links_in_groups(&headsets, &[]),
 			desired_links(&headsets)
+		);
+	}
+
+	#[test]
+	fn semi_duplex_routes_each_source_only_in_groups_where_it_holds_the_floor() {
+		let objects = [fixture(), headset(30, C)].concat();
+		let allowed = [A.to_string(), B.to_string(), C.to_string()].into();
+		let (headsets, _) = topology(&json!(objects), &allowed).unwrap();
+		let groups = [
+			TalkGroup {
+				name: "North".into(),
+				members: [A.to_string(), B.to_string()].into(),
+			},
+			TalkGroup {
+				name: "South".into(),
+				members: [A.to_string(), B.to_string(), C.to_string()].into(),
+			},
+		];
+		let sources = BTreeMap::from([
+			(Some("North".into()), [A.to_string()].into()),
+			(Some("South".into()), [C.to_string()].into()),
+		]);
+		assert_eq!(
+			desired_links_by_group(&headsets, &sources, &groups),
+			[(13, 24), (13, 25), (33, 14), (33, 15), (33, 24), (33, 25),].into()
 		);
 	}
 

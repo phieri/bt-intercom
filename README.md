@@ -7,7 +7,8 @@ audio. Each headset microphone routes to other configured headsets in its talk
 groups, never back to itself. With no talk groups configured, all headsets share
 the original all-to-all intercom. By default all microphones are live; optional
 push-to-talk (PTT) keeps them muted until a headset button is held. Semi-duplex
-queues talk requests and allows only one headset microphone at a time.
+queues talk requests and allows only one headset microphone per talk group at a
+time.
 
 [Watch the illustrative CLI demo](https://phieri.github.io/rpi-intercom/).
 
@@ -213,9 +214,12 @@ are required for every headset. Hold play/pause to request a turn: if another
 headset is transmitting, your request waits in first-in, first-out order.
 Keep holding while queued and wait for the double beep before talking.
 Releasing the button cancels a queued request or ends your turn, allowing the
-next waiting headset to transmit. Triple presses do not enable always-open
-microphones in semi-duplex. The queue is shared across the entire intercom,
-including separate talk groups; group membership still limits who hears you.
+next waiting headset in that group to transmit. Each configured talk group has
+an independent queue, so separate groups can have active talkers at the same
+time. A headset in multiple groups requests a turn in each and is routed only
+to groups where it currently holds the floor. With no talk groups configured,
+all headsets share one queue. Triple presses do not enable always-open
+microphones in semi-duplex.
 Semi-duplex routing failures stop the run and release its owned links rather
 than risk leaving the previous talker active. Existing external links remain
 untouched, so exclusivity applies only to routes managed by this process.
