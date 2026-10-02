@@ -33,11 +33,10 @@ previously saved network is restored.
 Write shell completion definitions to standard output. Supported shells include
 Bash, Zsh, Fish, and Elvish.
 .TP
-.B gui
-Open the optional graphical control panel to monitor headsets and edit talk
-groups. Available only in builds compiled with the
-.B gui
-feature.
+.B tui
+Open the Ratatui terminal control panel to monitor headsets and edit talk
+groups. Use Tab and arrow keys to navigate; press n to add a group, d to remove
+the selected group, and Space to toggle headset membership.
 .SH OPTIONS
 .TP
 .BI scan " --seconds SECONDS"
@@ -58,8 +57,6 @@ are used.
 Show the live terminal dashboard on standard error. Requires an interactive
 terminal.
 .TP
-.B cargo install --path . --locked --features gui
-Build and install the optional Iced control panel.
 .TP
 .B -h, --help
 Show command help.

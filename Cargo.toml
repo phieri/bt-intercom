@@ -17,9 +17,6 @@ log = "0.4.34"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm_0_29"] }
 serde_json = "1.0.151"
 
-[features]
-gui = []
-
 [package.metadata.deb]
 section = "utils"
 priority = "optional"

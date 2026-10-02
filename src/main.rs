@@ -10,8 +10,7 @@ mod dashboard;
 mod groups;
 mod router;
 
-#[cfg(feature = "gui")]
-mod gui;
+mod tui;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
@@ -98,9 +97,8 @@ enum CliCommand {
 		#[arg(value_enum)]
 		shell: Shell,
 	},
-	/// Open the graphical headset and talk-group control panel.
-	#[cfg(feature = "gui")]
-	Gui,
+	/// Open the terminal headset and talk-group control panel.
+	Tui,
 }
 
 /// Runs a command with captured output and a deadline.
@@ -611,11 +609,10 @@ fn reconnect_worker(
 /// Executes one CLI action, including the main polling and routing loop.
 fn run(action: CliCommand) -> Result<(), String> {
 	match action {
-		#[cfg(feature = "gui")]
-		CliCommand::Gui => {
+		CliCommand::Tui => {
 			let network_path = headset_network_path()?;
 			let allowed = load_headsets(&network_path)?;
-			gui::run(allowed, talk_groups_path(&network_path)?)?;
+			tui::run(allowed, talk_groups_path(&network_path)?)?;
 		}
 		CliCommand::Scan { seconds } => {
 			print!(

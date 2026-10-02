@@ -3,14 +3,10 @@
 //! Persistent talk-group configuration.
 
 use std::collections::BTreeSet;
-use std::fs;
-#[cfg(any(feature = "gui", test))]
-use std::fs::File;
-#[cfg(any(feature = "gui", test))]
+use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-#[cfg(any(feature = "gui", test))]
 use serde_json::json;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -89,7 +85,6 @@ pub fn load(path: &Path) -> Result<Vec<TalkGroup>, String> {
 	Ok(groups)
 }
 
-#[cfg(any(feature = "gui", test))]
 pub fn save(path: &Path, groups: &[TalkGroup]) -> Result<(), String> {
 	let mut names = BTreeSet::new();
 	for group in groups {
