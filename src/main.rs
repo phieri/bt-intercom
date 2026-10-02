@@ -7,7 +7,11 @@
 
 mod bluez;
 mod dashboard;
+mod groups;
 mod router;
+
+#[cfg(feature = "gui")]
+mod gui;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
@@ -27,6 +31,7 @@ use bluez::{bluetooth_name, device_flag};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 use dashboard::Dashboard;
+use groups::{TalkGroup, config_path as talk_groups_path, load as load_talk_groups};
 use router::{Headset, Router, has_active_intercom_connection, has_active_source_route};
 
 const PTT_BEEP_WAV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ptt-beep.wav"));

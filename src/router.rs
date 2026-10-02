@@ -14,6 +14,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 use crate::command;
+use crate::groups::TalkGroup;
 
 /// A directed PipeWire link, represented as `(output_port_id, input_port_id)`.
 type Link = (u64, u64);
@@ -214,6 +215,44 @@ pub fn desired_links(headsets: &BTreeMap<String, Headset>) -> BTreeSet<Link> {
 	desired
 }
 
+/// Build routes only between headset pairs that share a talk group.
+///
+/// An empty group list retains the original all-to-all behavior.
+pub fn desired_links_in_groups(
+	headsets: &BTreeMap<String, Headset>,
+	groups: &[TalkGroup],
+) -> BTreeSet<Link> {
+	if groups.is_empty() {
+		return desired_links(headsets);
+	}
+	let allowed_pairs: BTreeSet<_> = groups
+		.iter()
+		.flat_map(|group| {
+			group.members.iter().flat_map(|source| {
+				group
+					.members
+					.iter()
+					.filter(move |sink| *sink != source)
+					.map(move |sink| (source.clone(), sink.clone()))
+			})
+		})
+		.collect();
+	let desired = desired_links(headsets);
+	desired
+		.into_iter()
+		.filter(|(output, input)| {
+			headsets.iter().any(|(source_address, source)| {
+				source.sources.iter().any(|port| port.id == *output)
+					&& headsets.iter().any(|(sink_address, sink)| {
+						sink.sinks.iter().any(|port| port.id == *input)
+							&& allowed_pairs
+								.contains(&(source_address.clone(), sink_address.clone()))
+					})
+			})
+		})
+		.collect()
+}
+
 /// Returns whether a headset's microphone has a live route to another headset.
 pub fn has_active_source_route(
 	address: &str,
@@ -337,9 +376,18 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 		&mut self,
 		sources: &BTreeSet<String>,
 	) -> Result<BTreeMap<String, Headset>, String> {
+		self.update_sources_in_groups(sources, &[])
+	}
+
+	/// Reconciles routes from the specified microphones within shared groups.
+	pub fn update_sources_in_groups(
+		&mut self,
+		sources: &BTreeSet<String>,
+		groups: &[TalkGroup],
+	) -> Result<BTreeMap<String, Headset>, String> {
 		let snapshot = self.snapshot()?;
 		let (headsets, existing) = topology(&snapshot, &self.allowed)?;
-		let desired = desired_links(&headsets)
+		let desired = desired_links_in_groups(&headsets, groups)
 			.into_iter()
 			.filter(|(output, _)| {
 				headsets.iter().any(|(address, headset)| {
