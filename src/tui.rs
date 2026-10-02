@@ -7,7 +7,7 @@ use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -31,7 +31,7 @@ struct HeadsetStatus {
 	rssi: Option<i32>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
 	Groups,
 	Members,
@@ -189,7 +189,7 @@ impl ControlPanel {
 	}
 
 	fn render(&self, frame: &mut Frame<'_>) {
-		let areas = Layout::vertical([
+		let areas: [ratatui::layout::Rect; 3] = Layout::vertical([
 			Constraint::Length(3),
 			Constraint::Min(8),
 			Constraint::Length(3),
@@ -201,8 +201,9 @@ impl ControlPanel {
 			areas[0],
 		);
 
-		let sections = Layout::vertical([Constraint::Percentage(55), Constraint::Percentage(45)])
-			.areas(areas[1]);
+		let sections: [ratatui::layout::Rect; 2] =
+			Layout::vertical([Constraint::Percentage(55), Constraint::Percentage(45)])
+				.areas(areas[1]);
 		let rows: Vec<Row<'_>> = self
 			.allowed
 			.iter()
@@ -254,8 +255,9 @@ impl ControlPanel {
 		);
 		frame.render_widget(table, sections[0]);
 
-		let lower = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
-			.areas(sections[1]);
+		let lower: [ratatui::layout::Rect; 2] =
+			Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
+				.areas(sections[1]);
 		let group_items: Vec<ListItem<'_>> = self
 			.groups
 			.iter()
@@ -476,4 +478,36 @@ fn poll_status(allowed: &BTreeSet<String>) -> Result<BTreeMap<String, HeadsetSta
 		);
 	}
 	Ok(statuses)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn keyboard_controls_persist_group_membership_and_removal() {
+		let path = std::env::temp_dir()
+			.join(format!("rpi-intercom-tui-{}", std::process::id()))
+			.join("talk-groups.json");
+		let _ = std::fs::remove_dir_all(path.parent().unwrap());
+		let address = "AA:BB:CC:DD:EE:01".to_string();
+		let mut panel = ControlPanel::new([address.clone()].into(), path.clone()).unwrap();
+
+		assert!(!panel.handle_key(KeyCode::Char('n')));
+		for character in "Dispatch".chars() {
+			panel.handle_key(KeyCode::Char(character));
+		}
+		panel.handle_key(KeyCode::Enter);
+		assert_eq!(panel.groups[0].name, "Dispatch");
+		assert_eq!(panel.focus, Focus::Members);
+		panel.handle_key(KeyCode::Char(' '));
+		assert!(panel.groups[0].members.contains(&address));
+		assert_eq!(load(&path).unwrap(), panel.groups);
+
+		panel.handle_key(KeyCode::Tab);
+		panel.handle_key(KeyCode::Char('d'));
+		assert!(panel.groups.is_empty());
+		assert!(load(&path).unwrap().is_empty());
+		let _ = std::fs::remove_dir_all(path.parent().unwrap());
+	}
 }
