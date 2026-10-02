@@ -10,6 +10,7 @@ mod bluez;
 mod dashboard;
 mod groups;
 mod router;
+mod transmit;
 
 mod tui;
 
@@ -33,6 +34,7 @@ use clap_complete::Shell;
 use dashboard::Dashboard;
 use groups::{config_path as talk_groups_path, load as load_talk_groups};
 use router::{Headset, Router, has_active_intercom_connection, has_active_source_route};
+use transmit::{Mode, Transmit};
 
 const PTT_BEEP_WAV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ptt-beep.wav"));
 
@@ -94,6 +96,15 @@ enum CliCommand {
 		/// Map a headset address to an evdev input path; repeat once per headset.
 		#[arg(long, value_name = "ADDRESS=/dev/input/eventX", value_parser = parse_ptt_binding)]
 		ptt: Vec<PttButton>,
+		/// Transmit policy. Semi-duplex requires --ptt for every headset:
+		/// hold play/pause to request the FIFO floor; release to cancel/relinquish.
+		/// Full-duplex mappings start in PTT; three play/pause presses within
+		/// 1 second (first to third, inclusive; release between presses) toggle
+		/// that headset independently between PTT and always open.
+		/// Without mappings full-duplex is always open. Disconnected mapped
+		/// headsets reset to PTT and require a fresh press after reconnection.
+		#[arg(long, value_enum, default_value_t = Mode::FullDuplex)]
+		mode: Mode,
 		/// Show the live terminal dashboard.
 		#[arg(long)]
 		dashboard: bool,
@@ -386,7 +397,7 @@ fn addresses(args: &[String]) -> Result<BTreeSet<String>, String> {
 const KEY_PLAYPAUSE: u16 = 164;
 
 /// A button state update or an input-device failure.
-type PttEvent = Result<(String, bool), String>;
+type PttEvent = Result<(String, bool, Instant), String>;
 
 /// WAV feedback played to the headset whose microphone became active.
 struct PttBeep {
@@ -436,32 +447,56 @@ impl Drop for PttBeep {
 }
 
 fn confirm_transmissions(
-	pending: &mut BTreeSet<String>,
+	mode: Mode,
+	transmit: &mut Transmit,
+	input: &Receiver<PttEvent>,
 	headsets: &BTreeMap<String, Headset>,
 	links: &BTreeSet<(u64, u64)>,
 	beep: Option<&PttBeep>,
 	stopped: &AtomicBool,
-) {
-	let ready = pending
+) -> Result<bool, String> {
+	let ready = transmit
+		.pending
 		.iter()
 		.filter_map(|address| {
 			let headset = headsets.get(address)?;
-			has_active_source_route(address, headsets, links)
-				.then(|| (address.clone(), headset.speaker_node()))
+			(transmit.sources().contains(address)
+				&& has_active_source_route(address, headsets, links))
+			.then(|| (address.clone(), headset.speaker_node()))
 		})
 		.collect::<Vec<_>>();
 	for (address, speaker_node) in ready {
-		pending.remove(&address);
+		// Playback itself can block, so re-check input before *each* beep.
+		if drain_ptt(input, transmit)? || stopped.load(Ordering::SeqCst) {
+			return Ok(true);
+		}
 		let Some(speaker_node) = speaker_node else {
-			log::warn!("Could not play PTT confirmation for {address}: no speaker node");
+			let error = format!("could not play PTT confirmation for {address}: no speaker node");
+			if mode == Mode::SemiDuplex {
+				return Err(error);
+			}
+			log::warn!("{error}");
 			continue;
 		};
-		if let Some(beep) = beep
-			&& let Err(error) = beep.play(speaker_node, stopped)
-		{
-			log::warn!("Could not play PTT confirmation for {address}: {error}");
+		let result = beep
+			.ok_or_else(|| "confirmation beep is unavailable".to_string())
+			.and_then(|beep| beep.play(speaker_node, stopped));
+		match result {
+			Ok(()) => {
+				transmit.pending.remove(&address);
+			}
+			Err(_error) if stopped.load(Ordering::SeqCst) => return Ok(true),
+			Err(error) if mode == Mode::SemiDuplex => {
+				return Err(format!(
+					"could not play PTT confirmation for {address}: {error}"
+				));
+			}
+			Err(error) => {
+				log::warn!("Could not play PTT confirmation for {address}: {error}");
+			}
 		}
 	}
+	Ok(false)
 }
 
 fn confirm_connections(
@@ -510,6 +545,53 @@ fn validate_ptt(buttons: &[PttButton], allowed: &BTreeSet<String>) -> Result<(),
 	Ok(())
 }
 
+fn validate_mode(
+	mode: Mode,
+	buttons: &[PttButton],
+	allowed: &BTreeSet<String>,
+) -> Result<(), String> {
+	validate_ptt(buttons, allowed)?;
+	if mode == Mode::SemiDuplex && buttons.is_empty() {
+		return Err("--mode semi-duplex requires --ptt for every headset".into());
+	}
+	Ok(())
+}
+
+/// Drain timestamped transitions before selecting sources and again after slow
+/// routing work, so a released/cancelled request never earns a stale beep.
+fn drain_ptt(input: &Receiver<PttEvent>, transmit: &mut Transmit) -> Result<bool, String> {
+	let mut changed = false;
+	loop {
+		match input.try_recv() {
+			Ok(Ok((address, pressed, at))) => {
+				changed |= transmit.event(&address, pressed, at);
+			}
+			Ok(Err(error)) => return Err(error),
+			Err(TryRecvError::Empty) => return Ok(changed),
+			Err(TryRecvError::Disconnected) => return Err("PTT input closed".into()),
+		}
+	}
+}
+
+/// A failed snapshot can leave the previous floor's owned routes untouched.
+/// Fail closed before inspection/confirmation in semi-duplex; preserve the
+/// existing non-fatal update warnings in full-duplex.
+fn guard_semi_update<T>(
+	mode: Mode,
+	update: &Result<T, String>,
+	close_owned: impl FnOnce(),
+) -> Result<(), String> {
+	if mode == Mode::SemiDuplex
+		&& let Err(error) = update
+	{
+		close_owned();
+		return Err(format!(
+			"Semi-duplex routing failed; released owned links and stopped to prevent an unsafe floor handoff: {error}"
+		));
+	}
+	Ok(())
+}
+
 /// Reads evdev records, forwarding only play/pause press and release transitions.
 fn ptt_input_from<R: Read>(mut input: R, address: String, sender: mpsc::Sender<PttEvent>) {
 	let mut pressed = false;
@@ -520,6 +602,7 @@ fn ptt_input_from<R: Read>(mut input: R, address: String, sender: mpsc::Sender<P
 			let _ = sender.send(Err(format!("PTT input for {address} closed: {error}")));
 			break;
 		}
+		let at = Instant::now();
 		let event_type = u16::from_ne_bytes([event[offset], event[offset + 1]]);
 		let event_key = u16::from_ne_bytes([event[offset + 2], event[offset + 3]]);
 		let value = i32::from_ne_bytes(event[offset + 4..offset + 8].try_into().unwrap());
@@ -531,7 +614,7 @@ fn ptt_input_from<R: Read>(mut input: R, address: String, sender: mpsc::Sender<P
 			let next = value == 1;
 			if next != pressed {
 				pressed = next;
-				if sender.send(Ok((address.clone(), pressed))).is_err() {
+				if sender.send(Ok((address.clone(), pressed, at))).is_err() {
 					break;
 				}
 			}
@@ -673,10 +756,11 @@ fn run(action: CliCommand) -> Result<(), String> {
 			interval,
 			connect,
 			ptt: buttons,
+			mode,
 			dashboard: show_dashboard,
 		} => {
 			let mut allowed = devices.into_iter().collect();
-			validate_ptt(&buttons, &allowed)?;
+			validate_mode(mode, &buttons, &allowed)?;
 			let interval = Duration::from_secs_f64(interval);
 			if show_dashboard && !std::io::stderr().is_terminal() {
 				return Err("--dashboard requires an interactive terminal on stderr".into());
@@ -687,7 +771,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 				save_headsets(&network_path, &allowed)?;
 			} else {
 				allowed = load_headsets(&network_path)?;
-				validate_ptt(&buttons, &allowed)?;
+				validate_mode(mode, &buttons, &allowed)?;
 			}
 			let groups_path = talk_groups_path(&network_path)?;
 			let mut groups = load_talk_groups(&groups_path)?;
@@ -695,6 +779,15 @@ fn run(action: CliCommand) -> Result<(), String> {
 			let signal = Arc::clone(&stopped);
 			ctrlc::set_handler(move || signal.store(true, Ordering::SeqCst))
 				.map_err(|e| e.to_string())?;
+			let mut transmit =
+				Transmit::new(mode, buttons.iter().map(|button| button.address.clone()));
+			// Open all inputs before any background workers start. A startup
+			// failure must not leave a connector or dashboard running.
+			let input = if buttons.is_empty() {
+				None
+			} else {
+				Some(ptt_input(buttons)?)
+			};
 			let mut router = Router::new(allowed);
 			let mut dashboard = show_dashboard
 				.then(|| Dashboard::start(router.allowed.clone(), Arc::clone(&stopped)));
@@ -718,11 +811,6 @@ fn run(action: CliCommand) -> Result<(), String> {
 			} else {
 				None
 			};
-			let input = if buttons.is_empty() {
-				None
-			} else {
-				Some(ptt_input(buttons)?)
-			};
 			let beep = match PttBeep::new() {
 				Ok(beep) => Some(beep),
 				Err(error) => {
@@ -730,47 +818,25 @@ fn run(action: CliCommand) -> Result<(), String> {
 					None
 				}
 			};
-			let mut transmitting = input.is_none();
-			let mut active_sources = BTreeSet::new();
-			let mut pending_confirmations = BTreeSet::new();
 			let mut connected_headsets = BTreeSet::new();
 			if input.is_some() {
-				log::info!(
-					"PTT: Hold your headset's play/pause button to transmit; release to mute."
-				);
+				match mode {
+					Mode::SemiDuplex => log::info!(
+						"Semi-duplex: Hold play/pause to request the FIFO floor; release to cancel or relinquish. Double beep confirms a ready route."
+					),
+					Mode::FullDuplex => log::info!(
+						"Full-duplex: Hold play/pause to transmit; release to mute. Three presses within 1 second (first to third, inclusive) toggle this headset's PTT/always-open mode."
+					),
+				}
 			}
 			let mut last_update: Option<Instant> = None;
 			let result: Result<(), String> = (|| {
 				while !stopped.load(Ordering::SeqCst) {
-					if let Some(ref input) = input {
-						loop {
-							match input.try_recv() {
-								Ok(Ok((address, state))) => {
-									if state {
-										if active_sources.insert(address.clone()) {
-											pending_confirmations.insert(address.clone());
-										}
-									} else {
-										active_sources.remove(&address);
-										pending_confirmations.remove(&address);
-									}
-									transmitting = !active_sources.is_empty();
-									last_update = None;
-									redraw = true;
-									if dashboard.is_none() {
-										log::info!(
-											"PTT {address}: {}",
-											if state { "transmitting" } else { "muted" }
-										);
-									}
-								}
-								Ok(Err(error)) => return Err(error),
-								Err(TryRecvError::Empty) => break,
-								Err(TryRecvError::Disconnected) => {
-									return Err("PTT input closed".into());
-								}
-							}
-						}
+					if let Some(ref input) = input
+						&& drain_ptt(input, &mut transmit)?
+					{
+						last_update = None;
+						redraw = true;
 					}
 					if last_update.is_none_or(|updated| updated.elapsed() >= interval) {
 						let config_error = match load_talk_groups(&groups_path) {
@@ -780,8 +846,22 @@ fn run(action: CliCommand) -> Result<(), String> {
 							}
 							Err(error) => Some(error),
 						};
+						// Retire a disconnected floor/queued request before selecting
+						// the next sources. Only successful snapshots prove absence.
+						if let Some(ref input) = input {
+							let snapshot = router.inspect_owned();
+							drain_ptt(input, &mut transmit)?;
+							if let Ok((current, _)) = snapshot {
+								let available = current
+									.iter()
+									.filter(|(_, headset)| headset.has_duplex_audio())
+									.map(|(address, _)| address.clone())
+									.collect();
+								transmit.topology(&available);
+							}
+						}
 						let sources = if input.is_some() {
-							active_sources.clone()
+							transmit.sources().clone()
 						} else {
 							router.allowed.clone()
 						};
@@ -790,39 +870,55 @@ fn run(action: CliCommand) -> Result<(), String> {
 						} else {
 							router.update_sources_in_groups(&sources, &groups)
 						};
-						if dashboard.is_some() {
-							let mut inspect_error = None;
-							match router.inspect_owned() {
-								Ok((current, active)) => {
-									headsets = current;
-									links = active;
-									if input.is_some() {
-										confirm_transmissions(
-											&mut pending_confirmations,
+						guard_semi_update(mode, &update, || router.close())?;
+						let mut inspect_error = None;
+						let mut changed = false;
+						match router.inspect_owned() {
+							Ok((current, active)) => {
+								headsets = current;
+								links = active;
+								if let Some(ref input) = input {
+									let available = headsets
+										.iter()
+										.filter(|(_, headset)| headset.has_duplex_audio())
+										.map(|(address, _)| address.clone())
+										.collect();
+									changed |= drain_ptt(input, &mut transmit)?;
+									changed |= transmit.topology(&available);
+									if !changed {
+										changed |= confirm_transmissions(
+											mode,
+											&mut transmit,
+											input,
 											&headsets,
 											&links,
 											beep.as_ref(),
 											&stopped,
-										);
-									} else {
-										confirm_connections(
-											&mut connected_headsets,
-											&headsets,
-											&links,
-											beep.as_ref(),
-											&stopped,
-										);
+										)?;
 									}
-								}
-								Err(error) => {
-									headsets.clear();
-									links.clear();
-									inspect_error = Some(error);
+								} else {
+									confirm_connections(
+										&mut connected_headsets,
+										&headsets,
+										&links,
+										beep.as_ref(),
+										&stopped,
+									);
 								}
 							}
+							Err(error) => {
+								headsets.clear();
+								links.clear();
+								inspect_error = Some(error);
+							}
+						}
+						if dashboard.is_some() {
 							last_error = config_error.or_else(|| update.err()).or(inspect_error);
 							redraw = true;
 						} else {
+							if let Some(error) = inspect_error {
+								log::warn!("Routing inspection failed: {error}");
+							}
 							if let Some(error) = config_error {
 								log::warn!("Talk-group configuration unavailable: {error}");
 							}
@@ -840,29 +936,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 								Err(error) => log::warn!("Routing update failed: {error}"),
 							}
 						}
-						if dashboard.is_none()
-							&& (input.is_none() || !pending_confirmations.is_empty())
-							&& let Ok((current, active)) = router.inspect_owned()
-						{
-							if input.is_some() {
-								confirm_transmissions(
-									&mut pending_confirmations,
-									&current,
-									&active,
-									beep.as_ref(),
-									&stopped,
-								);
-							} else {
-								confirm_connections(
-									&mut connected_headsets,
-									&current,
-									&active,
-									beep.as_ref(),
-									&stopped,
-								);
-							}
-						}
-						last_update = Some(Instant::now());
+						last_update = (!changed).then(Instant::now);
 					}
 					if let Some(ref mut dashboard) = dashboard {
 						redraw |= dashboard.refresh();
@@ -872,7 +946,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 									&router.allowed,
 									&headsets,
 									&links,
-									transmitting,
+									input.is_none() || !transmit.sources().is_empty(),
 									last_error.as_deref(),
 									&mut std::io::stderr().lock(),
 								)
@@ -1102,10 +1176,17 @@ mod tests {
 	fn parses_ptt_without_changing_default_mode() {
 		let address = "AA:BB:CC:DD:EE:01".to_string();
 		let default = Cli::try_parse_from(["rpi-intercom", "run", address.as_str()]).unwrap();
-		let CliCommand::Run { ptt, dashboard, .. } = default.command else {
+		let CliCommand::Run {
+			ptt,
+			mode,
+			dashboard,
+			..
+		} = default.command
+		else {
 			panic!("expected run command");
 		};
 		assert!(ptt.is_empty());
+		assert_eq!(mode, Mode::FullDuplex);
 		assert!(!dashboard);
 
 		let binding = format!("{address}=/dev/input/event4");
@@ -1134,6 +1215,173 @@ mod tests {
 		assert_eq!(ptt.len(), 1);
 		assert_eq!(ptt[0].path, "/dev/input/event4");
 		assert_eq!(ptt[0].address, "AA:BB:CC:DD:EE:01");
+	}
+
+	#[test]
+	fn mode_parsing_validation_and_documented_window() {
+		for (name, expected) in [
+			("semi-duplex", Mode::SemiDuplex),
+			("full-duplex", Mode::FullDuplex),
+		] {
+			let cli = Cli::try_parse_from(["rpi-intercom", "run", "--mode", name]).unwrap();
+			let CliCommand::Run { mode, .. } = cli.command else {
+				panic!("expected run");
+			};
+			assert_eq!(mode, expected);
+		}
+		assert!(Cli::try_parse_from(["rpi-intercom", "run", "--mode", "half"]).is_err());
+		let allowed = BTreeSet::from(["AA:BB:CC:DD:EE:01".into()]);
+		assert!(validate_mode(Mode::FullDuplex, &[], &allowed).is_ok());
+		assert!(validate_mode(Mode::SemiDuplex, &[], &allowed).is_err());
+		assert!(validate_mode(Mode::SemiDuplex, &[], &BTreeSet::new()).is_err());
+		let buttons = [PttButton {
+			address: "AA:BB:CC:DD:EE:01".into(),
+			path: "/dev/input/event1".into(),
+		}];
+		assert!(validate_mode(Mode::SemiDuplex, &buttons, &allowed).is_ok());
+		let two = BTreeSet::from(["AA:BB:CC:DD:EE:01".into(), "AA:BB:CC:DD:EE:02".into()]);
+		assert!(validate_mode(Mode::SemiDuplex, &buttons, &two).is_err());
+		let mut command = Cli::command();
+		let help = command
+			.find_subcommand_mut("run")
+			.unwrap()
+			.render_long_help()
+			.to_string();
+		assert!(help.contains("1 second"));
+		assert!(help.contains("first to third, inclusive"));
+	}
+
+	#[test]
+	fn semi_update_failure_closes_owned_clients_before_returning_fatal_error() {
+		let mut owned_clients_closed = false;
+		let update: Result<(), String> = Err("pw-dump timed out".into());
+		let result = guard_semi_update(Mode::SemiDuplex, &update, || {
+			owned_clients_closed = true;
+		});
+		assert!(owned_clients_closed);
+		let error = result.unwrap_err();
+		assert!(error.contains("released owned links"));
+		assert!(error.contains("unsafe floor handoff"));
+		assert!(error.contains("pw-dump timed out"));
+	}
+
+	#[test]
+	fn full_update_failure_remains_nonfatal_and_success_keeps_owned_clients() {
+		for (mode, update) in [
+			(Mode::FullDuplex, Err("snapshot unavailable".into())),
+			(Mode::FullDuplex, Ok(())),
+			(Mode::SemiDuplex, Ok(())),
+		] {
+			assert!(
+				guard_semi_update(mode, &update, || {
+					panic!("must not close clients for a successful update or full-duplex warning")
+				})
+				.is_ok()
+			);
+		}
+	}
+
+	#[test]
+	fn confirmations_require_a_granted_source_and_owned_live_route() {
+		use serde_json::json;
+		let a = "AA:BB:CC:DD:EE:01";
+		let b = "AA:BB:CC:DD:EE:02";
+		let mut objects = Vec::new();
+		for (base, address) in [(10, a), (20, b)] {
+			objects.extend([
+				json!({"type":"PipeWire:Interface:Device","id":base,"info":{"props":{"api.bluez5.address":address}}}),
+				json!({"type":"PipeWire:Interface:Node","id":base+1,"info":{"props":{"device.id":base.to_string(),"media.class":"Audio/Source","api.bluez5.profile":"headset-head-unit"}}}),
+				json!({"type":"PipeWire:Interface:Node","id":base+2,"info":{"props":{"device.id":base.to_string(),"media.class":"Audio/Sink","api.bluez5.profile":"headset-head-unit"}}}),
+				json!({"type":"PipeWire:Interface:Port","id":base+3,"info":{"props":{"node.id":(base+1).to_string(),"port.direction":"out","audio.channel":"MONO"}}}),
+				json!({"type":"PipeWire:Interface:Port","id":base+4,"info":{"props":{"node.id":(base+2).to_string(),"port.direction":"in","audio.channel":"MONO"}}}),
+			]);
+		}
+		let allowed = BTreeSet::from([a.into(), b.into()]);
+		let (headsets, _) = router::topology(&json!(objects), &allowed).unwrap();
+		let stopped = AtomicBool::new(false);
+		let mut transmit = Transmit::new(Mode::SemiDuplex, allowed);
+		let now = Instant::now();
+		transmit.event(a, true, now);
+		transmit.event(b, true, now);
+		let (sender, input) = mpsc::channel();
+		// A queued microphone's live route (or an incoming-only route to the
+		// floor holder) must not earn a confirmation.
+		confirm_transmissions(
+			Mode::SemiDuplex,
+			&mut transmit,
+			&input,
+			&headsets,
+			&BTreeSet::from([(23, 14)]),
+			None,
+			&stopped,
+		)
+		.unwrap();
+		assert_eq!(transmit.pending, BTreeSet::from([a.into()]));
+		confirm_transmissions(
+			Mode::SemiDuplex,
+			&mut transmit,
+			&input,
+			&headsets,
+			&BTreeSet::new(),
+			None,
+			&stopped,
+		)
+		.unwrap();
+		assert_eq!(transmit.pending, BTreeSet::from([a.into()]));
+		assert_eq!(
+			confirm_transmissions(
+				Mode::SemiDuplex,
+				&mut transmit,
+				&input,
+				&headsets,
+				&BTreeSet::from([(13, 24)]),
+				None,
+				&stopped,
+			),
+			Err("could not play PTT confirmation for AA:BB:CC:DD:EE:01: confirmation beep is unavailable".into())
+		);
+		assert_eq!(transmit.pending, BTreeSet::from([a.into()]));
+		// Release arriving during routing retires the old grant and defers
+		// confirmation of the next source until its own routing update.
+		sender
+			.send(Ok((a.into(), false, now + Duration::from_millis(1))))
+			.unwrap();
+		transmit.pending.insert(a.into());
+		assert!(
+			confirm_transmissions(
+				Mode::SemiDuplex,
+				&mut transmit,
+				&input,
+				&headsets,
+				&BTreeSet::from([(13, 24)]),
+				None,
+				&stopped
+			)
+			.unwrap()
+		);
+		assert_eq!(transmit.sources(), &BTreeSet::from([b.into()]));
+		assert_eq!(transmit.pending, BTreeSet::from([b.into()]));
+	}
+
+	#[test]
+	fn draining_delayed_input_uses_capture_timestamps_not_processing_time() {
+		let mut transmit = Transmit::new(Mode::FullDuplex, ["a".into()]);
+		let now = Instant::now();
+		let (sender, input) = mpsc::channel();
+		for ms in [0, 500, 1001] {
+			sender
+				.send(Ok(("a".into(), true, now + Duration::from_millis(ms))))
+				.unwrap();
+			sender
+				.send(Ok(("a".into(), false, now + Duration::from_millis(ms + 1))))
+				.unwrap();
+		}
+		assert!(drain_ptt(&input, &mut transmit).unwrap());
+		assert!(transmit.sources().is_empty());
+		assert!(transmit.pending.is_empty());
+		assert!(!drain_ptt(&input, &mut transmit).unwrap());
+		sender.send(Err("lost input".into())).unwrap();
+		assert_eq!(drain_ptt(&input, &mut transmit), Err("lost input".into()));
 	}
 
 	#[test]
@@ -1216,8 +1464,11 @@ mod tests {
 		let (sender, receiver) = mpsc::channel();
 		ptt_input_from(std::io::Cursor::new(events), "headset".into(), sender);
 
-		assert_eq!(receiver.recv().unwrap().unwrap(), ("headset".into(), true));
-		assert_eq!(receiver.recv().unwrap().unwrap(), ("headset".into(), false));
+		let (address, pressed, press_at) = receiver.recv().unwrap().unwrap();
+		assert_eq!((address, pressed), ("headset".into(), true));
+		let (address, pressed, release_at) = receiver.recv().unwrap().unwrap();
+		assert_eq!((address, pressed), ("headset".into(), false));
+		assert!(release_at >= press_at);
 		assert!(receiver.recv().unwrap().is_err());
 		assert!(matches!(
 			receiver.try_recv(),
