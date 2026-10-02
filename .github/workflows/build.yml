@@ -49,7 +49,7 @@ jobs:
         run: cross build --release --locked --target ${{ matrix.target }}
       - name: Build Debian and RPM packages
         run: |
-          cargo deb --no-build --target ${{ matrix.target }}
+          cargo deb --no-build --no-strip --target ${{ matrix.target }}
           cargo generate-rpm --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v7
         with:

@@ -18,7 +18,7 @@ serde_json = "1.0.151"
 [package.metadata.deb]
 section = "utils"
 priority = "optional"
-depends = "$auto, bluez, pipewire, pipewire-bin, wireplumber, libspa-0.2-bluetooth"
+depends = "libc6, libgcc-s1, bluez, pipewire, pipewire-bin, wireplumber, libspa-0.2-bluetooth"
 assets = [
     "$auto",
     ["packaging/rpi-intercom.service", "usr/lib/systemd/user/", "644"],
