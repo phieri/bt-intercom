@@ -1,0 +1,27 @@
+#include <tunables/global>
+
+profile rpi-intercom /usr/bin/rpi-intercom {
+  #include <abstractions/base>
+
+  /usr/bin/rpi-intercom mr,
+  /usr/bin/bluetoothctl ix,
+  /usr/bin/pw-dump ix,
+  /usr/bin/pw-cli ix,
+  /usr/bin/pw-play ix,
+
+  /run/dbus/system_bus_socket rw,
+  dbus (send, receive) bus=system peer=(name=org.bluez),
+  dbus (send, receive) bus=system peer=(name=org.freedesktop.DBus),
+
+  /run/user/[0-9]*/pipewire-0 rw,
+
+  @{HOME}/.config/ r,
+  @{HOME}/.config/rpi-intercom/ rw,
+  @{HOME}/.config/rpi-intercom/headsets rwk,
+  @{HOME}/.config/rpi-intercom/headsets.* rwk,
+
+  /run/user/[0-9]*/rpi-intercom-ptt-*.wav rw,
+  /tmp/rpi-intercom-ptt-*.wav rw,
+
+  /dev/input/event[0-9]* r,
+}

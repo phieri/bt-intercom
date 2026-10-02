@@ -21,6 +21,7 @@ priority = "optional"
 depends = "libc6, libgcc-s1, bluez, pipewire, pipewire-bin, wireplumber, libspa-0.2-bluetooth"
 assets = [
     "$auto",
+    ["packaging/usr.bin.rpi-intercom", "etc/apparmor.d/", "644"],
     ["packaging/rpi-intercom.service", "usr/lib/systemd/user/", "644"],
     ["man/rpi-intercom.1", "usr/share/man/man1/", "644"],
 ]
@@ -29,6 +30,7 @@ assets = [
 license = "LicenseRef-Unknown"
 assets = [
     { source = "target/release/rpi-intercom", dest = "/usr/bin/rpi-intercom", mode = "755" },
+    { source = "packaging/usr.bin.rpi-intercom", dest = "/etc/apparmor.d/usr.bin.rpi-intercom", mode = "644" },
     { source = "packaging/rpi-intercom.service", dest = "/usr/lib/systemd/user/rpi-intercom.service", mode = "644" },
     { source = "man/rpi-intercom.1", dest = "/usr/share/man/man1/rpi-intercom.1", mode = "644" },
 ]

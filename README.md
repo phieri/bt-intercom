@@ -76,7 +76,12 @@ service sends stdout and stderr to the journal.
 ### Debian and RPM packages
 
 `Cargo.toml` includes packaging metadata for the binary, man page, runtime
-requirements, and a systemd user unit. Install `cargo-deb` and
+requirements, an AppArmor profile, and a systemd user unit. The packages install
+the profile at `/etc/apparmor.d/usr.bin.rpi-intercom`; AppArmor must be enabled
+on the host for it to be enforced. The profile allows the default configuration
+and runtime paths, PipeWire and BlueZ access, and read access to PTT input
+devices. Custom `XDG_CONFIG_HOME` paths may need a local profile adjustment.
+Install `cargo-deb` and
 `cargo-generate-rpm`, then build packages with `cargo deb` and
 `cargo generate-rpm` (add `--target TARGET` for a configured cross-compilation
 target). The `.deb` is written to `target/debian/`; the `.rpm` is written to
