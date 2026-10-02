@@ -328,7 +328,7 @@ impl ControlPanel {
 		member_state.select((!self.allowed.is_empty()).then_some(self.selected_headset));
 		frame.render_stateful_widget(members_list, lower[1], &mut member_state);
 
-		let hint = self.error.as_deref().unwrap_or_else(|| {
+		let hint = self.error.as_deref().unwrap_or({
 			if let Some(name) = &self.new_group_name {
 				if name.is_empty() {
 					"Type a group name, Enter to save, Esc to cancel"
