@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Philip Eriksson. All rights reserved.
+
 //! Background Bluetooth status polling and terminal dashboard rendering.
 
 use std::collections::{BTreeMap, BTreeSet};

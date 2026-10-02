@@ -1,3 +1,5 @@
+# Copyright (C) 2026 Philip Eriksson. All rights reserved.
+
 import html
 import json
 import re
