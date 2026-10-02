@@ -505,6 +505,7 @@ mod tests {
 
 	const A: &str = "AA:BB:CC:DD:EE:01";
 	const B: &str = "AA:BB:CC:DD:EE:02";
+	const C: &str = "AA:BB:CC:DD:EE:03";
 
 	fn headset(base: u64, address: &str) -> Vec<Value> {
 		vec![
@@ -537,6 +538,25 @@ mod tests {
 		);
 		let (headsets, _) = topology(&json!(fixture()), &[A.to_string()].into()).unwrap();
 		assert!(desired_links(&headsets).is_empty());
+	}
+
+	#[test]
+	fn routes_only_headsets_sharing_a_talk_group() {
+		let objects = [fixture(), headset(30, C)].concat();
+		let allowed = [A.to_string(), B.to_string(), C.to_string()].into();
+		let (headsets, _) = topology(&json!(objects), &allowed).unwrap();
+		let groups = [TalkGroup {
+			name: "Team".into(),
+			members: [A.to_string(), C.to_string()].into(),
+		}];
+		assert_eq!(
+			desired_links_in_groups(&headsets, &groups),
+			[(13, 34), (13, 35), (33, 14), (33, 15)].into()
+		);
+		assert_eq!(
+			desired_links_in_groups(&headsets, &[]),
+			desired_links(&headsets)
+		);
 	}
 
 	#[test]

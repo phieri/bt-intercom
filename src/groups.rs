@@ -104,7 +104,7 @@ pub fn save(path: &Path, groups: &[TalkGroup]) -> Result<(), String> {
 	let contents = json!({
 		"groups": groups.iter().map(|group| json!({
 			"name": group.name.trim(),
-			"members": group.members,
+			"members": group.members.iter().filter_map(|address| validate_address(address)).collect::<Vec<_>>(),
 		})).collect::<Vec<_>>(),
 	})
 	.to_string();

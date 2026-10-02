@@ -31,7 +31,7 @@ use bluez::{bluetooth_name, device_flag};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 use dashboard::Dashboard;
-use groups::{TalkGroup, config_path as talk_groups_path, load as load_talk_groups};
+use groups::{config_path as talk_groups_path, load as load_talk_groups};
 use router::{Headset, Router, has_active_intercom_connection, has_active_source_route};
 
 const PTT_BEEP_WAV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ptt-beep.wav"));
@@ -98,6 +98,9 @@ enum CliCommand {
 		#[arg(value_enum)]
 		shell: Shell,
 	},
+	/// Open the graphical headset and talk-group control panel.
+	#[cfg(feature = "gui")]
+	Gui,
 }
 
 /// Runs a command with captured output and a deadline.
@@ -608,6 +611,12 @@ fn reconnect_worker(
 /// Executes one CLI action, including the main polling and routing loop.
 fn run(action: CliCommand) -> Result<(), String> {
 	match action {
+		#[cfg(feature = "gui")]
+		CliCommand::Gui => {
+			let network_path = headset_network_path()?;
+			let allowed = load_headsets(&network_path)?;
+			gui::run(allowed, talk_groups_path(&network_path)?);
+		}
 		CliCommand::Scan { seconds } => {
 			print!(
 				"{}",
@@ -687,6 +696,8 @@ fn run(action: CliCommand) -> Result<(), String> {
 				allowed = load_headsets(&network_path)?;
 				validate_ptt(&buttons, &allowed)?;
 			}
+			let groups_path = talk_groups_path(&network_path)?;
+			let mut groups = load_talk_groups(&groups_path)?;
 			let stopped = Arc::new(AtomicBool::new(false));
 			let signal = Arc::clone(&stopped);
 			ctrlc::set_handler(move || signal.store(true, Ordering::SeqCst))
@@ -769,11 +780,19 @@ fn run(action: CliCommand) -> Result<(), String> {
 						}
 					}
 					if last_update.is_none_or(|updated| updated.elapsed() >= interval) {
-						let update = if input.is_some() {
-							router.update_sources(&active_sources)
-						} else {
-							router.update(true)
+						let config_error = match load_talk_groups(&groups_path) {
+							Ok(current) => {
+								groups = current;
+								None
+							}
+							Err(error) => Some(error),
 						};
+						let sources = if input.is_some() {
+							active_sources.clone()
+						} else {
+							router.allowed.clone()
+						};
+						let update = router.update_sources_in_groups(&sources, &groups);
 						if dashboard.is_some() {
 							let mut inspect_error = None;
 							match router.inspect_owned() {
@@ -804,9 +823,12 @@ fn run(action: CliCommand) -> Result<(), String> {
 									inspect_error = Some(error);
 								}
 							}
-							last_error = update.err().or(inspect_error);
+							last_error = config_error.or_else(|| update.err()).or(inspect_error);
 							redraw = true;
 						} else {
+							if let Some(error) = config_error {
+								log::warn!("Talk-group configuration unavailable: {error}");
+							}
 							match update {
 								Ok(headsets) => {
 									let active = headsets
