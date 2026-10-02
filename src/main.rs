@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Philip Eriksson. All rights reserved.
+
 //! Command-line entry point for Bluetooth setup, status, and intercom routing.
 //!
 //! External commands are bounded by timeouts; the long-running `run` mode also

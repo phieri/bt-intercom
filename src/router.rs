@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Philip Eriksson. All rights reserved.
+
 //! PipeWire topology discovery and ownership-safe inter-headset audio routing.
 //!
 //! Routing is limited to allowlisted Bluetooth devices using the duplex HFP/HSP

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Philip Eriksson. All rights reserved.
+
 use std::env;
 use std::fs;
 use std::path::PathBuf;

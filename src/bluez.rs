@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Philip Eriksson. All rights reserved.
+
 //! Helpers for parsing BlueZ device information.
 
 pub(crate) fn property<'a>(info: &'a str, field: &str) -> Option<&'a str> {
