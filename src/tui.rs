@@ -19,8 +19,8 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::bluez::{bluetooth_name, device_flag, property};
-use crate::command;
-use crate::groups::{TalkGroup, load, save};
+use crate::command_cancellable;
+use crate::groups::{TalkGroup, load, normalize_name, save};
 use crate::router::{Headset, Router};
 
 #[derive(Clone, Debug)]
@@ -29,6 +29,11 @@ struct HeadsetStatus {
 	connected: Option<bool>,
 	duplex: bool,
 	rssi: Option<i32>,
+}
+
+struct StatusUpdate {
+	statuses: BTreeMap<String, HeadsetStatus>,
+	error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +52,8 @@ struct ControlPanel {
 	focus: Focus,
 	new_group_name: Option<String>,
 	error: Option<String>,
+	persistence_error: Option<String>,
+	status_error: Option<String>,
 	last_updated: Option<Instant>,
 }
 
@@ -63,15 +70,27 @@ impl ControlPanel {
 			focus: Focus::Groups,
 			new_group_name: None,
 			error: None,
+			persistence_error: None,
+			status_error: None,
 			last_updated: None,
 		})
 	}
 
 	fn persist_groups(&mut self) {
 		match save(&self.groups_path, &self.groups) {
-			Ok(()) => self.error = None,
-			Err(error) => self.error = Some(error),
+			Ok(()) => {
+				self.error = None;
+				self.persistence_error = None;
+			}
+			Err(error) => self.persistence_error = Some(error),
 		}
+	}
+
+	fn apply_status_update(&mut self, update: StatusUpdate) {
+		self.status = update.statuses;
+		self.error = None;
+		self.status_error = update.error;
+		self.last_updated = Some(Instant::now());
 	}
 
 	fn add_group(&mut self) {
@@ -86,7 +105,7 @@ impl ControlPanel {
 		} else if self
 			.groups
 			.iter()
-			.any(|group| group.name.eq_ignore_ascii_case(&name))
+			.any(|group| normalize_name(&group.name) == normalize_name(&name))
 		{
 			self.error = Some(format!("A talk group named {name:?} already exists."));
 		} else {
@@ -328,28 +347,38 @@ impl ControlPanel {
 		member_state.select((!self.allowed.is_empty()).then_some(self.selected_headset));
 		frame.render_stateful_widget(members_list, lower[1], &mut member_state);
 
-		let hint = self.error.as_deref().unwrap_or({
-			if let Some(name) = &self.new_group_name {
-				if name.is_empty() {
-					"Type a group name, Enter to save, Esc to cancel"
+		let hint = self
+			.persistence_error
+			.as_deref()
+			.or(self.error.as_deref())
+			.or(self.status_error.as_deref())
+			.unwrap_or({
+				if let Some(name) = &self.new_group_name {
+					if name.is_empty() {
+						"Type a group name, Enter to save, Esc to cancel"
+					} else {
+						"Continue typing, Enter to save, Esc to cancel"
+					}
 				} else {
-					"Continue typing, Enter to save, Esc to cancel"
+					"Tab switch pane | ↑/↓ select | n add | d delete | Space toggle member | q quit"
 				}
-			} else {
-				"Tab switch pane | ↑/↓ select | n add | d delete | Space toggle member | q quit"
-			}
-		});
+			});
 		let refreshed = self.last_updated.map_or_else(
 			|| "waiting for status".to_string(),
 			|updated| format!("status updated {}s ago", updated.elapsed().as_secs()),
 		);
 		frame.render_widget(
 			Paragraph::new(format!("{hint} | {refreshed}"))
-				.style(if self.error.is_some() {
-					Style::default().fg(Color::Red)
-				} else {
-					Style::default()
-				})
+				.style(
+					if self.error.is_some()
+						|| self.persistence_error.is_some()
+						|| self.status_error.is_some()
+					{
+						Style::default().fg(Color::Red)
+					} else {
+						Style::default()
+					},
+				)
 				.block(Block::default().borders(Borders::ALL)),
 			areas[2],
 		);
@@ -379,16 +408,16 @@ struct PollingWorker {
 }
 
 impl PollingWorker {
-	fn start(
-		allowed: BTreeSet<String>,
-		status_tx: mpsc::Sender<Result<BTreeMap<String, HeadsetStatus>, String>>,
-	) -> Self {
+	fn start(allowed: BTreeSet<String>, status_tx: mpsc::Sender<StatusUpdate>) -> Self {
 		let stopped = Arc::new(AtomicBool::new(false));
 		let worker_stopped = Arc::clone(&stopped);
 		let (shutdown, shutdown_rx) = mpsc::channel();
 		let worker = thread::spawn(move || {
 			while !worker_stopped.load(Ordering::SeqCst) {
-				if status_tx.send(poll_status(&allowed)).is_err() {
+				let Some(update) = poll_status(&allowed, &worker_stopped) else {
+					break;
+				};
+				if status_tx.send(update).is_err() {
 					break;
 				}
 				if shutdown_rx.recv_timeout(Duration::from_secs(5)).is_ok() {
@@ -432,18 +461,11 @@ pub fn run(allowed: BTreeSet<String>, groups_path: PathBuf) -> Result<(), String
 fn event_loop(
 	terminal: &mut DefaultTerminal,
 	app: &mut ControlPanel,
-	status_rx: &Receiver<Result<BTreeMap<String, HeadsetStatus>, String>>,
+	status_rx: &Receiver<StatusUpdate>,
 ) -> Result<(), String> {
 	loop {
 		while let Ok(update) = status_rx.try_recv() {
-			match update {
-				Ok(status) => {
-					app.status = status;
-					app.last_updated = Some(Instant::now());
-					app.error = None;
-				}
-				Err(error) => app.error = Some(error),
-			}
+			app.apply_status_update(update);
 		}
 		terminal
 			.draw(|frame| app.render(frame))
@@ -458,12 +480,31 @@ fn event_loop(
 	}
 }
 
-fn poll_status(allowed: &BTreeSet<String>) -> Result<BTreeMap<String, HeadsetStatus>, String> {
-	let mut router = Router::new(allowed.clone());
-	let (headsets, _) = router.inspect()?;
+fn poll_status(allowed: &BTreeSet<String>, stopped: &AtomicBool) -> Option<StatusUpdate> {
+	let mut router = Router::with_executor(allowed.clone(), |args| {
+		command_cancellable(args, Duration::from_secs(15), Some(stopped))
+	});
+	let (headsets, error) = match router.inspect() {
+		Ok((headsets, _)) => (headsets, None),
+		Err(error) => (BTreeMap::new(), Some(error)),
+	};
+	if stopped.load(Ordering::SeqCst) {
+		return None;
+	}
 	let mut statuses = BTreeMap::new();
 	for address in allowed {
-		let info = command(&["bluetoothctl", "info", address], Duration::from_secs(15)).ok();
+		if stopped.load(Ordering::SeqCst) {
+			return None;
+		}
+		let info = command_cancellable(
+			&["bluetoothctl", "info", address],
+			Duration::from_secs(15),
+			Some(stopped),
+		)
+		.ok();
+		if stopped.load(Ordering::SeqCst) {
+			return None;
+		}
 		statuses.insert(
 			address.clone(),
 			HeadsetStatus {
@@ -477,7 +518,7 @@ fn poll_status(allowed: &BTreeSet<String>) -> Result<BTreeMap<String, HeadsetSta
 			},
 		);
 	}
-	Ok(statuses)
+	Some(StatusUpdate { statuses, error })
 }
 
 #[cfg(test)]
@@ -509,5 +550,53 @@ mod tests {
 		assert!(panel.groups.is_empty());
 		assert!(load(&path).unwrap().is_empty());
 		let _ = std::fs::remove_dir_all(path.parent().unwrap());
+	}
+
+	#[test]
+	fn group_name_uniqueness_matches_persistence_normalization() {
+		let path = std::env::temp_dir()
+			.join(format!("rpi-intercom-tui-unicode-{}", std::process::id()))
+			.join("talk-groups.json");
+		let _ = std::fs::remove_dir_all(path.parent().unwrap());
+		save(
+			&path,
+			&[TalkGroup {
+				name: "équipe".into(),
+				members: BTreeSet::new(),
+			}],
+		)
+		.unwrap();
+		let mut panel = ControlPanel::new(BTreeSet::new(), path.clone()).unwrap();
+		panel.new_group_name = Some("Équipe".into());
+
+		panel.add_group();
+
+		assert_eq!(panel.groups.len(), 1);
+		assert!(panel.error.as_deref().unwrap().contains("already exists"));
+		let _ = std::fs::remove_dir_all(path.parent().unwrap());
+	}
+
+	#[test]
+	fn cancelling_status_poll_stops_before_running_commands() {
+		let stopped = AtomicBool::new(true);
+		assert!(poll_status(&BTreeSet::new(), &stopped).is_none());
+	}
+
+	#[test]
+	fn status_updates_clear_transient_errors_but_keep_save_errors() {
+		let path = std::env::temp_dir()
+			.join(format!("rpi-intercom-tui-errors-{}", std::process::id()))
+			.join("talk-groups.json");
+		let mut panel = ControlPanel::new(BTreeSet::new(), path).unwrap();
+		panel.error = Some("transient action error".into());
+		panel.persistence_error = Some("save failed".into());
+
+		panel.apply_status_update(StatusUpdate {
+			statuses: BTreeMap::new(),
+			error: None,
+		});
+
+		assert!(panel.error.is_none());
+		assert_eq!(panel.persistence_error.as_deref(), Some("save failed"));
 	}
 }
