@@ -7,6 +7,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 fn main() {
 	println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
+	println!("cargo:rerun-if-changed=Cargo.toml");
+	println!("cargo:rerun-if-changed=Cargo.lock");
+	println!("cargo:rerun-if-changed=src");
 	let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo did not set OUT_DIR"));
 	fs::write(out_dir.join("ptt-beep.wav"), double_beep_wav())
 		.expect("could not write PTT beep WAV");
