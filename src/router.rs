@@ -279,7 +279,7 @@ pub fn desired_links_by_group(
 		.filter_map(|group| {
 			let sources = group_sources.get(&Some(group.name.clone()))?;
 			let links = desired_links_in_groups(headsets, std::slice::from_ref(group));
-			Some(links.into_iter().filter(|(output, _)| {
+			Some(links.into_iter().filter(move |(output, _)| {
 				headsets.iter().any(|(address, headset)| {
 					sources.contains(address)
 						&& headset.sources.iter().any(|port| port.id == *output)
