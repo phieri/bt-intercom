@@ -192,7 +192,8 @@ Full-duplex without button mappings starts with every microphone always open.
 With mappings, each headset starts in PTT mode; its user can independently switch
 between PTT and always-open by pressing the play/pause button three times within
 one second. Switching back to PTT mutes the microphone when the button is
-released. These choices last until the process exits.
+released. These choices reset when the process exits or that headset loses
+duplex audio.
 
 Map each headset to its own Linux input event device. PTT listens only for
 `KEY_PLAYPAUSE` press/release events (code 164), not call/answer buttons or

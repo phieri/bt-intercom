@@ -447,6 +447,7 @@ impl Drop for PttBeep {
 }
 
 fn confirm_transmissions(
+	mode: Mode,
 	transmit: &mut Transmit,
 	input: &Receiver<PttEvent>,
 	headsets: &BTreeMap<String, Headset>,
@@ -469,15 +470,30 @@ fn confirm_transmissions(
 		if drain_ptt(input, transmit)? || stopped.load(Ordering::SeqCst) {
 			return Ok(true);
 		}
-		transmit.pending.remove(&address);
 		let Some(speaker_node) = speaker_node else {
-			log::warn!("Could not play PTT confirmation for {address}: no speaker node");
+			let error = format!("could not play PTT confirmation for {address}: no speaker node");
+			if mode == Mode::SemiDuplex {
+				return Err(error);
+			}
+			log::warn!("{error}");
 			continue;
 		};
-		if let Some(beep) = beep
-			&& let Err(error) = beep.play(speaker_node, stopped)
-		{
-			log::warn!("Could not play PTT confirmation for {address}: {error}");
+		let result = beep
+			.ok_or_else(|| "confirmation beep is unavailable".to_string())
+			.and_then(|beep| beep.play(speaker_node, stopped));
+		match result {
+			Ok(()) => {
+				transmit.pending.remove(&address);
+			}
+			Err(_error) if stopped.load(Ordering::SeqCst) => return Ok(true),
+			Err(error) if mode == Mode::SemiDuplex => {
+				return Err(format!(
+					"could not play PTT confirmation for {address}: {error}"
+				));
+			}
+			Err(error) => {
+				log::warn!("Could not play PTT confirmation for {address}: {error}");
+			}
 		}
 	}
 	Ok(false)
@@ -871,6 +887,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 									changed |= transmit.topology(&available);
 									if !changed {
 										changed |= confirm_transmissions(
+											mode,
 											&mut transmit,
 											input,
 											&headsets,
@@ -1290,6 +1307,7 @@ mod tests {
 		// A queued microphone's live route (or an incoming-only route to the
 		// floor holder) must not earn a confirmation.
 		confirm_transmissions(
+			Mode::SemiDuplex,
 			&mut transmit,
 			&input,
 			&headsets,
@@ -1300,6 +1318,7 @@ mod tests {
 		.unwrap();
 		assert_eq!(transmit.pending, BTreeSet::from([a.into()]));
 		confirm_transmissions(
+			Mode::SemiDuplex,
 			&mut transmit,
 			&input,
 			&headsets,
@@ -1309,16 +1328,19 @@ mod tests {
 		)
 		.unwrap();
 		assert_eq!(transmit.pending, BTreeSet::from([a.into()]));
-		confirm_transmissions(
-			&mut transmit,
-			&input,
-			&headsets,
-			&BTreeSet::from([(13, 24)]),
-			None,
-			&stopped,
-		)
-		.unwrap();
-		assert!(transmit.pending.is_empty());
+		assert_eq!(
+			confirm_transmissions(
+				Mode::SemiDuplex,
+				&mut transmit,
+				&input,
+				&headsets,
+				&BTreeSet::from([(13, 24)]),
+				None,
+				&stopped,
+			),
+			Err("could not play PTT confirmation for AA:BB:CC:DD:EE:01: confirmation beep is unavailable".into())
+		);
+		assert_eq!(transmit.pending, BTreeSet::from([a.into()]));
 		// Release arriving during routing retires the old grant and defers
 		// confirmation of the next source until its own routing update.
 		sender
@@ -1327,6 +1349,7 @@ mod tests {
 		transmit.pending.insert(a.into());
 		assert!(
 			confirm_transmissions(
+				Mode::SemiDuplex,
 				&mut transmit,
 				&input,
 				&headsets,
