@@ -81,6 +81,7 @@ the profile at `/etc/apparmor.d/usr.bin.rpi-intercom`; AppArmor must be enabled
 on the host for it to be enforced. The profile allows the default configuration
 and runtime paths, PipeWire and BlueZ access, and read access to PTT input
 devices. Custom `XDG_CONFIG_HOME` paths may need a local profile adjustment.
+Custom `TMPDIR` paths may also need an adjustment for temporary PTT audio.
 Install `cargo-deb` and
 `cargo-generate-rpm`, then build packages with `cargo deb` and
 `cargo generate-rpm` (add `--target TARGET` for a configured cross-compilation
