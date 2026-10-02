@@ -117,6 +117,12 @@ glibc.
 
 ## Usage
 
+Show the installed version and UTC build datetime:
+
+```sh
+rpi-intercom --version
+```
+
 Put each headset in pairing mode, then scan and pair it:
 
 ```sh
