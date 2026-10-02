@@ -19,12 +19,14 @@ profile rpi-intercom /usr/bin/rpi-intercom {
   @{HOME}/.config/pipewire/** r,
   /run/user/[0-9]*/pipewire-0 rw,
 
-  @{HOME}/.config/ r,
+  @{HOME}/.config/ rw,
   @{HOME}/.config/rpi-intercom/ rw,
   @{HOME}/.config/rpi-intercom/headsets rwk,
   @{HOME}/.config/rpi-intercom/headsets.* rwk,
 
+  /run/user/[0-9]*/ rw,
   /run/user/[0-9]*/rpi-intercom-ptt-*.wav rw,
+  /tmp/ rw,
   /tmp/rpi-intercom-ptt-*.wav rw,
 
   /dev/input/event[0-9]* r,
