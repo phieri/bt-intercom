@@ -163,7 +163,7 @@ mod tests {
 	}
 
 	#[test]
-	fn missing_group_file_preserves_legacy_network_behavior() {
+	fn missing_group_file_preserves_all_to_all_behavior() {
 		let path = std::env::temp_dir().join(format!(
 			"bt-intercom-missing-groups-{}.json",
 			std::process::id()

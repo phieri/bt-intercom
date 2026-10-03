@@ -53,7 +53,7 @@ struct PttButton {
 		"\nBuild datetime: ",
 		env!("BT_INTERCOM_BUILD_DATETIME")
 	),
-	about = "A full-duplex Bluetooth headset intercom for Linux",
+	about = "A Bluetooth headset intercom for Linux",
 	arg_required_else_help = true
 )]
 struct Cli {

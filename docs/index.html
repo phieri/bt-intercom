@@ -26,7 +26,7 @@
     <main id="main">
       <p class="eyebrow">Linux · Bluetooth Classic · PipeWire</p>
       <h1>Multiple headsets. One conversation.</h1>
-      <p class="intro">A local, full-duplex Bluetooth Classic headset intercom for Linux, including Raspberry Pi systems. See the command-line workflow, from checking duplex audio to holding a headset's play/pause button to talk and following it live on the dashboard. See the setup guide for compatible hardware.</p>
+      <p class="intro">A local Bluetooth Classic headset intercom for Linux, including Raspberry Pi systems, with selectable full-duplex and semi-duplex modes. See the command-line workflow, from checking duplex audio to holding a headset's play/pause button to talk and following it live on the dashboard. See the setup guide for compatible hardware.</p>
       <div class="links">
         <a href="https://github.com/phieri/bt-intercom#requirements">Get started on GitHub</a>
         <a href="https://github.com/phieri/bt-intercom#usage">Read the CLI guide</a>
@@ -50,7 +50,7 @@
         <ol class="steps">
           <li><strong>01 / Pair</strong><p>Discover and pair headsets you own with <code>scan</code> and <code>pair</code>.</p></li>
           <li><strong>02 / Check</strong><p>Use <code>status</code> to confirm each headset exposes duplex audio in PipeWire.</p></li>
-          <li><strong>03 / Talk</strong><p>Start <code>run</code> for full duplex, or map each headset's play/pause button with <code>--ptt</code> for press-and-hold transmission.</p></li>
+          <li><strong>03 / Talk</strong><p>Start <code>run</code> for always-open full duplex, or map each headset's play/pause button with <code>--ptt</code> for press-and-hold transmission or semi-duplex turns.</p></li>
         </ol>
         <p class="note">Requires BlueZ, PipeWire, WirePlumber, and compatible Bluetooth Classic headsets on a Linux system. Raspberry Pi is one supported platform. Browser playback is only a demonstration; audio stays on the host and its paired headsets.</p>
       </section>
