@@ -215,7 +215,7 @@ impl ControlPanel {
 		])
 		.areas(frame.area());
 		frame.render_widget(
-			Paragraph::new("rpi-intercom | Headsets and talk groups")
+			Paragraph::new("bt-intercom | Headsets and talk groups")
 				.block(Block::default().borders(Borders::ALL)),
 			areas[0],
 		);
@@ -528,7 +528,7 @@ mod tests {
 	#[test]
 	fn keyboard_controls_persist_group_membership_and_removal() {
 		let path = std::env::temp_dir()
-			.join(format!("rpi-intercom-tui-{}", std::process::id()))
+			.join(format!("bt-intercom-tui-{}", std::process::id()))
 			.join("talk-groups.json");
 		let _ = std::fs::remove_dir_all(path.parent().unwrap());
 		let address = "AA:BB:CC:DD:EE:01".to_string();
@@ -555,7 +555,7 @@ mod tests {
 	#[test]
 	fn group_name_uniqueness_matches_persistence_normalization() {
 		let path = std::env::temp_dir()
-			.join(format!("rpi-intercom-tui-unicode-{}", std::process::id()))
+			.join(format!("bt-intercom-tui-unicode-{}", std::process::id()))
 			.join("talk-groups.json");
 		let _ = std::fs::remove_dir_all(path.parent().unwrap());
 		save(
@@ -585,7 +585,7 @@ mod tests {
 	#[test]
 	fn status_updates_clear_transient_errors_but_keep_save_errors() {
 		let path = std::env::temp_dir()
-			.join(format!("rpi-intercom-tui-errors-{}", std::process::id()))
+			.join(format!("bt-intercom-tui-errors-{}", std::process::id()))
 			.join("talk-groups.json");
 		let mut panel = ControlPanel::new(BTreeSet::new(), path).unwrap();
 		panel.error = Some("transient action error".into());

@@ -2,8 +2,8 @@
 
 ## Project overview
 
-This is a Rust CLI for a local, full-duplex Bluetooth Classic intercom on one
-Raspberry Pi. BlueZ handles pairing and PipeWire/WirePlumber provides HFP/HSP
+This is the bt-intercom Rust CLI for a local, full-duplex Bluetooth Classic
+intercom on Linux; Raspberry Pi is one supported platform. BlueZ handles pairing and PipeWire/WirePlumber provides HFP/HSP
 headset audio. The README is the source of truth for setup, supported hardware,
 and operational limitations.
 
@@ -27,7 +27,7 @@ cargo test --locked
 ```
 
 Tests use synthetic PipeWire graphs and mocked command behavior; they do not
-require a Raspberry Pi, Bluetooth adapter, or live PipeWire session. Add tests
+require Bluetooth hardware or a live PipeWire session. Add tests
 near the code they cover, using the existing fixtures and injected command
 executors where practical. These checks do not replace hardware validation for
 changes affecting actual headset/audio behavior.

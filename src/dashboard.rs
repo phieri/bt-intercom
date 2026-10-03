@@ -101,7 +101,7 @@ impl Dashboard {
 	) -> io::Result<()> {
 		writeln!(
 			output,
-			"\x1b[H\x1b[2Jrpi-intercom | {} | {} owned active links",
+			"\x1b[H\x1b[2Jbt-intercom | {} | {} owned active links",
 			if transmitting {
 				"transmitting"
 			} else {

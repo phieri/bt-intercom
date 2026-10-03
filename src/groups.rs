@@ -143,7 +143,7 @@ mod tests {
 	#[test]
 	fn saves_and_loads_normalized_talk_groups() {
 		let path = std::env::temp_dir().join(format!(
-			"rpi-intercom-groups-{}-{}.json",
+			"bt-intercom-groups-{}-{}.json",
 			std::process::id(),
 			std::thread::current().name().unwrap_or("test")
 		));
@@ -165,7 +165,7 @@ mod tests {
 	#[test]
 	fn missing_group_file_preserves_legacy_network_behavior() {
 		let path = std::env::temp_dir().join(format!(
-			"rpi-intercom-missing-groups-{}.json",
+			"bt-intercom-missing-groups-{}.json",
 			std::process::id()
 		));
 		let _ = fs::remove_file(&path);

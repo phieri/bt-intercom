@@ -14,7 +14,7 @@ fn main() {
 	fs::write(out_dir.join("ptt-beep.wav"), double_beep_wav())
 		.expect("could not write PTT beep WAV");
 	println!(
-		"cargo:rustc-env=RPI_INTERCOM_BUILD_DATETIME={}",
+		"cargo:rustc-env=BT_INTERCOM_BUILD_DATETIME={}",
 		build_datetime()
 	);
 }
