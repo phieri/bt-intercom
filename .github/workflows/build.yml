@@ -53,11 +53,6 @@ jobs:
           cargo generate-rpm --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v7
         with:
-          name: bt-intercom-${{ matrix.target }}
-          path: target/${{ matrix.target }}/release/bt-intercom
-          if-no-files-found: error
-      - uses: actions/upload-artifact@v7
-        with:
           name: bt-intercom-${{ matrix.target }}-deb
           path: target/debian/*.deb
           if-no-files-found: error
