@@ -73,8 +73,7 @@ impl Palette {
 fn color_level(is_terminal: bool, no_color: bool, term: &str, colorterm: &str) -> ColorLevel {
 	if !is_terminal || no_color || term.eq_ignore_ascii_case("dumb") {
 		ColorLevel::None
-	} else if colorterm.eq_ignore_ascii_case("truecolor")
-		|| colorterm.eq_ignore_ascii_case("24bit")
+	} else if colorterm.eq_ignore_ascii_case("truecolor") || colorterm.eq_ignore_ascii_case("24bit")
 	{
 		ColorLevel::TrueColor
 	} else if term.to_ascii_lowercase().contains("256color") {
@@ -90,11 +89,23 @@ mod tests {
 
 	#[test]
 	fn color_level_respects_terminal_and_no_color() {
-		assert_eq!(color_level(false, false, "xterm-256color", ""), ColorLevel::None);
-		assert_eq!(color_level(true, true, "xterm-256color", "truecolor"), ColorLevel::None);
+		assert_eq!(
+			color_level(false, false, "xterm-256color", ""),
+			ColorLevel::None
+		);
+		assert_eq!(
+			color_level(true, true, "xterm-256color", "truecolor"),
+			ColorLevel::None
+		);
 		assert_eq!(color_level(true, false, "dumb", ""), ColorLevel::None);
-		assert_eq!(color_level(true, false, "xterm-256color", ""), ColorLevel::Ansi256);
-		assert_eq!(color_level(true, false, "xterm", "24bit"), ColorLevel::TrueColor);
+		assert_eq!(
+			color_level(true, false, "xterm-256color", ""),
+			ColorLevel::Ansi256
+		);
+		assert_eq!(
+			color_level(true, false, "xterm", "24bit"),
+			ColorLevel::TrueColor
+		);
 		assert_eq!(color_level(true, false, "xterm", ""), ColorLevel::Ansi16);
 	}
 

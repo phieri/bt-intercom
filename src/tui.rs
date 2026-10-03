@@ -241,11 +241,7 @@ impl ControlPanel {
 					None => "unknown",
 				};
 				let duplex_ready = status.is_some_and(|status| status.duplex);
-				let duplex = if duplex_ready {
-					"ready"
-				} else {
-					"unavailable"
-				};
+				let duplex = if duplex_ready { "ready" } else { "unavailable" };
 				let rssi = status
 					.and_then(|status| status.rssi)
 					.map_or_else(|| "—".to_string(), |rssi| format!("{rssi} dBm"));
@@ -324,10 +320,7 @@ impl ControlPanel {
 				Block::default()
 					.title(group_title)
 					.borders(Borders::ALL)
-					.border_style(focus_style(
-						self.palette,
-						self.focus == Focus::Groups,
-					)),
+					.border_style(focus_style(self.palette, self.focus == Focus::Groups)),
 			)
 			.highlight_style(
 				self.palette
@@ -361,10 +354,7 @@ impl ControlPanel {
 						}),
 					),
 					Span::raw(name),
-					Span::styled(
-						format!(" ({address})"),
-						self.palette.style(Meaning::Info),
-					),
+					Span::styled(format!(" ({address})"), self.palette.style(Meaning::Info)),
 				]))
 			})
 			.collect();
@@ -377,10 +367,7 @@ impl ControlPanel {
 				Block::default()
 					.title(format!("{group_name} [space toggle]"))
 					.borders(Borders::ALL)
-					.border_style(focus_style(
-						self.palette,
-						self.focus == Focus::Members,
-					)),
+					.border_style(focus_style(self.palette, self.focus == Focus::Members)),
 			)
 			.highlight_style(
 				self.palette

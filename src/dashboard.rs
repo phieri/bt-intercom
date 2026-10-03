@@ -10,10 +10,6 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use crossterm::cursor::MoveTo;
-use crossterm::execute;
-use crossterm::terminal::{Clear, ClearType};
-
 use crate::bluez::{bluetooth_name, device_flag, property};
 use crate::command_cancellable;
 use crate::router::Headset;
@@ -102,11 +98,7 @@ impl Dashboard {
 		transmitting: bool,
 		error: Option<&str>,
 		output: &mut impl Write,
-		is_terminal: bool,
 	) -> io::Result<()> {
-		if is_terminal {
-			execute!(output, Clear(ClearType::All), MoveTo(0, 0))?;
-		}
 		writeln!(
 			output,
 			"bt-intercom | {} | {} owned active links",
@@ -250,7 +242,6 @@ mod tests {
 				false,
 				None,
 				&mut output,
-				false,
 			)
 			.unwrap();
 		let text = String::from_utf8(output).unwrap();
@@ -262,22 +253,6 @@ mod tests {
 		assert!(text.contains("no"));
 		assert!(text.contains("1/0"));
 		assert!(text.contains("unknown"));
-
-		let mut terminal_output = Vec::new();
-		dashboard
-			.draw(
-				&allowed,
-				&headsets,
-				&BTreeSet::new(),
-				false,
-				None,
-				&mut terminal_output,
-				true,
-			)
-			.unwrap();
-		assert!(String::from_utf8(terminal_output)
-			.unwrap()
-			.starts_with("\u{1b}[2J"));
 	}
 
 	#[test]
@@ -341,7 +316,6 @@ mod tests {
 				false,
 				None,
 				&mut output,
-				false,
 			)
 			.unwrap();
 		let text = String::from_utf8(output).unwrap();
@@ -384,7 +358,6 @@ mod tests {
 				false,
 				None,
 				&mut output,
-				false,
 			)
 			.unwrap();
 		let text = String::from_utf8(output).unwrap();
