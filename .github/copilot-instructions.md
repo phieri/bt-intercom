@@ -3,7 +3,7 @@
 ## Project overview
 
 This is the bt-intercom Rust CLI for a local Bluetooth Classic intercom with
-selectable semi-duplex and full-duplex modes on Linux; Raspberry Pi is one
+selectable half-duplex and full-duplex modes on Linux; Raspberry Pi is one
 supported platform. BlueZ handles pairing and PipeWire/WirePlumber provides
 HFP/HSP headset audio. The README is the source of truth for setup, supported
 hardware, and operational limitations.

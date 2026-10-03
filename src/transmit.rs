@@ -11,7 +11,7 @@ use crate::groups::TalkGroup;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum Mode {
-	SemiDuplex,
+	HalfDuplex,
 	#[default]
 	FullDuplex,
 }
@@ -47,14 +47,14 @@ impl Transmit {
 		}
 	}
 
-	/// Replace talk groups. Semi-duplex requests are retired when membership
+	/// Replace talk groups. Half-duplex requests are retired when membership
 	/// changes so a held button must be released and pressed again.
 	pub fn set_groups(&mut self, groups: &[TalkGroup]) -> bool {
 		if self.groups == groups {
 			return false;
 		}
 		self.groups = groups.to_vec();
-		if self.mode == Mode::SemiDuplex {
+		if self.mode == Mode::HalfDuplex {
 			self.queues.clear();
 			for button in self.buttons.values_mut() {
 				button.requested = false;
@@ -77,7 +77,7 @@ impl Transmit {
 		button.pressed = pressed;
 		button.requested = pressed;
 		match self.mode {
-			Mode::SemiDuplex => {
+			Mode::HalfDuplex => {
 				if pressed {
 					for membership in memberships {
 						self.queues
@@ -129,7 +129,7 @@ impl Transmit {
 
 	fn refresh(&mut self) {
 		let (next, group_sources) = match self.mode {
-			Mode::SemiDuplex => {
+			Mode::HalfDuplex => {
 				let group_sources = self
 					.queues
 					.iter()
@@ -210,7 +210,7 @@ mod tests {
 
 	#[test]
 	fn fifo_and_release_cancellation_only_confirm_the_granted_source() {
-		let (mut t, now) = setup(Mode::SemiDuplex);
+		let (mut t, now) = setup(Mode::HalfDuplex);
 		press(&mut t, "b", now, 0);
 		press(&mut t, "a", now, 10);
 		press(&mut t, "c", now, 20);
@@ -227,7 +227,7 @@ mod tests {
 
 	#[test]
 	fn fifo_not_address_order_and_duplicates_do_not_requeue() {
-		let (mut t, now) = setup(Mode::SemiDuplex);
+		let (mut t, now) = setup(Mode::HalfDuplex);
 		press(&mut t, "c", now, 0);
 		press(&mut t, "b", now, 1);
 		press(&mut t, "a", now, 2);
@@ -240,8 +240,8 @@ mod tests {
 	}
 
 	#[test]
-	fn semi_duplex_queues_are_independent_per_talk_group() {
-		let (mut t, now) = setup(Mode::SemiDuplex);
+	fn half_duplex_queues_are_independent_per_talk_group() {
+		let (mut t, now) = setup(Mode::HalfDuplex);
 		t.set_groups(&[group("Red", &["a", "b"]), group("Blue", &["c", "d"])]);
 		press(&mut t, "a", now, 0);
 		press(&mut t, "b", now, 1);
@@ -260,8 +260,8 @@ mod tests {
 	}
 
 	#[test]
-	fn semi_duplex_ignores_requests_without_a_group_membership() {
-		let (mut t, now) = setup(Mode::SemiDuplex);
+	fn half_duplex_ignores_requests_without_a_group_membership() {
+		let (mut t, now) = setup(Mode::HalfDuplex);
 		t.set_groups(&[group("Team", &["a", "b"])]);
 		press(&mut t, "c", now, 0);
 		press(&mut t, "a", now, 1);
@@ -270,7 +270,7 @@ mod tests {
 
 	#[test]
 	fn changing_groups_retires_requests_until_buttons_are_repressed() {
-		let (mut t, now) = setup(Mode::SemiDuplex);
+		let (mut t, now) = setup(Mode::HalfDuplex);
 		t.set_groups(&[group("Team", &["a", "b"])]);
 		press(&mut t, "a", now, 0);
 		press(&mut t, "b", now, 1);
@@ -334,7 +334,7 @@ mod tests {
 
 	#[test]
 	fn semi_never_toggles_and_rapid_changes_retire_pending_beeps() {
-		let (mut t, now) = setup(Mode::SemiDuplex);
+		let (mut t, now) = setup(Mode::HalfDuplex);
 		for ms in [0, 10, 20] {
 			press(&mut t, "a", now, ms);
 			release(&mut t, "a", now, ms + 1);
@@ -345,7 +345,7 @@ mod tests {
 
 	#[test]
 	fn disconnect_releases_floor_and_reconnect_requires_new_press() {
-		let (mut t, now) = setup(Mode::SemiDuplex);
+		let (mut t, now) = setup(Mode::HalfDuplex);
 		press(&mut t, "a", now, 0);
 		press(&mut t, "b", now, 1);
 		assert!(t.topology(&set(&["b", "c"])));

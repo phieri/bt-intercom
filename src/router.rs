@@ -613,7 +613,7 @@ mod tests {
 	}
 
 	#[test]
-	fn semi_duplex_routes_each_source_only_in_groups_where_it_holds_the_floor() {
+	fn half_duplex_routes_each_source_only_in_groups_where_it_holds_the_floor() {
 		let objects = [fixture(), headset(30, C)].concat();
 		let allowed = [A.to_string(), B.to_string(), C.to_string()].into();
 		let (headsets, _) = topology(&json!(objects), &allowed).unwrap();
