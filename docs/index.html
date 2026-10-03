@@ -16,7 +16,7 @@
         if (window.AsciinemaPlayer) {
           const container = document.getElementById("player");
           container.replaceChildren();
-          AsciinemaPlayer.create("demo.cast", container, { fit: "width", cols: 86, rows: 18, loop: 3 });
+          AsciinemaPlayer.create("demo.cast", container, { fit: "width", cols: 86, rows: 18, loop: 3, poster: 'npt:0:16'});
         }
       });
     </script>
@@ -170,6 +170,6 @@
       </section>
       <p class="requirements-note">Requires Linux, BlueZ, PipeWire, WirePlumber, and Bluetooth Classic headsets with duplex audio. Browser playback is a demonstration; the intercom itself runs on your Linux host.</p>
     </main>
-    <footer><a class="wordmark" href="https://github.com/phieri/bt-intercom"><span class="wordmark-mark" aria-hidden="true">bt</span> intercom</a><span>Local Bluetooth audio, routed with care.</span><a href="https://github.com/phieri/bt-intercom">Source and setup instructions ↗</a></footer>
+    <footer><a class="wordmark" href="https://github.com/phieri/bt-intercom"><span class="wordmark-mark" aria-hidden="true">bt</span> intercom</a><span>Local Bluetooth audio, developed in 🇸🇪</span><a href="https://github.com/phieri/bt-intercom">Source and setup instructions ↗</a></footer>
   </body>
 </html>
