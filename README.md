@@ -7,7 +7,8 @@ configured headsets in its talk groups, never back to itself. With no talk group
 configured, all headsets share the original all-to-all intercom. By default all
 microphones are live; optional push-to-talk (PTT) keeps them muted until a
 headset button is held. Semi-duplex queues talk requests and allows only one
-headset microphone per talk group at a time.
+headset microphone per talk group at a time. Friends or coworkers can pair their
+headsets with the same Linux host to join the conversation.
 
 [Watch the illustrative CLI demo](https://phieri.github.io/bt-intercom/).
 
@@ -150,7 +151,8 @@ bt-intercom status AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02
 
 `status` reports each headset's name/address and microphone and speaker ports;
 it does not connect devices or create routes. Pair and trust only devices you
-own. BlueZ stores pairing credentials; this program stores only headset
+have permission to connect; friends or coworkers can pair their headsets with
+the host. BlueZ stores pairing credentials; this program stores only headset
 addresses.
 
 Start the intercom with the paired addresses:
