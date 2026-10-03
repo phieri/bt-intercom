@@ -59,13 +59,13 @@ impl Palette {
 			(_, Meaning::Info) => Color::Blue,
 			(_, Meaning::Selection) => Color::Cyan,
 		}
+	}
 
-		pub fn style(self, meaning: Meaning) -> Style {
-			if self.level == ColorLevel::None {
-				Style::default()
-			} else {
-				Style::default().fg(self.color(meaning))
-			}
+	pub fn style(self, meaning: Meaning) -> Style {
+		if self.level == ColorLevel::None {
+			Style::default()
+		} else {
+			Style::default().fg(self.color(meaning))
 		}
 	}
 }

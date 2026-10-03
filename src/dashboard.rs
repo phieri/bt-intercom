@@ -254,6 +254,7 @@ mod tests {
 			)
 			.unwrap();
 		let text = String::from_utf8(output).unwrap();
+		assert!(!text.contains('\u{1b}'));
 		assert!(text.contains("muted | 1 owned active links"));
 		assert!(text.contains("HEADSET NAME             ADDRESS             CONNECTED"));
 		assert!(!text.contains("PAIRED"));
@@ -261,6 +262,22 @@ mod tests {
 		assert!(text.contains("no"));
 		assert!(text.contains("1/0"));
 		assert!(text.contains("unknown"));
+
+		let mut terminal_output = Vec::new();
+		dashboard
+			.draw(
+				&allowed,
+				&headsets,
+				&BTreeSet::new(),
+				false,
+				None,
+				&mut terminal_output,
+				true,
+			)
+			.unwrap();
+		assert!(String::from_utf8(terminal_output)
+			.unwrap()
+			.starts_with("\u{1b}[2J"));
 	}
 
 	#[test]
