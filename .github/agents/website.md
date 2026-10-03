@@ -1,3 +1,8 @@
+---
+name: website-specialist
+description: Specialized agent for creating and improving website design and content
+---
+
 # Frontend Design Guidelines
 
 ## 1. Core Objective
