@@ -1,12 +1,12 @@
 # bt-intercom
 
-A local Bluetooth Classic intercom with selectable semi-duplex and full-duplex
+A local Bluetooth Classic intercom with selectable half-duplex and full-duplex
 modes for two or more headsets on Linux. BlueZ manages Bluetooth; PipeWire and
 WirePlumber provide headset audio. Each headset microphone routes to other
 configured headsets in its talk groups, never back to itself. With no talk groups
 configured, all headsets share the original all-to-all intercom. By default all
 microphones are live; optional push-to-talk (PTT) keeps them muted until a
-headset button is held. Semi-duplex queues talk requests and allows only one
+headset button is held. Half-duplex queues talk requests and allows only one
 headset microphone per talk group at a time. Friends or coworkers can pair their
 headsets with the same Linux host to join the conversation.
 
@@ -198,7 +198,7 @@ standard CLI and cross-compiled packages.
 
 ### Duplex modes and push-to-talk
 
-Select `--mode full-duplex` (the default) or `--mode semi-duplex` on `run`.
+Select `--mode full-duplex` (the default) or `--mode half-duplex` on `run`.
 Full-duplex without button mappings starts with every microphone always open.
 With mappings, each headset starts in PTT mode; its user can independently switch
 between PTT and always-open by pressing the play/pause button three times within
@@ -219,7 +219,7 @@ bt-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 \
 In PTT mode, hold a headset's play/pause button to transmit from its microphone;
 release to mute it. A double beep confirms when its microphone route is active.
 
-For semi-duplex, add `--mode semi-duplex` to the command above. Button mappings
+For half-duplex, add `--mode half-duplex` to the command above. Button mappings
 are required for every headset. Hold play/pause to request a turn: if another
 headset is transmitting, your request waits in first-in, first-out order.
 Keep holding while queued and wait for the double beep before talking.
@@ -229,8 +229,8 @@ an independent queue, so separate groups can have active talkers at the same
 time. A headset in multiple groups requests a turn in each and is routed only
 to groups where it currently holds the floor. With no talk groups configured,
 all headsets share one queue. Triple presses do not enable always-open
-microphones in semi-duplex.
-Semi-duplex routing failures stop the run and release its owned links rather
+microphones in half-duplex.
+Half-duplex routing failures stop the run and release its owned links rather
 than risk leaving the previous talker active. Existing external links remain
 untouched, so exclusivity applies only to routes managed by this process.
 When a mapped headset loses duplex audio, its request and always-open choice

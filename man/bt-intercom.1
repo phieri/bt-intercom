@@ -1,6 +1,6 @@
 .TH BT-INTERCOM 1
 .SH NAME
-bt-intercom \- semi-duplex or full-duplex Bluetooth headset intercom
+bt-intercom \- half-duplex or full-duplex Bluetooth headset intercom
 .SH SYNOPSIS
 .B bt-intercom
 .I COMMAND
@@ -54,7 +54,7 @@ Set the routing update interval (default: 2 seconds).
 Retry disconnected headsets every 30 seconds.
 .TP
 .BI run " --mode MODE"
-Select full-duplex (default) or semi-duplex. Semi-duplex requires a play/pause
+Select full-duplex (default) or half-duplex. Half-duplex requires a play/pause
 input mapping for every headset and grants one microphone at a time.
 .TP
 .BI run " --ptt ADDRESS=/dev/input/eventX"
@@ -62,13 +62,13 @@ Map a headset to its Linux evdev push-to-talk input. Repeat once for every
 configured headset. Only the headset's play/pause key press and release events
 are used.
 .PP
-Hold play/pause to talk in PTT mode; release to mute. In semi-duplex, requests
+Hold play/pause to talk in PTT mode; release to mute. In half-duplex, requests
 wait in first-in, first-out order while another headset transmits. Keep holding
 until a double beep confirms an active microphone route; releasing cancels a
 queued request or ends the current turn. Each talk group has an independent
 queue and can have one active talker. A headset in multiple groups can hold the
 floor in each; with no groups configured, all headsets share one queue.
-Semi-duplex routing failures stop the run and release owned links. External
+Half-duplex routing failures stop the run and release owned links. External
 links remain untouched; exclusivity applies only to this process's routes.
 .PP
 In full-duplex, mapped headsets start in PTT mode. Press play/pause three times

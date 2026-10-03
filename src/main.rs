@@ -101,7 +101,7 @@ enum CliCommand {
 		/// Map a headset address to an evdev input path; repeat once per headset.
 		#[arg(long, value_name = "ADDRESS=/dev/input/eventX", value_parser = parse_ptt_binding)]
 		ptt: Vec<PttButton>,
-		/// Transmit policy. Semi-duplex requires --ptt for every headset:
+		/// Transmit policy. Half-duplex requires --ptt for every headset:
 		/// hold play/pause to request the FIFO floor; release to cancel/relinquish.
 		/// Full-duplex mappings start in PTT; three play/pause presses within
 		/// 1 second (first to third, inclusive; release between presses) toggle
@@ -496,7 +496,7 @@ fn confirm_transmissions(
 		}
 		let Some(speaker_node) = speaker_node else {
 			let error = format!("could not play PTT confirmation for {address}: no speaker node");
-			if mode == Mode::SemiDuplex {
+			if mode == Mode::HalfDuplex {
 				return Err(error);
 			}
 			log::warn!("{error}");
@@ -510,7 +510,7 @@ fn confirm_transmissions(
 				transmit.pending.remove(&address);
 			}
 			Err(_error) if stopped.load(Ordering::SeqCst) => return Ok(true),
-			Err(error) if mode == Mode::SemiDuplex => {
+			Err(error) if mode == Mode::HalfDuplex => {
 				return Err(format!(
 					"could not play PTT confirmation for {address}: {error}"
 				));
@@ -575,8 +575,8 @@ fn validate_mode(
 	allowed: &BTreeSet<String>,
 ) -> Result<(), String> {
 	validate_ptt(buttons, allowed)?;
-	if mode == Mode::SemiDuplex && buttons.is_empty() {
-		return Err("--mode semi-duplex requires --ptt for every headset".into());
+	if mode == Mode::HalfDuplex && buttons.is_empty() {
+		return Err("--mode half-duplex requires --ptt for every headset".into());
 	}
 	Ok(())
 }
@@ -598,19 +598,19 @@ fn drain_ptt(input: &Receiver<PttEvent>, transmit: &mut Transmit) -> Result<bool
 }
 
 /// A failed snapshot can leave the previous floor's owned routes untouched.
-/// Fail closed before inspection/confirmation in semi-duplex; preserve the
+/// Fail closed before inspection/confirmation in half-duplex; preserve the
 /// existing non-fatal update warnings in full-duplex.
-fn guard_semi_update<T>(
+fn guard_half_update<T>(
 	mode: Mode,
 	update: &Result<T, String>,
 	close_owned: impl FnOnce(),
 ) -> Result<(), String> {
-	if mode == Mode::SemiDuplex
+	if mode == Mode::HalfDuplex
 		&& let Err(error) = update
 	{
 		close_owned();
 		return Err(format!(
-			"Semi-duplex routing failed; released owned links and stopped to prevent an unsafe floor handoff: {error}"
+			"Half-duplex routing failed; released owned links and stopped to prevent an unsafe floor handoff: {error}"
 		));
 	}
 	Ok(())
@@ -853,8 +853,8 @@ fn run(action: CliCommand) -> Result<(), String> {
 			let mut connected_headsets = BTreeSet::new();
 			if input.is_some() {
 				match mode {
-					Mode::SemiDuplex => log::info!(
-						"Semi-duplex: Hold play/pause to request the FIFO floor; release to cancel or relinquish. Double beep confirms a ready route."
+					Mode::HalfDuplex => log::info!(
+						"Half-duplex: Hold play/pause to request the FIFO floor; release to cancel or relinquish. Double beep confirms a ready route."
 					),
 					Mode::FullDuplex => log::info!(
 						"Full-duplex: Hold play/pause to transmit; release to mute. Three presses within 1 second (first to third, inclusive) toggle this headset's PTT/always-open mode."
@@ -900,12 +900,12 @@ fn run(action: CliCommand) -> Result<(), String> {
 						};
 						let update = if groups.is_empty() && input.is_none() {
 							router.update(true)
-						} else if mode == Mode::SemiDuplex && !groups.is_empty() {
+						} else if mode == Mode::HalfDuplex && !groups.is_empty() {
 							router.update_group_sources_in_groups(transmit.group_sources(), &groups)
 						} else {
 							router.update_sources_in_groups(&sources, &groups)
 						};
-						guard_semi_update(mode, &update, || router.close())?;
+						guard_half_update(mode, &update, || router.close())?;
 						let mut inspect_error = None;
 						let mut changed = false;
 						match router.inspect_owned() {
@@ -1289,7 +1289,7 @@ mod tests {
 	#[test]
 	fn mode_parsing_validation_and_documented_window() {
 		for (name, expected) in [
-			("semi-duplex", Mode::SemiDuplex),
+			("half-duplex", Mode::HalfDuplex),
 			("full-duplex", Mode::FullDuplex),
 		] {
 			let cli = Cli::try_parse_from(["bt-intercom", "run", "--mode", name]).unwrap();
@@ -1298,18 +1298,19 @@ mod tests {
 			};
 			assert_eq!(mode, expected);
 		}
+		assert!(Cli::try_parse_from(["bt-intercom", "run", "--mode", "semi-duplex"]).is_err());
 		assert!(Cli::try_parse_from(["bt-intercom", "run", "--mode", "half"]).is_err());
 		let allowed = BTreeSet::from(["AA:BB:CC:DD:EE:01".into()]);
 		assert!(validate_mode(Mode::FullDuplex, &[], &allowed).is_ok());
-		assert!(validate_mode(Mode::SemiDuplex, &[], &allowed).is_err());
-		assert!(validate_mode(Mode::SemiDuplex, &[], &BTreeSet::new()).is_err());
+		assert!(validate_mode(Mode::HalfDuplex, &[], &allowed).is_err());
+		assert!(validate_mode(Mode::HalfDuplex, &[], &BTreeSet::new()).is_err());
 		let buttons = [PttButton {
 			address: "AA:BB:CC:DD:EE:01".into(),
 			path: "/dev/input/event1".into(),
 		}];
-		assert!(validate_mode(Mode::SemiDuplex, &buttons, &allowed).is_ok());
+		assert!(validate_mode(Mode::HalfDuplex, &buttons, &allowed).is_ok());
 		let two = BTreeSet::from(["AA:BB:CC:DD:EE:01".into(), "AA:BB:CC:DD:EE:02".into()]);
-		assert!(validate_mode(Mode::SemiDuplex, &buttons, &two).is_err());
+		assert!(validate_mode(Mode::HalfDuplex, &buttons, &two).is_err());
 		let mut command = Cli::command();
 		let help = command
 			.find_subcommand_mut("run")
@@ -1321,10 +1322,10 @@ mod tests {
 	}
 
 	#[test]
-	fn semi_update_failure_closes_owned_clients_before_returning_fatal_error() {
+	fn half_update_failure_closes_owned_clients_before_returning_fatal_error() {
 		let mut owned_clients_closed = false;
 		let update: Result<(), String> = Err("pw-dump timed out".into());
-		let result = guard_semi_update(Mode::SemiDuplex, &update, || {
+		let result = guard_half_update(Mode::HalfDuplex, &update, || {
 			owned_clients_closed = true;
 		});
 		assert!(owned_clients_closed);
@@ -1339,10 +1340,10 @@ mod tests {
 		for (mode, update) in [
 			(Mode::FullDuplex, Err("snapshot unavailable".into())),
 			(Mode::FullDuplex, Ok(())),
-			(Mode::SemiDuplex, Ok(())),
+			(Mode::HalfDuplex, Ok(())),
 		] {
 			assert!(
-				guard_semi_update(mode, &update, || {
+				guard_half_update(mode, &update, || {
 					panic!("must not close clients for a successful update or full-duplex warning")
 				})
 				.is_ok()
@@ -1368,7 +1369,7 @@ mod tests {
 		let allowed = BTreeSet::from([a.into(), b.into()]);
 		let (headsets, _) = router::topology(&json!(objects), &allowed).unwrap();
 		let stopped = AtomicBool::new(false);
-		let mut transmit = Transmit::new(Mode::SemiDuplex, allowed);
+		let mut transmit = Transmit::new(Mode::HalfDuplex, allowed);
 		let now = Instant::now();
 		transmit.event(a, true, now);
 		transmit.event(b, true, now);
@@ -1376,7 +1377,7 @@ mod tests {
 		// A queued microphone's live route (or an incoming-only route to the
 		// floor holder) must not earn a confirmation.
 		confirm_transmissions(
-			Mode::SemiDuplex,
+			Mode::HalfDuplex,
 			&mut transmit,
 			&input,
 			&headsets,
@@ -1387,7 +1388,7 @@ mod tests {
 		.unwrap();
 		assert_eq!(transmit.pending, BTreeSet::from([a.into()]));
 		confirm_transmissions(
-			Mode::SemiDuplex,
+			Mode::HalfDuplex,
 			&mut transmit,
 			&input,
 			&headsets,
@@ -1399,7 +1400,7 @@ mod tests {
 		assert_eq!(transmit.pending, BTreeSet::from([a.into()]));
 		assert_eq!(
 			confirm_transmissions(
-				Mode::SemiDuplex,
+				Mode::HalfDuplex,
 				&mut transmit,
 				&input,
 				&headsets,
@@ -1418,7 +1419,7 @@ mod tests {
 		transmit.pending.insert(a.into());
 		assert!(
 			confirm_transmissions(
-				Mode::SemiDuplex,
+				Mode::HalfDuplex,
 				&mut transmit,
 				&input,
 				&headsets,
