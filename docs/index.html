@@ -116,29 +116,36 @@
           </ul>
           <p class="panel-update">Changes save to your user config and a running intercom picks them up on its next routing update.</p>
         </div>
-        <div class="terminal-card">
-          <div class="terminal-title"><span class="terminal-lights" aria-hidden="true"><i></i><i></i><i></i></span><span>bt-intercom · control panel</span><span class="terminal-version">LIVE VIEW</span></div>
-          <div class="terminal-body">
-            <div class="terminal-status"><span class="terminal-prompt">$</span><strong>HEADSET NETWORK</strong><span class="connected">3 CONNECTED</span></div>
-            <div class="terminal-stats"><span>BLUETOOTH <b>Connected</b></span><span>DUPLEX AUDIO <b>Available</b></span></div>
-            <div class="terminal-columns">
-              <div>
-                <p class="terminal-label">TALK GROUPS <span>2</span></p>
-                <div class="terminal-row selected"><span>›</span><b>Field team</b><em>2</em></div>
-                <div class="terminal-row"><span> </span><b>Workshop</b><em>2</em></div>
-                <p class="terminal-hint">n new · d remove</p>
-              </div>
-              <div>
-                <p class="terminal-label">HEADSETS <span>3</span></p>
-                <div class="terminal-row member"><span>●</span><b>Alex</b><em>IN</em></div>
-                <div class="terminal-row member"><span>●</span><b>Jules</b><em>IN</em></div>
-                <div class="terminal-row member"><span>○</span><b>Morgan</b><em>OUT</em></div>
-                <p class="terminal-hint">Space toggle member</p>
-              </div>
+        <div class="tui-card">
+          <div class="tui-screen">
+            <div class="tui-title">┌ bt-intercom | Headsets and talk groups ───────────────────────────────┐</div>
+            <section class="tui-status" aria-label="Illustrative live headset status">
+              <div class="tui-box-title">Live headset status</div>
+              <table>
+                <thead><tr><th>HEADSET</th><th>ADDRESS</th><th>BLUETOOTH</th><th>DUPLEX</th><th>SIGNAL</th></tr></thead>
+                <tbody>
+                  <tr><td>Alex</td><td>AA:BB:CC:DD:EE:01</td><td>connected</td><td>ready</td><td>−58 dBm</td></tr>
+                  <tr><td>Jules</td><td>AA:BB:CC:DD:EE:02</td><td>connected</td><td>ready</td><td>−64 dBm</td></tr>
+                  <tr><td>Morgan</td><td>AA:BB:CC:DD:EE:03</td><td>connected</td><td>ready</td><td>−71 dBm</td></tr>
+                </tbody>
+              </table>
+            </section>
+            <div class="tui-lower">
+              <section class="tui-pane" aria-label="Illustrative talk groups">
+                <div class="tui-box-title">Talk groups [n add, d delete]</div>
+                <p class="tui-selected">&gt; Field team</p>
+                <p>  Workshop</p>
+              </section>
+              <section class="tui-pane" aria-label="Illustrative group membership">
+                <div class="tui-box-title">Field team [space toggle]</div>
+                <p class="tui-member">&gt; [x] Alex (AA:BB:CC:DD:EE:01)</p>
+                <p>  [x] Jules (AA:BB:CC:DD:EE:02)</p>
+                <p>  [ ] Morgan (AA:BB:CC:DD:EE:03)</p>
+              </section>
             </div>
-            <div class="terminal-footer"><span>Tab switch list</span><span>Esc quit</span><span>↑ ↓ select</span></div>
+            <div class="tui-footer">Tab switch pane | ↑/↓ select | n add | d delete | Space toggle member | q quit</div>
           </div>
-          <p class="terminal-caption">An illustrative view of the controls and status shown in the terminal panel.</p>
+          <p class="tui-caption">Illustrative terminal view; the TUI runs in your terminal, not in a separate app window.</p>
         </div>
       </section>
 
