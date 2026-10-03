@@ -2,7 +2,7 @@
 
 //! Terminal color capability detection and semantic colors.
 
-use std::env;
+use std::{env, ffi::OsString};
 
 use ratatui::style::{Color, Style};
 
@@ -30,7 +30,7 @@ pub enum Meaning {
 
 impl Palette {
 	pub fn detect(is_terminal: bool) -> Self {
-		let no_color = env::var_os("NO_COLOR").is_some();
+		let no_color = no_color_requested(env::var_os("NO_COLOR"));
 		let term = env::var("TERM").unwrap_or_default();
 		let colorterm = env::var("COLORTERM").unwrap_or_default();
 		Self {
@@ -70,6 +70,10 @@ impl Palette {
 	}
 }
 
+fn no_color_requested(value: Option<OsString>) -> bool {
+	value.is_some_and(|value| !value.is_empty())
+}
+
 fn color_level(is_terminal: bool, no_color: bool, term: &str, colorterm: &str) -> ColorLevel {
 	if !is_terminal || no_color || term.eq_ignore_ascii_case("dumb") {
 		ColorLevel::None
@@ -86,6 +90,13 @@ fn color_level(is_terminal: bool, no_color: bool, term: &str, colorterm: &str) -
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn no_color_requires_a_non_empty_value() {
+		assert!(!no_color_requested(None));
+		assert!(!no_color_requested(Some(OsString::new())));
+		assert!(no_color_requested(Some(OsString::from("1"))));
+	}
 
 	#[test]
 	fn color_level_respects_terminal_and_no_color() {
