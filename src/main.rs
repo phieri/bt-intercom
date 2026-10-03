@@ -78,6 +78,11 @@ enum CliCommand {
 		#[arg(value_parser = address)]
 		address: String,
 	},
+	/// Remove a headset from the saved intercom network.
+	Remove {
+		#[arg(value_parser = address)]
+		address: String,
+	},
 	/// Show Bluetooth headset audio status.
 	Status {
 		#[arg(required = true, value_parser = address)]
@@ -345,6 +350,25 @@ fn save_headsets(path: &Path, allowed: &BTreeSet<String>) -> Result<(), String> 
 			path.display()
 		)
 	})?;
+	Ok(())
+}
+
+/// Removes an address from the saved headset network without changing Bluetooth pairing.
+fn remove_headset(path: &Path, address: &str) -> Result<(), String> {
+	let mut allowed = load_headsets(path)?;
+	if !allowed.remove(address) {
+		return Err(format!("{address} is not in the saved headset network"));
+	}
+	if allowed.is_empty() {
+		fs::remove_file(path).map_err(|error| {
+			format!(
+				"could not remove saved headset network {}: {error}",
+				path.display()
+			)
+		})?;
+	} else {
+		save_headsets(path, &allowed)?;
+	}
 	Ok(())
 }
 
@@ -726,6 +750,13 @@ fn run(action: CliCommand) -> Result<(), String> {
 				);
 			}
 		}
+		CliCommand::Remove { address: device } => {
+			let network_path = headset_network_path()?;
+			remove_headset(&network_path, &device)?;
+			println!(
+				"Removed {device} from the saved intercom network. Bluetooth pairing is unchanged; restart any running intercom to apply the change."
+			);
+		}
 		CliCommand::Status { addresses: devices } => {
 			let allowed = addresses(&devices)?;
 			let mut router = Router::new(allowed);
@@ -1073,6 +1104,38 @@ mod tests {
 	}
 
 	#[test]
+	fn removes_headsets_from_saved_network() {
+		let path = temporary_network_path();
+		let allowed = BTreeSet::from([
+			"AA:BB:CC:DD:EE:01".to_string(),
+			"AA:BB:CC:DD:EE:02".to_string(),
+		]);
+		save_headsets(&path, &allowed).unwrap();
+
+		remove_headset(&path, "AA:BB:CC:DD:EE:01").unwrap();
+
+		assert_eq!(
+			load_headsets(&path).unwrap(),
+			BTreeSet::from(["AA:BB:CC:DD:EE:02".to_string()])
+		);
+		fs::remove_dir_all(path.parent().unwrap()).unwrap();
+	}
+
+	#[test]
+	fn removes_last_headset_and_rejects_unknown_address_without_changes() {
+		let path = temporary_network_path();
+		let allowed = BTreeSet::from(["AA:BB:CC:DD:EE:01".to_string()]);
+		save_headsets(&path, &allowed).unwrap();
+
+		assert!(remove_headset(&path, "AA:BB:CC:DD:EE:02").is_err());
+		assert_eq!(load_headsets(&path).unwrap(), allowed);
+		remove_headset(&path, "AA:BB:CC:DD:EE:01").unwrap();
+		assert!(!path.exists());
+		assert!(load_headsets(&path).is_err());
+		fs::remove_dir_all(path.parent().unwrap()).unwrap();
+	}
+
+	#[test]
 	fn loads_normalized_addresses_and_rejects_invalid_network_files() {
 		let path = temporary_network_path();
 		fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1159,6 +1222,8 @@ mod tests {
 			vec!["bt-intercom", "run", "--unknown"],
 			vec!["bt-intercom", "run", "--ptt"],
 			vec!["bt-intercom", "run", "--ptt", "AA:BB:CC:DD:EE:01="],
+			vec!["bt-intercom", "remove"],
+			vec!["bt-intercom", "remove", "invalid"],
 		] {
 			assert_eq!(Cli::try_parse_from(args).err().unwrap().exit_code(), 2);
 		}

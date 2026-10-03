@@ -22,6 +22,11 @@ Scan for nearby Bluetooth devices.
 .BI pair " ADDRESS"
 Pair, trust, and connect a headset. Pairing requires an interactive terminal.
 .TP
+.BI remove " ADDRESS"
+Remove a headset from the saved intercom network. Bluetooth pairing is unchanged;
+restart a running intercom or service for the change to take effect. Removing
+the last address clears the saved network.
+.TP
 .BI status " ADDRESS" ...
 Show each headset's Bluetooth name, duplex audio availability, and port counts.
 .TP
