@@ -1,12 +1,12 @@
-.TH RPI-INTERCOM 1
+.TH BT-INTERCOM 1
 .SH NAME
-rpi-intercom \- semi-duplex or full-duplex Bluetooth headset intercom
+bt-intercom \- semi-duplex or full-duplex Bluetooth headset intercom
 .SH SYNOPSIS
-.B rpi-intercom
+.B bt-intercom
 .I COMMAND
 .RI [ OPTIONS ]
 .SH DESCRIPTION
-.B rpi-intercom
+.B bt-intercom
 routes configured Bluetooth Classic headsets using BlueZ, PipeWire, and
 WirePlumber. When talk groups are configured, a microphone is routed only to
 other members of its groups; otherwise all headsets share the intercom. Run it
@@ -86,9 +86,9 @@ Show the program version.
 Show the program version and the UTC build datetime.
 .SH CONFIGURATION
 The saved headset network is stored at
-.IR $XDG_CONFIG_HOME/rpi-intercom/headsets ,
+.IR $XDG_CONFIG_HOME/bt-intercom/headsets ,
 or
-.IR ~/.config/rpi-intercom/headsets
+.IR ~/.config/bt-intercom/headsets
 when
 .B XDG_CONFIG_HOME
 is unset or not absolute. Temporary PTT confirmation audio uses
@@ -96,9 +96,9 @@ is unset or not absolute. Temporary PTT confirmation audio uses
 when it is absolute and otherwise uses the system temporary directory.
 .PP
 Talk groups are stored in
-.IR $XDG_CONFIG_HOME/rpi-intercom/talk-groups.json ,
+.IR $XDG_CONFIG_HOME/bt-intercom/talk-groups.json ,
 or
-.IR ~/.config/rpi-intercom/talk-groups.json
+.IR ~/.config/bt-intercom/talk-groups.json
 when
 .B XDG_CONFIG_HOME
 is unset or not absolute. A running intercom reloads group changes on the next

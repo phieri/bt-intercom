@@ -46,14 +46,14 @@ struct PttButton {
 
 #[derive(Parser)]
 #[command(
-	name = "rpi-intercom",
+	name = "bt-intercom",
 	version,
 	long_version = concat!(
 		env!("CARGO_PKG_VERSION"),
 		"\nBuild datetime: ",
-		env!("RPI_INTERCOM_BUILD_DATETIME")
+		env!("BT_INTERCOM_BUILD_DATETIME")
 	),
-	about = "A full-duplex Bluetooth headset intercom for Raspberry Pi",
+	about = "A full-duplex Bluetooth headset intercom for Linux",
 	arg_required_else_help = true
 )]
 struct Cli {
@@ -313,7 +313,17 @@ fn headset_network_path() -> Result<PathBuf, String> {
 		.filter(|path| path.is_absolute())
 		.or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
 		.ok_or("could not determine the config directory; set XDG_CONFIG_HOME or HOME")?;
-	Ok(directory.join("rpi-intercom").join("headsets"))
+	Ok(app_config_directory(&directory).join("headsets"))
+}
+
+fn app_config_directory(directory: &Path) -> PathBuf {
+	let current = directory.join("bt-intercom");
+	let legacy = directory.join("rpi-intercom");
+	if current.exists() || !legacy.exists() {
+		current
+	} else {
+		legacy
+	}
 }
 
 /// Returns the session runtime directory, falling back to the system temp directory.
@@ -412,7 +422,7 @@ impl PttBeep {
 			.unwrap_or_default()
 			.as_nanos();
 		let path = runtime_dir.join(format!(
-			"rpi-intercom-ptt-{}-{nonce}.wav",
+			"bt-intercom-ptt-{}-{nonce}.wav",
 			std::process::id()
 		));
 		let mut file = OpenOptions::new()
@@ -991,13 +1001,13 @@ fn main() {
 			clap_complete::generate(
 				shell,
 				&mut command,
-				"rpi-intercom",
+				"bt-intercom",
 				&mut std::io::stdout().lock(),
 			);
 		}
 		command => {
 			if let Err(error) = run(command) {
-				eprintln!("rpi-intercom: {error}");
+				eprintln!("bt-intercom: {error}");
 				std::process::exit(1);
 			}
 		}
@@ -1038,7 +1048,7 @@ mod tests {
 			.unwrap()
 			.as_nanos();
 		env::temp_dir().join(format!(
-			"rpi-intercom-headsets-{}-{nonce}/headsets",
+			"bt-intercom-headsets-{}-{nonce}/headsets",
 			std::process::id()
 		))
 	}
@@ -1054,6 +1064,19 @@ mod tests {
 			env::temp_dir()
 		);
 		assert_eq!(ptt_runtime_directory(None), env::temp_dir());
+	}
+
+	#[test]
+	fn prefers_new_config_directory_and_falls_back_to_legacy_directory() {
+		let directory =
+			env::temp_dir().join(format!("bt-intercom-config-path-{}", std::process::id()));
+		let legacy = directory.join("rpi-intercom");
+		let current = directory.join("bt-intercom");
+		fs::create_dir_all(&legacy).unwrap();
+		assert_eq!(app_config_directory(&directory), legacy);
+		fs::create_dir_all(&current).unwrap();
+		assert_eq!(app_config_directory(&directory), current);
+		fs::remove_dir_all(directory).unwrap();
 	}
 
 	#[test]
@@ -1151,19 +1174,19 @@ mod tests {
 	#[test]
 	fn clap_cli_validates_arguments_and_accepts_completion_shells() {
 		for args in [
-			vec!["rpi-intercom", "run", "invalid"],
-			vec!["rpi-intercom", "run", "--interval", "NaN"],
-			vec!["rpi-intercom", "run", "--interval", "0.00000000001"],
-			vec!["rpi-intercom", "scan", "--seconds", "301"],
-			vec!["rpi-intercom", "status"],
-			vec!["rpi-intercom", "run", "--unknown"],
-			vec!["rpi-intercom", "run", "--ptt"],
-			vec!["rpi-intercom", "run", "--ptt", "AA:BB:CC:DD:EE:01="],
+			vec!["bt-intercom", "run", "invalid"],
+			vec!["bt-intercom", "run", "--interval", "NaN"],
+			vec!["bt-intercom", "run", "--interval", "0.00000000001"],
+			vec!["bt-intercom", "scan", "--seconds", "301"],
+			vec!["bt-intercom", "status"],
+			vec!["bt-intercom", "run", "--unknown"],
+			vec!["bt-intercom", "run", "--ptt"],
+			vec!["bt-intercom", "run", "--ptt", "AA:BB:CC:DD:EE:01="],
 		] {
 			assert_eq!(Cli::try_parse_from(args).err().unwrap().exit_code(), 2);
 		}
 		for shell in ["bash", "zsh", "fish", "elvish"] {
-			assert!(Cli::try_parse_from(["rpi-intercom", "completions", shell]).is_ok());
+			assert!(Cli::try_parse_from(["bt-intercom", "completions", shell]).is_ok());
 		}
 	}
 
@@ -1173,13 +1196,13 @@ mod tests {
 		assert_eq!(command.get_version(), Some(env!("CARGO_PKG_VERSION")));
 		let long_version = command.get_long_version().unwrap().to_string();
 		assert!(long_version.contains(env!("CARGO_PKG_VERSION")));
-		assert!(long_version.contains(env!("RPI_INTERCOM_BUILD_DATETIME")));
+		assert!(long_version.contains(env!("BT_INTERCOM_BUILD_DATETIME")));
 	}
 
 	#[test]
 	fn parses_ptt_without_changing_default_mode() {
 		let address = "AA:BB:CC:DD:EE:01".to_string();
-		let default = Cli::try_parse_from(["rpi-intercom", "run", address.as_str()]).unwrap();
+		let default = Cli::try_parse_from(["bt-intercom", "run", address.as_str()]).unwrap();
 		let CliCommand::Run {
 			ptt,
 			mode,
@@ -1195,7 +1218,7 @@ mod tests {
 
 		let binding = format!("{address}=/dev/input/event4");
 		let configured = Cli::try_parse_from([
-			"rpi-intercom",
+			"bt-intercom",
 			"run",
 			"--ptt",
 			binding.as_str(),
@@ -1227,13 +1250,13 @@ mod tests {
 			("semi-duplex", Mode::SemiDuplex),
 			("full-duplex", Mode::FullDuplex),
 		] {
-			let cli = Cli::try_parse_from(["rpi-intercom", "run", "--mode", name]).unwrap();
+			let cli = Cli::try_parse_from(["bt-intercom", "run", "--mode", name]).unwrap();
 			let CliCommand::Run { mode, .. } = cli.command else {
 				panic!("expected run");
 			};
 			assert_eq!(mode, expected);
 		}
-		assert!(Cli::try_parse_from(["rpi-intercom", "run", "--mode", "half"]).is_err());
+		assert!(Cli::try_parse_from(["bt-intercom", "run", "--mode", "half"]).is_err());
 		let allowed = BTreeSet::from(["AA:BB:CC:DD:EE:01".into()]);
 		assert!(validate_mode(Mode::FullDuplex, &[], &allowed).is_ok());
 		assert!(validate_mode(Mode::SemiDuplex, &[], &allowed).is_err());

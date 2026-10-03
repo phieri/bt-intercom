@@ -1,9 +1,9 @@
 #include <tunables/global>
 
-profile rpi-intercom /usr/bin/rpi-intercom {
+profile bt-intercom /usr/bin/bt-intercom {
   #include <abstractions/base>
 
-  /usr/bin/rpi-intercom mr,
+  /usr/bin/bt-intercom mr,
   /usr/bin/bluetoothctl ix,
   /usr/bin/pw-dump ix,
   /usr/bin/pw-cli ix,
@@ -20,6 +20,11 @@ profile rpi-intercom /usr/bin/rpi-intercom {
   /run/user/[0-9]*/pipewire-0 rw,
 
   @{HOME}/.config/ rw,
+  @{HOME}/.config/bt-intercom/ rw,
+  @{HOME}/.config/bt-intercom/headsets rwk,
+  @{HOME}/.config/bt-intercom/headsets.* rwk,
+  @{HOME}/.config/bt-intercom/talk-groups.json rwk,
+  @{HOME}/.config/bt-intercom/talk-groups.json.*.tmp rwk,
   @{HOME}/.config/rpi-intercom/ rw,
   @{HOME}/.config/rpi-intercom/headsets rwk,
   @{HOME}/.config/rpi-intercom/headsets.* rwk,
@@ -27,8 +32,10 @@ profile rpi-intercom /usr/bin/rpi-intercom {
   @{HOME}/.config/rpi-intercom/talk-groups.json.*.tmp rwk,
 
   /run/user/[0-9]*/ rw,
+  /run/user/[0-9]*/bt-intercom-ptt-*.wav rw,
   /run/user/[0-9]*/rpi-intercom-ptt-*.wav rw,
   /tmp/ rw,
+  /tmp/bt-intercom-ptt-*.wav rw,
   /tmp/rpi-intercom-ptt-*.wav rw,
 
   /dev/input/event[0-9]* r,

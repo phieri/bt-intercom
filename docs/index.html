@@ -4,8 +4,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <meta name="description" content="Watch the rpi-intercom command-line workflow in an asciinema terminal player.">
-    <title>rpi-intercom · Terminal tour</title>
+    <meta name="description" content="Watch the bt-intercom command-line workflow in an asciinema terminal player.">
+    <title>bt-intercom · Terminal tour</title>
     <link rel="preload" href="demo.cast" as="fetch" crossorigin>
     <link rel="stylesheet" href="vendor/asciinema-player.css">
     <link rel="stylesheet" href="style.css">
@@ -22,21 +22,21 @@
   </head>
   <body>
     <a class="skip" href="#main">Skip to content</a>
-    <header><a href="./">rpi-intercom <span aria-hidden="true">↗</span> terminal tour</a></header>
+    <header><a href="./">bt-intercom <span aria-hidden="true">↗</span> terminal tour</a></header>
     <main id="main">
-      <p class="eyebrow">Bluetooth Classic · Raspberry Pi · PipeWire</p>
+      <p class="eyebrow">Linux · Bluetooth Classic · PipeWire</p>
       <h1>Multiple headsets. One conversation.</h1>
-      <p class="intro">A local, full-duplex Bluetooth Classic headset intercom for Raspberry Pi. See the command-line workflow, from checking duplex audio to holding a headset's play/pause button to talk and following it live on the dashboard. See the setup guide for compatible hardware.</p>
+      <p class="intro">A local, full-duplex Bluetooth Classic headset intercom for Linux, including Raspberry Pi systems. See the command-line workflow, from checking duplex audio to holding a headset's play/pause button to talk and following it live on the dashboard. See the setup guide for compatible hardware.</p>
       <div class="links">
-        <a href="https://github.com/phieri/rpi-intercom#requirements">Get started on GitHub</a>
-        <a href="https://github.com/phieri/rpi-intercom#usage">Read the CLI guide</a>
+        <a href="https://github.com/phieri/bt-intercom#requirements">Get started on GitHub</a>
+        <a href="https://github.com/phieri/bt-intercom#usage">Read the CLI guide</a>
       </div>
 
       <section aria-labelledby="demo-title">
         <p class="eyebrow">Interactive terminal recording</p>
         <h2 id="demo-title">Watch the CLI in action</h2>
         <div class="player-panel">
-          <div class="panel-heading"><span class="dot" aria-hidden="true"></span> rpi-intercom / terminal</div>
+          <div class="panel-heading"><span class="dot" aria-hidden="true"></span> bt-intercom / terminal</div>
           <div id="player" role="group" aria-label="Interactive terminal demo player">
             <p>Play the terminal tour with the asciinema player, or <a href="demo.cast">download the asciicast recording</a>.</p>
           </div>
@@ -52,9 +52,9 @@
           <li><strong>02 / Check</strong><p>Use <code>status</code> to confirm each headset exposes duplex audio in PipeWire.</p></li>
           <li><strong>03 / Talk</strong><p>Start <code>run</code> for full duplex, or map each headset's play/pause button with <code>--ptt</code> for press-and-hold transmission.</p></li>
         </ol>
-        <p class="note">Requires BlueZ, PipeWire, WirePlumber, and compatible Bluetooth Classic headsets on a Raspberry Pi. Browser playback is only a demonstration; audio stays on the Pi and its paired headsets.</p>
+        <p class="note">Requires BlueZ, PipeWire, WirePlumber, and compatible Bluetooth Classic headsets on a Linux system. Raspberry Pi is one supported platform. Browser playback is only a demonstration; audio stays on the host and its paired headsets.</p>
       </section>
     </main>
-    <footer><a href="https://github.com/phieri/rpi-intercom">Source code and setup instructions</a> · Powered by <a href="https://github.com/asciinema/asciinema">asciinema</a>.</footer>
+    <footer><a href="https://github.com/phieri/bt-intercom">Source code and setup instructions</a> · Powered by <a href="https://github.com/asciinema/asciinema">asciinema</a>.</footer>
   </body>
 </html>

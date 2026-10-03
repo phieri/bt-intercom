@@ -57,7 +57,7 @@ mod tests {
 	#[test]
 	fn atomically_replaces_file_contents() {
 		let directory = std::env::temp_dir().join(format!(
-			"rpi-intercom-atomic-file-{}-{}",
+			"bt-intercom-atomic-file-{}-{}",
 			std::process::id(),
 			NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed)
 		));

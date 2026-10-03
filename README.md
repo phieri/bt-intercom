@@ -1,23 +1,20 @@
-# rpi-intercom
+# bt-intercom
 
 A local Bluetooth Classic intercom with selectable semi-duplex and full-duplex
-modes for two or more headsets on one
-Raspberry Pi. BlueZ manages Bluetooth; PipeWire and WirePlumber provide headset
-audio. Each headset microphone routes to other configured headsets in its talk
-groups, never back to itself. With no talk groups configured, all headsets share
-the original all-to-all intercom. By default all microphones are live; optional
-push-to-talk (PTT) keeps them muted until a headset button is held. Semi-duplex
-queues talk requests and allows only one headset microphone per talk group at a
-time.
+modes for two or more headsets on Linux. BlueZ manages Bluetooth; PipeWire and
+WirePlumber provide headset audio. Each headset microphone routes to other
+configured headsets in its talk groups, never back to itself. With no talk groups
+configured, all headsets share the original all-to-all intercom. By default all
+microphones are live; optional push-to-talk (PTT) keeps them muted until a
+headset button is held. Semi-duplex queues talk requests and allows only one
+headset microphone per talk group at a time.
 
-[Watch the illustrative CLI demo](https://phieri.github.io/rpi-intercom/).
+[Watch the illustrative CLI demo](https://phieri.github.io/bt-intercom/).
 
 ## Requirements
 
-- A Raspberry Pi with Bluetooth Classic: Zero W, Zero 2 W, Pi 3, Pi 4 and Pi 5
-  have onboard radios. Pi 1, Pi 2 and the original Pi Zero need a compatible USB
-  adapter.
-- Linux with BlueZ (`bluetoothctl`), PipeWire (`pw-dump`, `pw-cli`, `pw-play`)
+- Linux with Bluetooth Classic, BlueZ (`bluetoothctl`), PipeWire (`pw-dump`,
+  `pw-cli`, `pw-play`)
   and WirePlumber. Run as the same user as PipeWire, **not with `sudo`**.
 - At least two Bluetooth Classic headsets that expose both microphone and
   speaker audio through the HFP/HSP `headset-head-unit` profile. A2DP alone is
@@ -25,7 +22,13 @@ time.
   with `wpctl set-profile DEVICE_ID PROFILE_INDEX`. The program does not change
   profiles.
 
-On Raspberry Pi OS with PipeWire packages:
+### Raspberry Pi hardware
+
+Raspberry Pi Zero W, Zero 2 W, Pi 3, Pi 4 and Pi 5 have onboard Bluetooth
+Classic radios. Pi 1, Pi 2 and the original Pi Zero need a compatible USB
+adapter. The supported Linux artifact targets for these models are listed below.
+
+For example, on Raspberry Pi OS with PipeWire packages:
 
 ```sh
 sudo apt install bluez pipewire pipewire-bin wireplumber libspa-0.2-bluetooth
@@ -43,11 +46,11 @@ Alternatively, build and install the executable directly:
 
 ```sh
 cargo build --release --locked
-install -Dm755 target/release/rpi-intercom ~/.local/bin/rpi-intercom
+install -Dm755 target/release/bt-intercom ~/.local/bin/bt-intercom
 ```
 
 Alternatively, download the executable from a successful build artifact and
-install it as `~/.local/bin/rpi-intercom`. Each build also publishes `.deb` and
+install it as `~/.local/bin/bt-intercom`. Each build also publishes `.deb` and
 `.rpm` packages for the same target.
 
 ### Shell completions and logging
@@ -57,20 +60,20 @@ the completion directory for your shell:
 
 ```sh
 mkdir -p ~/.local/share/bash-completion/completions
-rpi-intercom completions bash > ~/.local/share/bash-completion/completions/rpi-intercom
+bt-intercom completions bash > ~/.local/share/bash-completion/completions/bt-intercom
 
 mkdir -p ~/.zfunc
-rpi-intercom completions zsh > ~/.zfunc/_rpi-intercom
+bt-intercom completions zsh > ~/.zfunc/_bt-intercom
 
 mkdir -p ~/.config/fish/completions
-rpi-intercom completions fish > ~/.config/fish/completions/rpi-intercom.fish
+bt-intercom completions fish > ~/.config/fish/completions/bt-intercom.fish
 
 mkdir -p ~/.config/elvish/lib
-rpi-intercom completions elvish > ~/.config/elvish/lib/rpi-intercom.elv
+bt-intercom completions elvish > ~/.config/elvish/lib/bt-intercom.elv
 ```
 
 For Zsh, add `fpath=(~/.zfunc $fpath)` before `compinit` in `~/.zshrc`. For
-Elvish, add `use rpi-intercom` to `~/.config/elvish/rc.elv`. Restart the shell
+Elvish, add `use bt-intercom` to `~/.config/elvish/rc.elv`. Restart the shell
 after configuring completions.
 
 Runtime diagnostics are written to stderr and respect `RUST_LOG`. The default
@@ -81,7 +84,7 @@ service sends stdout and stderr to the journal.
 
 `Cargo.toml` includes packaging metadata for the binary, man page, runtime
 requirements, an AppArmor profile, and a systemd user unit. The packages install
-the profile at `/etc/apparmor.d/usr.bin.rpi-intercom`; AppArmor must be enabled
+the profile at `/etc/apparmor.d/usr.bin.bt-intercom`; AppArmor must be enabled
 on the host for it to be enforced. The profile allows the default configuration
 and runtime paths, PipeWire and BlueZ access, and read access to PTT input
 devices. Custom `XDG_CONFIG_HOME` paths may need a local profile adjustment.
@@ -94,21 +97,22 @@ target). The `.deb` is written to `target/debian/`; the `.rpm` is written to
 `target/generate-rpm/` otherwise. CI publishes both packages for each supported
 target.
 
-Install the package with your distribution's package manager. The systemd user
-unit is installed but not enabled automatically. After configuring the saved
-headset network, start it with:
+Install the package with your distribution's package manager. Replacing the
+former `rpi-intercom` package may require removing it separately because the
+package name has changed. The systemd user unit is installed but not enabled
+automatically. After configuring the saved headset network, start it with:
 
 ```sh
 systemctl --user daemon-reload
-systemctl --user enable --now rpi-intercom.service
+systemctl --user enable --now bt-intercom.service
 ```
 
-The packaged unit runs `/usr/bin/rpi-intercom`; the example unit below remains
+The packaged unit runs `/usr/bin/bt-intercom`; the example unit below remains
 for manual installations under `~/.local/bin`.
 
-Choose an artifact for both the Pi and OS architecture:
+For Raspberry Pi, choose an artifact for both the model and OS architecture:
 
-| Pi model | OS | Artifact target |
+| Raspberry Pi model | OS | Artifact target |
 | --- | --- | --- |
 | Pi 1, original Zero, Zero W | 32-bit | `arm-unknown-linux-gnueabihf` (ARMv6) |
 | Pi 2, Zero 2 W, Pi 3, Pi 4 | 32-bit | `armv7-unknown-linux-gnueabihf` (ARMv7) |
@@ -116,22 +120,23 @@ Choose an artifact for both the Pi and OS architecture:
 
 Pi 5 should use a 64-bit OS. ARMv6 binaries also run on compatible 32-bit ARMv7
 systems; ARMv7 binaries do not run on ARMv6. Artifacts require a compatible
-glibc.
+glibc. These targets describe supported Raspberry Pi builds; other Linux systems
+can build natively with Cargo.
 
 ## Usage
 
 Show the installed version and UTC build datetime:
 
 ```sh
-rpi-intercom --version
+bt-intercom --version
 ```
 
 Put each headset in pairing mode, then scan and pair it:
 
 ```sh
-rpi-intercom scan --seconds 20
-rpi-intercom pair AA:BB:CC:DD:EE:01
-rpi-intercom pair AA:BB:CC:DD:EE:02
+bt-intercom scan --seconds 20
+bt-intercom pair AA:BB:CC:DD:EE:01
+bt-intercom pair AA:BB:CC:DD:EE:02
 ```
 
 Run `pair` in an interactive shell. At the BlueZ `KeyboardDisplay` prompt, enter
@@ -141,7 +146,7 @@ headset is incompatible with the agent, pair it through the desktop's Bluetooth
 UI or `bluetoothctl`. Verify PipeWire exposes duplex audio:
 
 ```sh
-rpi-intercom status AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02
+bt-intercom status AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02
 ```
 
 `status` reports each headset's name/address and microphone and speaker ports;
@@ -152,16 +157,18 @@ addresses.
 Start the intercom with the paired addresses:
 
 ```sh
-rpi-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 --connect
+bt-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 --connect
 ```
 
-Addresses are saved in `${XDG_CONFIG_HOME:-~/.config}/rpi-intercom/headsets`.
+Addresses are saved in `${XDG_CONFIG_HOME:-~/.config}/bt-intercom/headsets`.
 If `XDG_CONFIG_HOME` is unset or not an absolute path, they are saved under
-`~/.config/rpi-intercom/headsets`. Later, run `rpi-intercom run --connect` to
-restore them. `--connect` retries disconnected headsets every 30 seconds; omit
-it if another Bluetooth manager keeps them connected. Routing is polled every
-two seconds by default; change that with `--interval SECONDS`. Ctrl-C or SIGTERM
-closes links created by this process. Existing PipeWire links are not modified.
+`~/.config/bt-intercom/headsets`. If no new config directory exists, saved
+addresses and groups from the former `rpi-intercom` directory are still used.
+Later, run `bt-intercom run --connect` to restore them. `--connect` retries
+disconnected headsets every 30 seconds; omit it if another Bluetooth manager
+keeps them connected. Routing is polled every two seconds by default; change
+that with `--interval SECONDS`. Ctrl-C or SIGTERM closes links created by this
+process. Existing PipeWire links are not modified.
 Best-effort beeps confirm when an intercom route becomes active. Their temporary
 WAV file is created under `XDG_RUNTIME_DIR` when it is an absolute path, falling
 back to the system temporary directory otherwise; it is removed during shutdown.
@@ -171,7 +178,7 @@ back to the system temporary directory otherwise; it is removed during shutdown.
 Start the Ratatui control panel after saving a headset network:
 
 ```sh
-rpi-intercom tui
+bt-intercom tui
 ```
 
 The panel shows Bluetooth connection and signal status plus PipeWire duplex
@@ -179,8 +186,8 @@ availability. Use `Tab` to switch between the talk-group and member lists,
 arrow keys to select, `n` to create a group, `d` to remove the selected group,
 and `Space` to toggle headset membership. Enter saves a new group name; Esc
 cancels name entry or quits the panel. Group settings are saved to
-`${XDG_CONFIG_HOME:-~/.config}/rpi-intercom/talk-groups.json`; changes are
-picked up by a running `rpi-intercom run` process on its next routing update.
+`${XDG_CONFIG_HOME:-~/.config}/bt-intercom/talk-groups.json`; changes are
+picked up by a running `bt-intercom run` process on its next routing update.
 A headset's microphone is routed only to other headsets sharing at least one
 group with it. Headsets not assigned to a group are not routed when any groups
 exist. With no groups, routing remains all-to-all. The panel is included in the
@@ -201,7 +208,7 @@ Map each headset to its own Linux input event device. PTT listens only for
 keyboard input:
 
 ```sh
-rpi-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 \
+bt-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 \
   --ptt AA:BB:CC:DD:EE:01=/dev/input/event4 \
   --ptt AA:BB:CC:DD:EE:02=/dev/input/event5
 ```
@@ -241,15 +248,15 @@ availability, owned route counts and optional RSSI. It requires an interactive
 terminal on stderr and is not intended for a service. Route counts show links,
 not measured speech or audio quality.
 
-An example full-duplex user service is in `examples/rpi-intercom.service`. Pair
+An example full-duplex user service is in `examples/bt-intercom.service`. Pair
 and configure the headsets first, then install and enable it:
 
 ```sh
 mkdir -p ~/.config/systemd/user
-cp examples/rpi-intercom.service ~/.config/systemd/user/
+cp examples/bt-intercom.service ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now rpi-intercom.service
-journalctl --user -u rpi-intercom.service -f
+systemctl --user enable --now bt-intercom.service
+journalctl --user -u bt-intercom.service -f
 ```
 
 The unit uses `run --connect` and saved addresses; it does not enable PTT. The
@@ -259,14 +266,14 @@ WirePlumber's Bluetooth seat policy for headless use. Stop the unit to release
 its routes:
 
 ```sh
-systemctl --user stop rpi-intercom.service
+systemctl --user stop bt-intercom.service
 ```
 
 ## Limits and development
 
 Bluetooth connection capacity and audio behavior depend on the adapter,
 firmware, OS and headset; simultaneous HFP/HSP connections are not guaranteed.
-The Pi needs no local microphone or speaker, but this is not a network
+The host needs no local microphone or speaker, but this is not a network
 intercom. There is no GPIO control, automatic profile switching, echo
 cancellation or audio processing. Headsets need acoustic isolation to avoid
 feedback. Host tests use synthetic PipeWire graphs and do not verify Bluetooth
