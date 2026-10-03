@@ -347,6 +347,20 @@ fn default_command(args: &[&str]) -> Result<String, String> {
 	command(args, Duration::from_secs(15))
 }
 
+fn start_link(args: &[&str]) -> Result<Box<dyn LinkHandle>, String> {
+	let Some(program) = args.first().copied().filter(|program| !program.is_empty()) else {
+		return Err("cannot start PipeWire link without a command".into());
+	};
+	Command::new(program)
+		.args(&args[1..])
+		.stdin(Stdio::null())
+		.stdout(Stdio::null())
+		.stderr(Stdio::inherit())
+		.spawn()
+		.map(|child| Box::new(LinkProcess(child)) as Box<dyn LinkHandle>)
+		.map_err(|error| error.to_string())
+}
+
 impl Router {
 	/// Creates a router using the system `pw-dump` and `pw-cli` commands.
 	pub fn new(allowed: BTreeSet<String>) -> Self {
@@ -360,20 +374,7 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 	/// The executor is useful for tests and must return the command's stdout
 	/// or an error. Link creation still uses the production `pw-cli` backend.
 	pub fn with_executor(allowed: BTreeSet<String>, execute: F) -> Self {
-		Self::with_backend(
-			allowed,
-			execute,
-			Box::new(|args| {
-				Command::new(args[0])
-					.args(&args[1..])
-					.stdin(Stdio::null())
-					.stdout(Stdio::null())
-					.stderr(Stdio::inherit())
-					.spawn()
-					.map(|child| Box::new(LinkProcess(child)) as Box<dyn LinkHandle>)
-					.map_err(|error| error.to_string())
-			}),
-		)
+		Self::with_backend(allowed, execute, Box::new(start_link))
 	}
 
 	fn with_backend(allowed: BTreeSet<String>, execute: F, start_link: StartLink) -> Self {
@@ -584,6 +585,12 @@ mod tests {
 		);
 		let (headsets, _) = topology(&json!(fixture()), &[A.to_string()].into()).unwrap();
 		assert!(desired_links(&headsets).is_empty());
+	}
+
+	#[test]
+	fn rejects_link_commands_without_a_program() {
+		assert!(start_link(&[]).is_err());
+		assert!(start_link(&[""]).is_err());
 	}
 
 	#[test]
