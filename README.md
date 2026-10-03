@@ -97,10 +97,9 @@ target). The `.deb` is written to `target/debian/`; the `.rpm` is written to
 `target/generate-rpm/` otherwise. CI publishes both packages for each supported
 target.
 
-Install the package with your distribution's package manager. Replacing the
-former `rpi-intercom` package may require removing it separately because the
-package name has changed. The systemd user unit is installed but not enabled
-automatically. After configuring the saved headset network, start it with:
+Install the package with your distribution's package manager. The systemd user
+unit is installed but not enabled automatically. After configuring the saved
+headset network, start it with:
 
 ```sh
 systemctl --user daemon-reload
@@ -162,13 +161,11 @@ bt-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 --connect
 
 Addresses are saved in `${XDG_CONFIG_HOME:-~/.config}/bt-intercom/headsets`.
 If `XDG_CONFIG_HOME` is unset or not an absolute path, they are saved under
-`~/.config/bt-intercom/headsets`. If no new config directory exists, saved
-addresses and groups from the former `rpi-intercom` directory are still used.
-Later, run `bt-intercom run --connect` to restore them. `--connect` retries
-disconnected headsets every 30 seconds; omit it if another Bluetooth manager
-keeps them connected. Routing is polled every two seconds by default; change
-that with `--interval SECONDS`. Ctrl-C or SIGTERM closes links created by this
-process. Existing PipeWire links are not modified.
+`~/.config/bt-intercom/headsets`. Later, run `bt-intercom run --connect` to
+restore them. `--connect` retries disconnected headsets every 30 seconds; omit
+it if another Bluetooth manager keeps them connected. Routing is polled every
+two seconds by default; change that with `--interval SECONDS`. Ctrl-C or SIGTERM
+closes links created by this process. Existing PipeWire links are not modified.
 Best-effort beeps confirm when an intercom route becomes active. Their temporary
 WAV file is created under `XDG_RUNTIME_DIR` when it is an absolute path, falling
 back to the system temporary directory otherwise; it is removed during shutdown.

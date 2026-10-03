@@ -313,17 +313,7 @@ fn headset_network_path() -> Result<PathBuf, String> {
 		.filter(|path| path.is_absolute())
 		.or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
 		.ok_or("could not determine the config directory; set XDG_CONFIG_HOME or HOME")?;
-	Ok(app_config_directory(&directory).join("headsets"))
-}
-
-fn app_config_directory(directory: &Path) -> PathBuf {
-	let current = directory.join("bt-intercom");
-	let legacy = directory.join("rpi-intercom");
-	if current.exists() || !legacy.exists() {
-		current
-	} else {
-		legacy
-	}
+	Ok(directory.join("bt-intercom").join("headsets"))
 }
 
 /// Returns the session runtime directory, falling back to the system temp directory.
@@ -1064,19 +1054,6 @@ mod tests {
 			env::temp_dir()
 		);
 		assert_eq!(ptt_runtime_directory(None), env::temp_dir());
-	}
-
-	#[test]
-	fn prefers_new_config_directory_and_falls_back_to_legacy_directory() {
-		let directory =
-			env::temp_dir().join(format!("bt-intercom-config-path-{}", std::process::id()));
-		let legacy = directory.join("rpi-intercom");
-		let current = directory.join("bt-intercom");
-		fs::create_dir_all(&legacy).unwrap();
-		assert_eq!(app_config_directory(&directory), legacy);
-		fs::create_dir_all(&current).unwrap();
-		assert_eq!(app_config_directory(&directory), current);
-		fs::remove_dir_all(directory).unwrap();
 	}
 
 	#[test]

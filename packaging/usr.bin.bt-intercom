@@ -25,11 +25,6 @@ profile bt-intercom /usr/bin/bt-intercom {
   @{HOME}/.config/bt-intercom/headsets.* rwk,
   @{HOME}/.config/bt-intercom/talk-groups.json rwk,
   @{HOME}/.config/bt-intercom/talk-groups.json.*.tmp rwk,
-  @{HOME}/.config/rpi-intercom/ rw,
-  @{HOME}/.config/rpi-intercom/headsets rwk,
-  @{HOME}/.config/rpi-intercom/headsets.* rwk,
-  @{HOME}/.config/rpi-intercom/talk-groups.json rwk,
-  @{HOME}/.config/rpi-intercom/talk-groups.json.*.tmp rwk,
 
   /run/user/[0-9]*/ rw,
   /run/user/[0-9]*/bt-intercom-ptt-*.wav rw,
