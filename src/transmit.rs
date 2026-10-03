@@ -333,7 +333,7 @@ mod tests {
 	}
 
 	#[test]
-	fn semi_never_toggles_and_rapid_changes_retire_pending_beeps() {
+	fn half_never_toggles_and_rapid_changes_retire_pending_beeps() {
 		let (mut t, now) = setup(Mode::HalfDuplex);
 		for ms in [0, 10, 20] {
 			press(&mut t, "a", now, ms);

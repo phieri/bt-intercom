@@ -1322,7 +1322,7 @@ mod tests {
 	}
 
 	#[test]
-	fn semi_update_failure_closes_owned_clients_before_returning_fatal_error() {
+	fn half_update_failure_closes_owned_clients_before_returning_fatal_error() {
 		let mut owned_clients_closed = false;
 		let update: Result<(), String> = Err("pw-dump timed out".into());
 		let result = guard_half_update(Mode::HalfDuplex, &update, || {
