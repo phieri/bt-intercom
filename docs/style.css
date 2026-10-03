@@ -111,35 +111,22 @@ code { color: var(--mint); font-family: var(--mono); font-size: .9em; }
 .key-list li { display: flex; align-items: center; gap: .75rem; color: var(--muted); font-size: .78rem; }
 kbd { display: inline-grid; min-width: 2.25rem; min-height: 1.8rem; place-items: center; padding-inline: .4rem; border: 1px solid #50605d; border-bottom-width: 2px; border-radius: .25rem; color: var(--paper); font-family: var(--mono); font-size: .67rem; }
 .panel-copy .panel-update { color: #87958f; font-size: .75rem; }
-.terminal-card { overflow: hidden; border: 1px solid #435151; border-radius: .45rem; background: var(--night); box-shadow: 0 20px 65px #0003; }
-.terminal-title { display: flex; align-items: center; gap: .7rem; min-height: 2.8rem; padding: .65rem .9rem; border-bottom: 1px solid #263334; color: #9eada6; font-family: var(--mono); font-size: .64rem; }
-.terminal-lights { display: flex; gap: .28rem; }
-.terminal-lights i { width: .42rem; height: .42rem; border-radius: 50%; background: #5b6963; }
-.terminal-lights i:first-child { background: #f07c63; }
-.terminal-lights i:nth-child(2) { background: #e7bb60; }
-.terminal-lights i:last-child { background: #79bd8a; }
-.terminal-version { margin-left: auto; color: #80918a; font-size: .55rem; }
-.terminal-body { padding: clamp(.9rem, 2.5vw, 1.4rem); font-family: var(--mono); }
-.terminal-status { display: flex; align-items: center; gap: .65rem; font-size: .65rem; }
-.terminal-prompt { color: var(--mint); }
-.terminal-status strong { color: #dae4dd; font-weight: 600; }
-.connected { margin-left: auto; color: var(--mint); font-size: .58rem; }
-.terminal-stats { display: flex; gap: 1.3rem; margin: 1rem 0 1.2rem; padding: .65rem 0; border-block: 1px solid #293536; }
-.terminal-stats span { color: #7f918a; font-size: .53rem; }
-.terminal-stats b { display: block; margin-top: .28rem; color: #c7d3cc; font-size: .62rem; font-weight: 500; }
-.terminal-columns { display: grid; grid-template-columns: .92fr 1.08fr; gap: .8rem; }
-.terminal-label { display: flex; justify-content: space-between; margin-bottom: .45rem; color: #82938c; font-size: .53rem; }
-.terminal-label span { color: inherit; }
-.terminal-row { display: flex; align-items: center; gap: .5rem; min-width: 0; padding: .48rem .4rem; color: #bec9c2; font-size: .62rem; }
-.terminal-row.selected { border-radius: .2rem; background: #274139; color: var(--mint); }
-.terminal-row > span { width: .65rem; color: var(--mint); }
-.terminal-row b { overflow: hidden; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.terminal-row em { margin-left: auto; color: #83928b; font-size: .5rem; font-style: normal; }
-.terminal-row.member > span { width: .65rem; font-size: .55rem; }
-.terminal-row.member:last-of-type > span { color: #798680; }
-.terminal-hint { margin: .65rem 0 0; color: #73837c; font-size: .52rem; }
-.terminal-footer { display: flex; justify-content: space-between; gap: .5rem; margin-top: 1rem; padding-top: .7rem; border-top: 1px solid #293536; color: #778780; font-size: .51rem; }
-.terminal-caption { margin: 0; padding: .65rem .9rem; border-top: 1px solid #293536; color: #73837c; font-size: .65rem; }
+.tui-card { overflow: hidden; border: 1px solid #435151; background: var(--night); box-shadow: 0 20px 65px #0003; }
+.tui-screen { padding: .8rem; color: #c7d3cc; font-family: var(--mono); font-size: clamp(.48rem, .75vw, .65rem); }
+.tui-title { overflow: hidden; margin-bottom: .65rem; color: var(--paper); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.tui-status, .tui-pane { min-width: 0; border: 1px solid #53615c; }
+.tui-status { padding: .55rem; }
+.tui-box-title { overflow: hidden; margin: -.95rem 0 .45rem .5rem; padding-inline: .3rem; width: fit-content; max-width: calc(100% - .75rem); background: var(--night); color: #c7d3cc; text-overflow: ellipsis; white-space: nowrap; }
+.tui-status table { width: 100%; border-collapse: collapse; text-align: left; }
+.tui-status th { color: #a8b5af; font-weight: 600; }
+.tui-status th, .tui-status td { padding: .25rem .35rem; white-space: nowrap; }
+.tui-status td:nth-child(3), .tui-status td:nth-child(4) { color: var(--mint); }
+.tui-lower { display: grid; grid-template-columns: 2fr 3fr; gap: .6rem; margin-top: .8rem; }
+.tui-pane { min-height: 7.5rem; padding: .55rem; }
+.tui-pane p { overflow: hidden; margin: .35rem 0; text-overflow: ellipsis; white-space: nowrap; }
+.tui-pane .tui-selected, .tui-pane .tui-member { color: var(--mint); }
+.tui-footer { overflow: hidden; margin-top: .65rem; padding: .45rem .3rem 0; border-top: 1px solid #53615c; color: #a8b5af; text-overflow: ellipsis; white-space: nowrap; }
+.tui-caption { margin: 0; padding: .65rem .9rem; border-top: 1px solid #293536; color: #87958f; font-size: .65rem; }
 .demo-section { border-top: 1px solid var(--line); }
 .demo-heading { display: flex; align-items: end; justify-content: space-between; gap: 2rem; margin-bottom: 1.5rem; }
 .demo-heading h2 { margin-bottom: 0; }
@@ -194,11 +181,12 @@ footer > a:last-child:hover { color: var(--mint); }
   .group-card > p { min-height: 0; }
   .demo-heading { display: block; }
   .demo-heading > p { margin-top: .9rem; }
-  .panel-label, .terminal-version { display: none; }
-  .terminal-stats { gap: 1rem; }
-  .terminal-columns { gap: .45rem; }
-  .terminal-row { gap: .3rem; padding-inline: .25rem; font-size: .57rem; }
-  .terminal-footer { font-size: .46rem; }
+  .tui-screen { padding: .55rem; font-size: .54rem; }
+  .tui-status th:nth-child(2), .tui-status td:nth-child(2), .tui-status th:nth-child(5), .tui-status td:nth-child(5) { display: none; }
+  .tui-lower { grid-template-columns: 1fr; }
+  .tui-pane { min-height: 0; }
+  .tui-pane p { white-space: normal; overflow-wrap: anywhere; }
+  .tui-footer { font-size: .48rem; }
   .start-banner { align-items: flex-start; flex-direction: column; }
   footer { flex-wrap: wrap; justify-content: space-between; padding-block: 1.25rem; }
   footer > span { order: 3; width: 100%; text-align: left; }
@@ -209,9 +197,7 @@ footer > a:last-child:hover { color: var(--mint); }
   .site-header nav .nav-cta { padding: .36rem .4rem; }
   .board-topline { font-size: .54rem; }
   .host-mode { display: none; }
-  .terminal-status { gap: .4rem; font-size: .58rem; }
-  .connected { font-size: .5rem; }
-  .terminal-stats span { font-size: .47rem; }
+  .tui-status th:nth-child(4), .tui-status td:nth-child(4) { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
