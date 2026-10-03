@@ -80,6 +80,11 @@ Runtime diagnostics are written to stderr and respect `RUST_LOG`. The default
 level is `info`; set `RUST_LOG=warn` to show warnings only. A systemd user
 service sends stdout and stderr to the journal.
 
+The terminal control panel uses semantic colors when the terminal supports
+them; it respects `NO_COLOR`, and uses a plain style when color is unavailable.
+The live dashboard only clears the screen when its output is an interactive
+terminal.
+
 ### Debian and RPM packages
 
 `Cargo.toml` includes packaging metadata for the binary, man page, runtime

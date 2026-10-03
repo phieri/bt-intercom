@@ -10,6 +10,7 @@ mod bluez;
 mod dashboard;
 mod groups;
 mod router;
+mod terminal_style;
 mod transmit;
 
 mod tui;
@@ -984,6 +985,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 									input.is_none() || !transmit.sources().is_empty(),
 									last_error.as_deref(),
 									&mut std::io::stderr().lock(),
+									std::io::stderr().is_terminal(),
 								)
 								.map_err(|error| error.to_string())?;
 							redraw = false;

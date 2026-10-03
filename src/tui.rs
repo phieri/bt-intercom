@@ -13,15 +13,16 @@ use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::layout::{Constraint, Layout};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Row, Table};
+use ratatui::widgets::{Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table};
 use ratatui::{DefaultTerminal, Frame};
 
 use crate::bluez::{bluetooth_name, device_flag, property};
 use crate::command_cancellable;
 use crate::groups::{TalkGroup, load, normalize_name, save};
 use crate::router::{Headset, Router};
+use crate::terminal_style::{Meaning, Palette};
 
 #[derive(Clone, Debug)]
 struct HeadsetStatus {
@@ -55,6 +56,7 @@ struct ControlPanel {
 	persistence_error: Option<String>,
 	status_error: Option<String>,
 	last_updated: Option<Instant>,
+	palette: Palette,
 }
 
 impl ControlPanel {
@@ -73,6 +75,7 @@ impl ControlPanel {
 			persistence_error: None,
 			status_error: None,
 			last_updated: None,
+			palette: Palette::detect(std::io::stdout().is_terminal()),
 		})
 	}
 
@@ -231,12 +234,14 @@ impl ControlPanel {
 				let name = status
 					.and_then(|status| status.name.as_deref())
 					.unwrap_or("—");
-				let connected = match status.and_then(|status| status.connected) {
+				let connected_state = status.and_then(|status| status.connected);
+				let connected = match connected_state {
 					Some(true) => "connected",
 					Some(false) => "disconnected",
 					None => "unknown",
 				};
-				let duplex = if status.is_some_and(|status| status.duplex) {
+				let duplex_ready = status.is_some_and(|status| status.duplex);
+				let duplex = if duplex_ready {
 					"ready"
 				} else {
 					"unavailable"
@@ -244,12 +249,36 @@ impl ControlPanel {
 				let rssi = status
 					.and_then(|status| status.rssi)
 					.map_or_else(|| "—".to_string(), |rssi| format!("{rssi} dBm"));
+				let connection_meaning = match connected_state {
+					Some(true) => Meaning::Success,
+					Some(false) => Meaning::Error,
+					None => Meaning::Warning,
+				};
+				let signal_meaning = match status.and_then(|status| status.rssi) {
+					Some(-70..) => Meaning::Success,
+					Some(-80..=-71) => Meaning::Warning,
+					Some(_) => Meaning::Error,
+					None => Meaning::Info,
+				};
 				Row::new([
-					name.to_string(),
-					address.clone(),
-					connected.into(),
-					duplex.into(),
-					rssi,
+					Cell::from(name.to_string()),
+					Cell::from(Span::styled(
+						address.clone(),
+						self.palette.style(Meaning::Info),
+					)),
+					Cell::from(Span::styled(
+						connected,
+						self.palette.style(connection_meaning),
+					)),
+					Cell::from(Span::styled(
+						duplex,
+						self.palette.style(if duplex_ready {
+							Meaning::Success
+						} else {
+							Meaning::Warning
+						}),
+					)),
+					Cell::from(Span::styled(rssi, self.palette.style(signal_meaning))),
 				])
 			})
 			.collect();
@@ -295,11 +324,14 @@ impl ControlPanel {
 				Block::default()
 					.title(group_title)
 					.borders(Borders::ALL)
-					.border_style(focus_style(self.focus == Focus::Groups)),
+					.border_style(focus_style(
+						self.palette,
+						self.focus == Focus::Groups,
+					)),
 			)
 			.highlight_style(
-				Style::default()
-					.fg(Color::Yellow)
+				self.palette
+					.style(Meaning::Selection)
 					.add_modifier(Modifier::BOLD),
 			)
 			.highlight_symbol("> ");
@@ -320,9 +352,19 @@ impl ControlPanel {
 					.and_then(|status| status.name.as_deref())
 					.unwrap_or(address.as_str());
 				ListItem::new(Line::from(vec![
-					Span::raw(if included { "[x] " } else { "[ ] " }),
+					Span::styled(
+						if included { "[x] " } else { "[ ] " },
+						self.palette.style(if included {
+							Meaning::Success
+						} else {
+							Meaning::Warning
+						}),
+					),
 					Span::raw(name),
-					Span::raw(format!(" ({address})")),
+					Span::styled(
+						format!(" ({address})"),
+						self.palette.style(Meaning::Info),
+					),
 				]))
 			})
 			.collect();
@@ -335,11 +377,14 @@ impl ControlPanel {
 				Block::default()
 					.title(format!("{group_name} [space toggle]"))
 					.borders(Borders::ALL)
-					.border_style(focus_style(self.focus == Focus::Members)),
+					.border_style(focus_style(
+						self.palette,
+						self.focus == Focus::Members,
+					)),
 			)
 			.highlight_style(
-				Style::default()
-					.fg(Color::Yellow)
+				self.palette
+					.style(Meaning::Selection)
 					.add_modifier(Modifier::BOLD),
 			)
 			.highlight_symbol("> ");
@@ -374,7 +419,7 @@ impl ControlPanel {
 						|| self.persistence_error.is_some()
 						|| self.status_error.is_some()
 					{
-						Style::default().fg(Color::Red)
+						self.palette.style(Meaning::Error)
 					} else {
 						Style::default()
 					},
@@ -385,9 +430,9 @@ impl ControlPanel {
 	}
 }
 
-fn focus_style(focused: bool) -> Style {
+fn focus_style(palette: Palette, focused: bool) -> Style {
 	if focused {
-		Style::default().fg(Color::Cyan)
+		palette.style(Meaning::Selection)
 	} else {
 		Style::default()
 	}

@@ -10,6 +10,10 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
+use crossterm::cursor::MoveTo;
+use crossterm::execute;
+use crossterm::terminal::{Clear, ClearType};
+
 use crate::bluez::{bluetooth_name, device_flag, property};
 use crate::command_cancellable;
 use crate::router::Headset;
@@ -98,10 +102,14 @@ impl Dashboard {
 		transmitting: bool,
 		error: Option<&str>,
 		output: &mut impl Write,
+		is_terminal: bool,
 	) -> io::Result<()> {
+		if is_terminal {
+			execute!(output, Clear(ClearType::All), MoveTo(0, 0))?;
+		}
 		writeln!(
 			output,
-			"\x1b[H\x1b[2Jbt-intercom | {} | {} owned active links",
+			"bt-intercom | {} | {} owned active links",
 			if transmitting {
 				"transmitting"
 			} else {
@@ -242,6 +250,7 @@ mod tests {
 				false,
 				None,
 				&mut output,
+				false,
 			)
 			.unwrap();
 		let text = String::from_utf8(output).unwrap();
@@ -315,6 +324,7 @@ mod tests {
 				false,
 				None,
 				&mut output,
+				false,
 			)
 			.unwrap();
 		let text = String::from_utf8(output).unwrap();
@@ -357,6 +367,7 @@ mod tests {
 				false,
 				None,
 				&mut output,
+				false,
 			)
 			.unwrap();
 		let text = String::from_utf8(output).unwrap();

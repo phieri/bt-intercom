@@ -4,7 +4,7 @@
 
 use std::env;
 
-use ratatui::style::Color;
+use ratatui::style::{Color, Style};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ColorLevel {
@@ -58,6 +58,14 @@ impl Palette {
 			(_, Meaning::Warning) => Color::Yellow,
 			(_, Meaning::Info) => Color::Blue,
 			(_, Meaning::Selection) => Color::Cyan,
+		}
+
+		pub fn style(self, meaning: Meaning) -> Style {
+			if self.level == ColorLevel::None {
+				Style::default()
+			} else {
+				Style::default().fg(self.color(meaning))
+			}
 		}
 	}
 }
