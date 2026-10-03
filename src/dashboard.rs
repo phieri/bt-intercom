@@ -101,7 +101,7 @@ impl Dashboard {
 	) -> io::Result<()> {
 		writeln!(
 			output,
-			"\x1b[H\x1b[2Jbt-intercom | {} | {} owned active links",
+			"bt-intercom | {} | {} owned active links",
 			if transmitting {
 				"transmitting"
 			} else {
@@ -245,6 +245,7 @@ mod tests {
 			)
 			.unwrap();
 		let text = String::from_utf8(output).unwrap();
+		assert!(!text.contains('\u{1b}'));
 		assert!(text.contains("muted | 1 owned active links"));
 		assert!(text.contains("HEADSET NAME             ADDRESS             CONNECTED"));
 		assert!(!text.contains("PAIRED"));

@@ -10,6 +10,7 @@ mod bluez;
 mod dashboard;
 mod groups;
 mod router;
+mod terminal_style;
 mod transmit;
 
 mod tui;
@@ -31,6 +32,9 @@ use std::time::{Duration, Instant};
 use bluez::{bluetooth_name, device_flag};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
+use crossterm::cursor::MoveTo;
+use crossterm::execute;
+use crossterm::terminal::{Clear, ClearType};
 use dashboard::Dashboard;
 use groups::{config_path as talk_groups_path, load as load_talk_groups};
 use router::{Headset, Router, has_active_intercom_connection, has_active_source_route};
@@ -976,6 +980,13 @@ fn run(action: CliCommand) -> Result<(), String> {
 					if let Some(ref mut dashboard) = dashboard {
 						redraw |= dashboard.refresh();
 						if redraw {
+							let stderr = std::io::stderr();
+							let interactive = stderr.is_terminal();
+							let mut output = stderr.lock();
+							if interactive {
+								execute!(output, Clear(ClearType::All), MoveTo(0, 0))
+									.map_err(|error| error.to_string())?;
+							}
 							dashboard
 								.draw(
 									&router.allowed,
@@ -983,7 +994,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 									&links,
 									input.is_none() || !transmit.sources().is_empty(),
 									last_error.as_deref(),
-									&mut std::io::stderr().lock(),
+									&mut output,
 								)
 								.map_err(|error| error.to_string())?;
 							redraw = false;
