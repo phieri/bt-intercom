@@ -194,19 +194,25 @@ fn command_cancellable(
 	timeout: Duration,
 	stopped: Option<&AtomicBool>,
 ) -> Result<String, String> {
+	let Some(name) = args.first().copied().filter(|name| !name.is_empty()) else {
+		return Err("command arguments must include a program".into());
+	};
 	if stopped.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
-		return Err(format!("{} cancelled", args[0]));
+		return Err(format!("{name} cancelled"));
 	}
-	let mut child = Command::new(args[0])
+	let mut child = Command::new(name)
 		.args(&args[1..])
 		.stdin(Stdio::null())
 		.stdout(Stdio::piped())
 		.stderr(Stdio::piped())
 		.process_group(0)
 		.spawn()
-		.map_err(|e| format!("{}: {e}", args[0]))?;
-	let mut stdout = child.stdout.take().unwrap();
-	let mut stderr = child.stderr.take().unwrap();
+		.map_err(|e| format!("{name}: {e}"))?;
+	let (Some(mut stdout), Some(mut stderr)) = (child.stdout.take(), child.stderr.take()) else {
+		kill_process_group(&mut child);
+		let _ = child.wait();
+		return Err(format!("{name}: failed to capture command output"));
+	};
 	let output = thread::spawn(move || {
 		let mut bytes = Vec::new();
 		stdout.read_to_end(&mut bytes).map(|_| bytes)
@@ -215,13 +221,7 @@ fn command_cancellable(
 		let mut bytes = Vec::new();
 		stderr.read_to_end(&mut bytes).map(|_| bytes)
 	});
-	let status = wait_child(
-		&mut child,
-		args[0],
-		timeout,
-		stopped,
-		KillMode::ProcessGroup,
-	)?;
+	let status = wait_child(&mut child, name, timeout, stopped, KillMode::ProcessGroup)?;
 	let stdout = output
 		.join()
 		.map_err(|_| "stdout reader panicked".to_string())?
@@ -233,7 +233,7 @@ fn command_cancellable(
 	if !status.success() {
 		return Err(format!(
 			"{} exited with {status}: {}",
-			args[0],
+			name,
 			String::from_utf8_lossy(&stderr).trim()
 		));
 	}
@@ -1547,6 +1547,12 @@ mod tests {
 				.len(),
 			131072
 		);
+	}
+
+	#[test]
+	fn commands_reject_missing_program_names() {
+		assert!(command(&[], Duration::from_secs(1)).is_err());
+		assert!(command(&[""], Duration::from_secs(1)).is_err());
 	}
 
 	#[test]
