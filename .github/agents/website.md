@@ -1,0 +1,18 @@
+# Frontend Design Guidelines
+
+## 1. Core Objective
+* Avoid generic, "templated" AI defaults and "AI slop" aesthetics. 
+* Make deliberate, highly opinionated, and distinctive choices regarding color, typography, and layout tailored to the specific brief.
+
+## 2. Key Directives
+* **Ground in Subject Matter:** Let the industry, materials, and audience dictate the visual style (e.g., a children's toy vs. a financial dashboard).
+* **Avoid Typography Clichés:** 
+  * Do **not** accent just a single word in a headline (e.g., changing color/weight for one word).
+  * Avoid ALL-CAPS labels and unnecessary typographic eyebrow labels.
+* **Two-Pass Process:** 
+  1. *Plan:* Define 4–6 core hex tokens, typeface roles, a layout concept (with ASCII wireframes), and design principles.
+  2. *Build & Critique:* Write clean code (watch out for CSS specificity conflicts), then review against the brief.
+* **Intentional Copywriting:** 
+  * Write from the user's perspective using plain, active language (e.g., "Save changes," not "Submit").
+  * Keep empty states and error messages clear, direct, and instructional rather than apologetic or vague.
+* **The "Coco Chanel" Rule:** Before finalising, look at the design and remove one unnecessary decorative element.
