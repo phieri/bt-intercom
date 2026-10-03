@@ -2,7 +2,7 @@
 name = "bt-intercom"
 version = "0.1.0"
 edition = "2024"
-description = "A full-duplex Bluetooth headset intercom for Linux"
+description = "A Bluetooth headset intercom for Linux"
 repository = "https://github.com/phieri/bt-intercom"
 readme = "README.md"
 

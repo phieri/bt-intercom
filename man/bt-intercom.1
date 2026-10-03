@@ -65,7 +65,9 @@ are used.
 Hold play/pause to talk in PTT mode; release to mute. In semi-duplex, requests
 wait in first-in, first-out order while another headset transmits. Keep holding
 until a double beep confirms an active microphone route; releasing cancels a
-queued request or ends the current turn. The queue is shared across talk groups.
+queued request or ends the current turn. Each talk group has an independent
+queue and can have one active talker. A headset in multiple groups can hold the
+floor in each; with no groups configured, all headsets share one queue.
 Semi-duplex routing failures stop the run and release owned links. External
 links remain untouched; exclusivity applies only to this process's routes.
 .PP
@@ -79,7 +81,6 @@ release and press again after reconnecting.
 .B run --dashboard
 Show the live terminal dashboard on standard error. Requires an interactive
 terminal.
-.TP
 .TP
 .B -h, --help
 Show command help.
