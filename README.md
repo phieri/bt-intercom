@@ -320,10 +320,12 @@ retry succeeds.
 
 ### Dashboard and user service
 
-Add `--dashboard` to `run` for a live terminal view of Bluetooth status, duplex
-availability, owned route counts and optional RSSI. It requires an interactive
-terminal on stderr and is not intended for a service. Route counts show links,
-not measured speech or audio quality.
+Add `--dashboard` to `run` for a live terminal view of the selected half- or
+full-duplex mode, Bluetooth status, duplex availability, owned route counts and
+optional RSSI. Because the dashboard runs inside `run`, it reflects that
+process's mode directly without inter-process communication. It requires an
+interactive terminal on stderr and is not intended for a service. Route counts
+show links, not measured speech or audio quality.
 
 An example full-duplex user service is in `examples/bt-intercom.service`. Pair
 and configure the headsets first, then install and enable it:
