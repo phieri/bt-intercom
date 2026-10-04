@@ -71,7 +71,7 @@ pub fn load(path: &Path) -> Result<Vec<TalkGroup>, String> {
 						path.display()
 					)
 				})?;
-				validate_address(address).ok_or_else(|| {
+				crate::bluez::normalize_address(address).ok_or_else(|| {
 					format!(
 						"invalid talk-group file {}: invalid headset address {address}",
 						path.display()
@@ -93,7 +93,7 @@ pub fn save(path: &Path, groups: &[TalkGroup]) -> Result<(), String> {
 		if group
 			.members
 			.iter()
-			.any(|member| validate_address(member).is_none())
+			.any(|member| crate::bluez::normalize_address(member).is_none())
 		{
 			return Err(format!(
 				"talk group {:?} contains an invalid headset address",
@@ -109,7 +109,7 @@ pub fn save(path: &Path, groups: &[TalkGroup]) -> Result<(), String> {
 	let contents = json!({
 		"groups": groups.iter().map(|group| json!({
 			"name": group.name.trim(),
-			"members": group.members.iter().filter_map(|address| validate_address(address)).collect::<Vec<_>>(),
+			"members": group.members.iter().filter_map(|address| crate::bluez::normalize_address(address)).collect::<Vec<_>>(),
 		})).collect::<Vec<_>>(),
 	})
 	.to_string();
@@ -119,21 +119,6 @@ pub fn save(path: &Path, groups: &[TalkGroup]) -> Result<(), String> {
 
 pub fn normalize_name(name: &str) -> String {
 	name.trim().to_lowercase()
-}
-
-fn validate_address(address: &str) -> Option<String> {
-	let bytes = address.as_bytes();
-	if bytes.len() != 17
-		|| !bytes.iter().enumerate().all(|(index, byte)| {
-			if index % 3 == 2 {
-				*byte == b':'
-			} else {
-				byte.is_ascii_hexdigit()
-			}
-		}) {
-		return None;
-	}
-	Some(address.to_ascii_uppercase())
 }
 
 #[cfg(test)]
@@ -170,5 +155,46 @@ mod tests {
 		));
 		let _ = fs::remove_file(&path);
 		assert!(load(&path).unwrap().is_empty());
+	}
+
+	#[test]
+	fn rejects_malformed_group_files_and_invalid_saves() {
+		let path = std::env::temp_dir().join(format!(
+			"bt-intercom-invalid-groups-{}.json",
+			std::process::id()
+		));
+		for contents in [
+			"{",
+			"{}",
+			r#"{"groups":[{"name":" ","members":[]}]}"#,
+			r#"{"groups":[{"name":"Team","members":"not-an-array"}]}"#,
+			r#"{"groups":[{"name":"Team","members":["not-an-address"]}]}"#,
+			r#"{"groups":[{"name":"Team","members":[]},{"name":" team ","members":[]}]}"#,
+		] {
+			fs::write(&path, contents).unwrap();
+			assert!(load(&path).is_err(), "{contents}");
+		}
+		let invalid_member = TalkGroup {
+			name: "Team".into(),
+			members: ["not-an-address".into()].into(),
+		};
+		assert!(save(&path, &[invalid_member]).is_err());
+		assert!(
+			save(
+				&path,
+				&[
+					TalkGroup {
+						name: "Team".into(),
+						members: BTreeSet::new(),
+					},
+					TalkGroup {
+						name: " team ".into(),
+						members: BTreeSet::new(),
+					},
+				]
+			)
+			.is_err()
+		);
+		fs::remove_file(path).unwrap();
 	}
 }

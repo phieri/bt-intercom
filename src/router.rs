@@ -13,12 +13,14 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
-use crate::command;
 use crate::groups::TalkGroup;
+use crate::process::{COMMAND_TIMEOUT, command};
 
 /// A directed PipeWire link, represented as `(output_port_id, input_port_id)`.
 type Link = (u64, u64);
 const OWNER_PROPERTY: &str = "bt-intercom.owner";
+const HEADSET_PROFILE: &str = "headset-head-unit";
+const MONO_CHANNEL: &str = "MONO";
 static NEXT_ROUTER: AtomicUsize = AtomicUsize::new(0);
 
 /// A live `pw-cli` client that owns a PipeWire link.
@@ -125,7 +127,7 @@ pub fn topology(
 				if matches!(
 					property(props, "media.class"),
 					Some("Audio/Source" | "Audio/Sink")
-				) && property(props, "api.bluez5.profile") == Some("headset-head-unit")
+				) && property(props, "api.bluez5.profile") == Some(HEADSET_PROFILE)
 					&& let (Some(device), Some(class)) = (
 						props.get("device.id").and_then(id_string),
 						property(props, "media.class"),
@@ -143,7 +145,7 @@ pub fn topology(
 						node,
 						property(props, "port.direction").unwrap_or("").to_owned(),
 						property(props, "audio.channel")
-							.unwrap_or("MONO")
+							.unwrap_or(MONO_CHANNEL)
 							.to_owned(),
 					));
 				}
@@ -193,19 +195,39 @@ pub fn topology(
 ///
 /// A headset is never linked to itself; mono ports are compatible with every
 /// channel on the opposite endpoint.
+#[cfg(test)]
 pub fn desired_links(headsets: &BTreeMap<String, Headset>) -> BTreeSet<Link> {
+	desired_links_with_policy(headsets, None, None)
+}
+
+fn channels_compatible(output: &Port, input: &Port) -> bool {
+	output.channel == input.channel
+		|| output.channel == MONO_CHANNEL
+		|| input.channel == MONO_CHANNEL
+}
+
+fn desired_links_with_policy(
+	headsets: &BTreeMap<String, Headset>,
+	allowed_pairs: Option<&BTreeMap<String, BTreeSet<String>>>,
+	active_sources: Option<&BTreeSet<String>>,
+) -> BTreeSet<Link> {
 	let mut desired = BTreeSet::new();
 	for (source_address, source) in headsets {
+		if active_sources.is_some_and(|sources| !sources.contains(source_address)) {
+			continue;
+		}
 		for (sink_address, sink) in headsets {
-			if source_address == sink_address {
+			if source_address == sink_address
+				|| allowed_pairs.is_some_and(|pairs| {
+					!pairs
+						.get(source_address)
+						.is_some_and(|sinks| sinks.contains(sink_address))
+				}) {
 				continue;
 			}
 			for output in &source.sources {
 				for input in &sink.sinks {
-					if output.channel == input.channel
-						|| output.channel == "MONO"
-						|| input.channel == "MONO"
-					{
+					if channels_compatible(output, input) {
 						desired.insert((output.id, input.id));
 					}
 				}
@@ -215,9 +237,23 @@ pub fn desired_links(headsets: &BTreeMap<String, Headset>) -> BTreeSet<Link> {
 	desired
 }
 
+fn group_pairs(groups: &[TalkGroup]) -> BTreeMap<String, BTreeSet<String>> {
+	let mut pairs = BTreeMap::new();
+	for group in groups {
+		for source in &group.members {
+			pairs
+				.entry(source.clone())
+				.or_insert_with(BTreeSet::new)
+				.extend(group.members.iter().filter(|sink| *sink != source).cloned());
+		}
+	}
+	pairs
+}
+
 /// Build routes only between headset pairs that share a talk group.
 ///
 /// An empty group list retains the original all-to-all behavior.
+#[cfg(test)]
 pub fn desired_links_in_groups(
 	headsets: &BTreeMap<String, Headset>,
 	groups: &[TalkGroup],
@@ -225,32 +261,8 @@ pub fn desired_links_in_groups(
 	if groups.is_empty() {
 		return desired_links(headsets);
 	}
-	let allowed_pairs: BTreeSet<_> = groups
-		.iter()
-		.flat_map(|group| {
-			group.members.iter().flat_map(|source| {
-				group
-					.members
-					.iter()
-					.filter(move |sink| *sink != source)
-					.map(move |sink| (source.clone(), sink.clone()))
-			})
-		})
-		.collect();
-	let desired = desired_links(headsets);
-	desired
-		.into_iter()
-		.filter(|(output, input)| {
-			headsets.iter().any(|(source_address, source)| {
-				source.sources.iter().any(|port| port.id == *output)
-					&& headsets.iter().any(|(sink_address, sink)| {
-						sink.sinks.iter().any(|port| port.id == *input)
-							&& allowed_pairs
-								.contains(&(source_address.clone(), sink_address.clone()))
-					})
-			})
-		})
-		.collect()
+	let allowed_pairs = group_pairs(groups);
+	desired_links_with_policy(headsets, Some(&allowed_pairs), None)
 }
 
 /// Build routes only for sources granted a floor in the corresponding group.
@@ -263,30 +275,18 @@ pub fn desired_links_by_group(
 ) -> BTreeSet<Link> {
 	if groups.is_empty() {
 		let sources = group_sources.get(&None).cloned().unwrap_or_default();
-		return desired_links(headsets)
-			.into_iter()
-			.filter(|(output, _)| {
-				headsets.iter().any(|(address, headset)| {
-					sources.contains(address)
-						&& headset.sources.iter().any(|port| port.id == *output)
-				})
-			})
-			.collect();
+		return desired_links_with_policy(headsets, None, Some(&sources));
 	}
 
 	groups
 		.iter()
-		.filter_map(|group| {
-			let sources = group_sources.get(&Some(group.name.clone()))?;
-			let links = desired_links_in_groups(headsets, std::slice::from_ref(group));
-			Some(links.into_iter().filter(move |(output, _)| {
-				headsets.iter().any(|(address, headset)| {
-					sources.contains(address)
-						&& headset.sources.iter().any(|port| port.id == *output)
-				})
-			}))
+		.flat_map(|group| {
+			let Some(sources) = group_sources.get(&Some(group.name.clone())) else {
+				return BTreeSet::new();
+			};
+			let allowed_pairs = group_pairs(std::slice::from_ref(group));
+			desired_links_with_policy(headsets, Some(&allowed_pairs), Some(sources))
 		})
-		.flatten()
 		.collect()
 }
 
@@ -299,10 +299,14 @@ pub fn has_active_source_route(
 	let Some(source) = headsets.get(address) else {
 		return false;
 	};
-	let source_ports: BTreeSet<_> = source.sources.iter().map(|port| port.id).collect();
-	desired_links(headsets)
-		.iter()
-		.any(|link| source_ports.contains(&link.0) && links.contains(link))
+	headsets.iter().any(|(peer_address, peer)| {
+		peer_address != address
+			&& source.sources.iter().any(|output| {
+				peer.sinks.iter().any(|input| {
+					channels_compatible(output, input) && links.contains(&(output.id, input.id))
+				})
+			})
+	})
 }
 
 /// Returns whether a headset has live microphone and speaker routes with a peer.
@@ -314,21 +318,19 @@ pub fn has_active_intercom_connection(
 	let Some(headset) = headsets.get(address) else {
 		return false;
 	};
-	let desired = desired_links(headsets);
-	let source_ports: BTreeSet<_> = headset.sources.iter().map(|port| port.id).collect();
-	let sink_ports: BTreeSet<_> = headset.sinks.iter().map(|port| port.id).collect();
 	headsets.iter().any(|(peer_address, peer)| {
-		if peer_address == address {
-			return false;
-		}
-		let peer_sources: BTreeSet<_> = peer.sources.iter().map(|port| port.id).collect();
-		let peer_sinks: BTreeSet<_> = peer.sinks.iter().map(|port| port.id).collect();
-		let sends_to_peer = desired.iter().any(|link| {
-			source_ports.contains(&link.0) && peer_sinks.contains(&link.1) && links.contains(link)
-		});
-		let receives_from_peer = desired.iter().any(|link| {
-			peer_sources.contains(&link.0) && sink_ports.contains(&link.1) && links.contains(link)
-		});
+		let sends_to_peer = peer_address != address
+			&& headset.sources.iter().any(|output| {
+				peer.sinks.iter().any(|input| {
+					channels_compatible(output, input) && links.contains(&(output.id, input.id))
+				})
+			});
+		let receives_from_peer = peer_address != address
+			&& peer.sources.iter().any(|output| {
+				headset.sinks.iter().any(|input| {
+					channels_compatible(output, input) && links.contains(&(output.id, input.id))
+				})
+			});
 		sends_to_peer && receives_from_peer
 	})
 }
@@ -344,7 +346,7 @@ pub struct Router<F = fn(&[&str]) -> Result<String, String>> {
 }
 
 fn default_command(args: &[&str]) -> Result<String, String> {
-	command(args, Duration::from_secs(15))
+	command(args, COMMAND_TIMEOUT)
 }
 
 fn start_link(args: &[&str]) -> Result<Box<dyn LinkHandle>, String> {

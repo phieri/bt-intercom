@@ -18,9 +18,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table};
 use ratatui::{DefaultTerminal, Frame};
 
-use crate::bluez::{bluetooth_name, device_flag, property};
-use crate::command_cancellable;
+use crate::bluez::{FAIR_RSSI, GOOD_RSSI, bluetooth_name, device_flag, signal_strength};
 use crate::groups::{TalkGroup, load, normalize_name, save};
+use crate::process::{COMMAND_TIMEOUT, command_cancellable};
 use crate::router::{Headset, Router};
 use crate::terminal_style::{Meaning, Palette};
 
@@ -210,24 +210,8 @@ impl ControlPanel {
 		false
 	}
 
-	fn render(&self, frame: &mut Frame<'_>) {
-		let areas: [ratatui::layout::Rect; 3] = Layout::vertical([
-			Constraint::Length(3),
-			Constraint::Min(8),
-			Constraint::Length(3),
-		])
-		.areas(frame.area());
-		frame.render_widget(
-			Paragraph::new("bt-intercom | Headsets and talk groups")
-				.block(Block::default().borders(Borders::ALL)),
-			areas[0],
-		);
-
-		let sections: [ratatui::layout::Rect; 2] =
-			Layout::vertical([Constraint::Percentage(55), Constraint::Percentage(45)])
-				.areas(areas[1]);
-		let rows: Vec<Row<'_>> = self
-			.allowed
+	fn status_rows(&self) -> Vec<Row<'_>> {
+		self.allowed
 			.iter()
 			.map(|address| {
 				let status = self.status.get(address);
@@ -251,8 +235,8 @@ impl ControlPanel {
 					None => Meaning::Warning,
 				};
 				let signal_meaning = match status.and_then(|status| status.rssi) {
-					Some(-70..) => Meaning::Success,
-					Some(-80..=-71) => Meaning::Warning,
+					Some(rssi) if rssi >= GOOD_RSSI => Meaning::Success,
+					Some(rssi) if rssi >= FAIR_RSSI => Meaning::Warning,
 					Some(_) => Meaning::Error,
 					None => Meaning::Info,
 				};
@@ -277,7 +261,54 @@ impl ControlPanel {
 					Cell::from(Span::styled(rssi, self.palette.style(signal_meaning))),
 				])
 			})
-			.collect();
+			.collect()
+	}
+
+	fn member_items(&self) -> Vec<ListItem<'_>> {
+		self.allowed
+			.iter()
+			.map(|address| {
+				let included = self
+					.selected_group
+					.and_then(|index| self.groups.get(index))
+					.is_some_and(|group| group.members.contains(address));
+				let status = self.status.get(address);
+				let name = status
+					.and_then(|status| status.name.as_deref())
+					.unwrap_or(address.as_str());
+				ListItem::new(Line::from(vec![
+					Span::styled(
+						if included { "[x] " } else { "[ ] " },
+						self.palette.style(if included {
+							Meaning::Success
+						} else {
+							Meaning::Warning
+						}),
+					),
+					Span::raw(name),
+					Span::styled(format!(" ({address})"), self.palette.style(Meaning::Info)),
+				]))
+			})
+			.collect()
+	}
+
+	fn render(&self, frame: &mut Frame<'_>) {
+		let areas: [ratatui::layout::Rect; 3] = Layout::vertical([
+			Constraint::Length(3),
+			Constraint::Min(8),
+			Constraint::Length(3),
+		])
+		.areas(frame.area());
+		frame.render_widget(
+			Paragraph::new("bt-intercom | Headsets and talk groups")
+				.block(Block::default().borders(Borders::ALL)),
+			areas[0],
+		);
+
+		let sections: [ratatui::layout::Rect; 2] =
+			Layout::vertical([Constraint::Percentage(55), Constraint::Percentage(45)])
+				.areas(areas[1]);
+		let rows = self.status_rows();
 		let table = Table::new(
 			rows,
 			[
@@ -332,32 +363,7 @@ impl ControlPanel {
 		group_state.select(self.selected_group);
 		frame.render_stateful_widget(group_list, lower[0], &mut group_state);
 
-		let members: Vec<ListItem<'_>> = self
-			.allowed
-			.iter()
-			.map(|address| {
-				let included = self
-					.selected_group
-					.and_then(|index| self.groups.get(index))
-					.is_some_and(|group| group.members.contains(address));
-				let status = self.status.get(address);
-				let name = status
-					.and_then(|status| status.name.as_deref())
-					.unwrap_or(address.as_str());
-				ListItem::new(Line::from(vec![
-					Span::styled(
-						if included { "[x] " } else { "[ ] " },
-						self.palette.style(if included {
-							Meaning::Success
-						} else {
-							Meaning::Warning
-						}),
-					),
-					Span::raw(name),
-					Span::styled(format!(" ({address})"), self.palette.style(Meaning::Info)),
-				]))
-			})
-			.collect();
+		let members = self.member_items();
 		let group_name = self
 			.selected_group
 			.and_then(|index| self.groups.get(index))
@@ -514,7 +520,7 @@ fn event_loop(
 
 fn poll_status(allowed: &BTreeSet<String>, stopped: &AtomicBool) -> Option<StatusUpdate> {
 	let mut router = Router::with_executor(allowed.clone(), |args| {
-		command_cancellable(args, Duration::from_secs(15), Some(stopped))
+		command_cancellable(args, COMMAND_TIMEOUT, Some(stopped))
 	});
 	let (headsets, error) = match router.inspect() {
 		Ok((headsets, _)) => (headsets, None),
@@ -530,7 +536,7 @@ fn poll_status(allowed: &BTreeSet<String>, stopped: &AtomicBool) -> Option<Statu
 		}
 		let info = command_cancellable(
 			&["bluetoothctl", "info", address],
-			Duration::from_secs(15),
+			COMMAND_TIMEOUT,
 			Some(stopped),
 		)
 		.ok();
@@ -543,10 +549,7 @@ fn poll_status(allowed: &BTreeSet<String>, stopped: &AtomicBool) -> Option<Statu
 				name: info.as_deref().and_then(bluetooth_name),
 				connected: info.as_deref().map(|info| device_flag(info, "Connected")),
 				duplex: headsets.get(address).is_some_and(Headset::has_duplex_audio),
-				rssi: info.as_deref().and_then(|info| {
-					property(info, "RSSI")
-						.and_then(|value| value.split_whitespace().next()?.parse().ok())
-				}),
+				rssi: info.as_deref().and_then(signal_strength),
 			},
 		);
 	}

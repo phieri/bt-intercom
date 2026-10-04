@@ -2,6 +2,10 @@
 
 //! Helpers for parsing BlueZ device information.
 
+pub(crate) const STRONG_RSSI: i32 = -60;
+pub(crate) const GOOD_RSSI: i32 = -70;
+pub(crate) const FAIR_RSSI: i32 = -80;
+
 pub(crate) fn property<'a>(info: &'a str, field: &str) -> Option<&'a str> {
 	info.lines().find_map(|line| {
 		let (key, value) = line.trim().split_once(':')?;
@@ -11,6 +15,25 @@ pub(crate) fn property<'a>(info: &'a str, field: &str) -> Option<&'a str> {
 
 pub(crate) fn device_flag(info: &str, flag: &str) -> bool {
 	property(info, flag) == Some("yes")
+}
+
+pub(crate) fn normalize_address(value: &str) -> Option<String> {
+	let bytes = value.as_bytes();
+	if bytes.len() != 17
+		|| !bytes.iter().enumerate().all(|(index, byte)| {
+			if index % 3 == 2 {
+				*byte == b':'
+			} else {
+				byte.is_ascii_hexdigit()
+			}
+		}) {
+		return None;
+	}
+	Some(value.to_ascii_uppercase())
+}
+
+pub(crate) fn signal_strength(info: &str) -> Option<i32> {
+	property(info, "RSSI").and_then(|value| value.split_whitespace().next()?.parse().ok())
 }
 
 pub(crate) fn bluetooth_name(info: &str) -> Option<String> {
@@ -59,5 +82,29 @@ mod tests {
 		] {
 			assert_eq!(bluetooth_name(info).as_deref(), expected);
 		}
+	}
+
+	#[test]
+	fn normalizes_only_valid_bluetooth_addresses() {
+		assert_eq!(
+			normalize_address("aa:bb:cc:dd:ee:ff").as_deref(),
+			Some("AA:BB:CC:DD:EE:FF")
+		);
+		for value in [
+			"",
+			"AA:BB:CC:DD:EE",
+			"AA:BB:CC:DD:EE:FG",
+			"AA-BB-CC-DD-EE-FF",
+			"AA:BB:CC:DD:EE:FF ",
+		] {
+			assert_eq!(normalize_address(value), None, "{value:?}");
+		}
+	}
+
+	#[test]
+	fn parses_optional_rssi() {
+		assert_eq!(signal_strength("RSSI: -67 (0xffffffbd)\n"), Some(-67));
+		assert_eq!(signal_strength("RSSI: unavailable\n"), None);
+		assert_eq!(signal_strength("Connected: yes\n"), None);
 	}
 }

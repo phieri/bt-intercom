@@ -9,7 +9,9 @@ mod atomic_file;
 mod bluez;
 mod dashboard;
 mod groups;
+mod network;
 mod pair_button;
+mod process;
 mod router;
 mod terminal_style;
 mod transmit;
@@ -18,19 +20,17 @@ mod tui;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
-use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
 use std::io::{IsTerminal, Read, Write};
-use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use bluez::{bluetooth_name, device_flag};
+use bluez::{bluetooth_name, device_flag, normalize_address};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
 use crossterm::cursor::MoveTo;
@@ -38,6 +38,11 @@ use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
 use dashboard::Dashboard;
 use groups::{config_path as talk_groups_path, load as load_talk_groups};
+use network::{
+	headset_path as headset_network_path, load as load_headsets, load_for_run as load_run_headsets,
+	remove as remove_headset, runtime_directory as ptt_runtime_directory, save as save_headsets,
+};
+use process::{COMMAND_TIMEOUT, command, command_cancellable};
 use router::{Headset, Router, has_active_intercom_connection, has_active_source_route};
 use transmit::{Mode, Transmit};
 
@@ -132,128 +137,6 @@ enum CliCommand {
 	Tui,
 }
 
-/// Runs a command with captured output and a deadline.
-fn command(args: &[&str], timeout: Duration) -> Result<String, String> {
-	command_cancellable(args, timeout, None)
-}
-
-/// Which process(es) `wait_child` should terminate when the command times
-/// out, is cancelled, or errors while polling.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum KillMode {
-	/// Kill only the direct child (used for interactive children that share
-	/// the caller's controlling terminal, where grouping could trigger
-	/// `SIGTTIN`/job-control issues).
-	Process,
-	/// Kill the child's entire process group, releasing pipes held open by
-	/// descendants. Only valid for children spawned with `process_group(0)`.
-	ProcessGroup,
-}
-
-/// Waits for a child process, enforcing its timeout and optional cancellation.
-fn wait_child(
-	child: &mut Child,
-	name: &str,
-	timeout: Duration,
-	stopped: Option<&AtomicBool>,
-	kill_mode: KillMode,
-) -> Result<ExitStatus, String> {
-	let start = Instant::now();
-	loop {
-		let cancelled = stopped.is_some_and(|flag| flag.load(Ordering::SeqCst));
-		let error = match child.try_wait() {
-			Ok(Some(status)) => return Ok(status),
-			Ok(None) if cancelled => format!("{name} cancelled"),
-			Ok(None) if start.elapsed() >= timeout => format!("{name} timed out"),
-			Ok(None) => {
-				thread::sleep(Duration::from_millis(20));
-				continue;
-			}
-			Err(error) => error.to_string(),
-		};
-		match kill_mode {
-			KillMode::ProcessGroup => kill_process_group(child),
-			KillMode::Process => {
-				let _ = child.kill();
-			}
-		}
-		let _ = child.wait();
-		return Err(error);
-	}
-}
-
-/// Kills the child's entire process group, so descendants that keep the
-/// child's inherited pipes open (e.g. backgrounded subprocesses) are also
-/// terminated and release those pipes. Only valid for children spawned with
-/// `process_group(0)`, which makes the child the leader of its own group.
-fn kill_process_group(child: &mut Child) {
-	let pid = child.id() as libc::pid_t;
-	if pid <= 0 {
-		return;
-	}
-	// SAFETY: `pid` is the child's own process ID, which was placed in its
-	// own process group via `process_group(0)` when spawned, so `-pid`
-	// refers to a valid process group led by that child.
-	unsafe {
-		libc::kill(-pid, libc::SIGKILL);
-	}
-}
-
-/// Runs a cancellable command, draining both output streams while it executes.
-///
-/// Commands run in their own process group so timeout or cancellation also
-/// terminates descendants that might otherwise keep the captured pipes open.
-fn command_cancellable(
-	args: &[&str],
-	timeout: Duration,
-	stopped: Option<&AtomicBool>,
-) -> Result<String, String> {
-	let Some(name) = args.first().copied().filter(|name| !name.is_empty()) else {
-		return Err("command arguments must include a program".into());
-	};
-	if stopped.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
-		return Err(format!("{name} cancelled"));
-	}
-	let mut child = Command::new(name)
-		.args(&args[1..])
-		.stdin(Stdio::null())
-		.stdout(Stdio::piped())
-		.stderr(Stdio::piped())
-		.process_group(0)
-		.spawn()
-		.map_err(|e| format!("{name}: {e}"))?;
-	let (Some(mut stdout), Some(mut stderr)) = (child.stdout.take(), child.stderr.take()) else {
-		kill_process_group(&mut child);
-		let _ = child.wait();
-		return Err(format!("{name}: failed to capture command output"));
-	};
-	let output = thread::spawn(move || {
-		let mut bytes = Vec::new();
-		stdout.read_to_end(&mut bytes).map(|_| bytes)
-	});
-	let error = thread::spawn(move || {
-		let mut bytes = Vec::new();
-		stderr.read_to_end(&mut bytes).map(|_| bytes)
-	});
-	let status = wait_child(&mut child, name, timeout, stopped, KillMode::ProcessGroup)?;
-	let stdout = output
-		.join()
-		.map_err(|_| "stdout reader panicked".to_string())?
-		.map_err(|e| e.to_string())?;
-	let stderr = error
-		.join()
-		.map_err(|_| "stderr reader panicked".to_string())?
-		.map_err(|e| e.to_string())?;
-	if !status.success() {
-		return Err(format!(
-			"{} exited with {status}: {}",
-			name,
-			String::from_utf8_lossy(&stderr).trim()
-		));
-	}
-	Ok(String::from_utf8_lossy(&stdout).into_owned())
-}
-
 /// Opens an interactive BlueZ agent session to pair the specified device.
 fn pair_command(device: &str) -> Result<(), String> {
 	eprintln!("At the Bluetooth prompt, enter: pair {device}");
@@ -265,13 +148,8 @@ fn pair_command(device: &str) -> Result<(), String> {
 		.stderr(Stdio::inherit())
 		.spawn()
 		.map_err(|error| format!("bluetoothctl: {error}"))?;
-	let status = wait_child(
-		&mut child,
-		"bluetoothctl",
-		Duration::from_secs(300),
-		None,
-		KillMode::Process,
-	)?;
+	let status =
+		process::wait_interactive(&mut child, "bluetoothctl", Duration::from_secs(300), None)?;
 	if status.success() {
 		Ok(())
 	} else {
@@ -281,17 +159,8 @@ fn pair_command(device: &str) -> Result<(), String> {
 
 /// Validates and normalizes a Bluetooth MAC address.
 fn address(value: &str) -> Result<String, String> {
-	if value.len() != 17
-		|| value.split(':').count() != 6
-		|| !value
-			.split(':')
-			.all(|part| part.len() == 2 && part.bytes().all(|b| b.is_ascii_hexdigit()))
-	{
-		return Err(format!(
-			"expected a Bluetooth MAC address (XX:XX:XX:XX:XX:XX): {value}"
-		));
-	}
-	Ok(value.to_ascii_uppercase())
+	normalize_address(value)
+		.ok_or_else(|| format!("expected a Bluetooth MAC address (XX:XX:XX:XX:XX:XX): {value}"))
 }
 
 fn parse_interval(value: &str) -> Result<f64, String> {
@@ -318,124 +187,6 @@ fn parse_ptt_binding(value: &str) -> Result<PttButton, String> {
 		address: address(device)?,
 		path: path.into(),
 	})
-}
-
-/// Returns the path used to remember the configured intercom network.
-fn headset_network_path() -> Result<PathBuf, String> {
-	let directory = env::var_os("XDG_CONFIG_HOME")
-		.map(PathBuf::from)
-		.filter(|path| path.is_absolute())
-		.or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-		.ok_or("could not determine the config directory; set XDG_CONFIG_HOME or HOME")?;
-	Ok(directory.join("bt-intercom").join("headsets"))
-}
-
-/// Returns the session runtime directory, falling back to the system temp directory.
-fn ptt_runtime_directory(xdg_runtime_dir: Option<&OsStr>) -> PathBuf {
-	xdg_runtime_dir
-		.map(PathBuf::from)
-		.filter(|path| path.is_absolute())
-		.unwrap_or_else(env::temp_dir)
-}
-
-/// Atomically saves the allowed headset addresses for the next run.
-fn save_headsets(path: &Path, allowed: &BTreeSet<String>) -> Result<(), String> {
-	if allowed.is_empty() {
-		return Err("cannot save an empty headset network".into());
-	}
-	let directory = path
-		.parent()
-		.ok_or_else(|| format!("invalid headset network path: {}", path.display()))?;
-	fs::create_dir_all(directory)
-		.map_err(|error| format!("could not create {}: {error}", directory.display()))?;
-
-	let contents = format!(
-		"{}\n",
-		allowed.iter().cloned().collect::<Vec<_>>().join("\n")
-	);
-	atomic_file::write(path, contents.as_bytes()).map_err(|error| {
-		format!(
-			"could not save headset network to {}: {error}",
-			path.display()
-		)
-	})?;
-	Ok(())
-}
-
-/// Removes an address from the saved headset network without changing Bluetooth pairing.
-fn remove_headset(path: &Path, address: &str) -> Result<(), String> {
-	let mut allowed = load_headsets(path)?;
-	if !allowed.remove(address) {
-		return Err(format!("{address} is not in the saved headset network"));
-	}
-	if allowed.is_empty() {
-		fs::remove_file(path).map_err(|error| {
-			format!(
-				"could not remove saved headset network {}: {error}",
-				path.display()
-			)
-		})?;
-	} else {
-		save_headsets(path, &allowed)?;
-	}
-	Ok(())
-}
-
-/// Loads and validates the headset addresses saved by an earlier run.
-fn load_headsets(path: &Path) -> Result<BTreeSet<String>, String> {
-	let contents = fs::read_to_string(path).map_err(|error| {
-		if error.kind() == std::io::ErrorKind::NotFound {
-			format!(
-				"no saved headset network at {}; run with headset addresses first",
-				path.display()
-			)
-		} else {
-			format!(
-				"could not read headset network from {}: {error}",
-				path.display()
-			)
-		}
-	})?;
-	let mut allowed = BTreeSet::new();
-	for (index, line) in contents.lines().enumerate() {
-		let line = line.trim();
-		if !line.is_empty() {
-			allowed.insert(address(line).map_err(|error| {
-				format!(
-					"invalid headset network at {}:{}: {error}",
-					path.display(),
-					index + 1
-				)
-			})?);
-		}
-	}
-	if allowed.is_empty() {
-		return Err(format!(
-			"saved headset network at {} is empty",
-			path.display()
-		));
-	}
-	Ok(allowed)
-}
-
-fn load_run_headsets(path: &Path, pair_button: bool) -> Result<BTreeSet<String>, String> {
-	if pair_button && !path.try_exists().map_err(|error| error.to_string())? {
-		Ok(BTreeSet::new())
-	} else {
-		load_headsets(path)
-	}
-}
-
-fn enroll_headset(
-	path: &Path,
-	allowed: &mut BTreeSet<String>,
-	device: String,
-) -> Result<(), String> {
-	let mut enrolled = allowed.clone();
-	enrolled.insert(device);
-	save_headsets(path, &enrolled)?;
-	*allowed = enrolled;
-	Ok(())
 }
 
 /// Parses and validates one or more Bluetooth addresses.
@@ -553,7 +304,7 @@ fn confirm_transmissions(
 }
 
 fn confirm_connections(
-	connected: &mut BTreeSet<String>,
+	routed_headsets: &mut BTreeSet<String>,
 	headsets: &BTreeMap<String, Headset>,
 	links: &BTreeSet<(u64, u64)>,
 	beep: Option<&PttBeep>,
@@ -564,7 +315,7 @@ fn confirm_connections(
 		.filter(|address| has_active_intercom_connection(address, headsets, links))
 		.cloned()
 		.collect();
-	for address in current.difference(connected) {
+	for address in current.difference(routed_headsets) {
 		let Some(speaker_node) = headsets[address].speaker_node() else {
 			log::warn!("Could not play intercom connection beep for {address}: no speaker node");
 			continue;
@@ -575,7 +326,7 @@ fn confirm_connections(
 			log::warn!("Could not play intercom connection beep for {address}: {error}");
 		}
 	}
-	*connected = current;
+	*routed_headsets = current;
 }
 
 /// Validates that PTT bindings uniquely cover the configured headset network.
@@ -703,7 +454,7 @@ fn connect_disconnected(
 		if stopped.load(Ordering::SeqCst) {
 			break;
 		}
-		let connected = execute(&["bluetoothctl", "info", device], Duration::from_secs(15))
+		let connected = execute(&["bluetoothctl", "info", device], COMMAND_TIMEOUT)
 			.is_ok_and(|info| device_flag(&info, "Connected"));
 		if !connected
 			&& !stopped.load(Ordering::SeqCst)
@@ -765,7 +516,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 		CliCommand::Pair { address: device } => {
 			pair_command(&device)?;
 			if !device_flag(
-				&command(&["bluetoothctl", "info", &device], Duration::from_secs(15))?,
+				&command(&["bluetoothctl", "info", &device], COMMAND_TIMEOUT)?,
 				"Paired",
 			) {
 				return Err(format!("pairing did not succeed for {device}"));
@@ -792,7 +543,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 			let mut router = Router::new(allowed);
 			let (headsets, _) = router.inspect()?;
 			for address in &router.allowed {
-				let name = command(&["bluetoothctl", "info", address], Duration::from_secs(15))
+				let name = command(&["bluetoothctl", "info", address], COMMAND_TIMEOUT)
 					.ok()
 					.and_then(|info| bluetooth_name(&info));
 				let identity =
@@ -1112,6 +863,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use std::ffi::OsStr;
 
 	#[test]
 	fn validates_address_before_invoking_commands() {
@@ -1251,14 +1003,14 @@ mod tests {
 	fn enrollment_preserves_network_and_only_allows_saved_devices() {
 		let path = temporary_network_path();
 		let mut allowed = BTreeSet::from(["AA:BB:CC:DD:EE:01".into()]);
-		enroll_headset(&path, &mut allowed, "AA:BB:CC:DD:EE:02".into()).unwrap();
+		network::enroll(&path, &mut allowed, "AA:BB:CC:DD:EE:02".into()).unwrap();
 		assert_eq!(load_headsets(&path).unwrap(), allowed);
 		assert_eq!(allowed.len(), 2);
-		enroll_headset(&path, &mut allowed, "AA:BB:CC:DD:EE:02".into()).unwrap();
+		network::enroll(&path, &mut allowed, "AA:BB:CC:DD:EE:02".into()).unwrap();
 		assert_eq!(allowed.len(), 2);
 		let before = allowed.clone();
 		assert!(
-			enroll_headset(
+			network::enroll(
 				&path.join("not-a-directory"),
 				&mut allowed,
 				"AA:BB:CC:DD:EE:03".into(),
@@ -1335,7 +1087,7 @@ mod tests {
 					"info".to_string(),
 					device.to_string(),
 				],
-				Duration::from_secs(15),
+				COMMAND_TIMEOUT,
 			)];
 			if should_connect {
 				expected.push((
@@ -1762,58 +1514,5 @@ mod tests {
 				"AA:BB:CC:DD:EE:02"
 			]
 		);
-	}
-	#[test]
-	fn commands_capture_output_errors_and_do_not_read_ptt_input() {
-		let timeout = Duration::from_secs(5);
-		assert_eq!(
-			command(&["sh", "-c", "cat; printf output"], timeout).unwrap(),
-			"output"
-		);
-		assert!(
-			command(&["sh", "-c", "printf failure >&2; exit 7"], timeout)
-				.unwrap_err()
-				.contains("failure")
-		);
-		assert_eq!(
-			command(&["head", "-c", "131072", "/dev/zero"], timeout)
-				.unwrap()
-				.len(),
-			131072
-		);
-	}
-
-	#[test]
-	fn commands_reject_missing_program_names() {
-		assert!(command(&[], Duration::from_secs(1)).is_err());
-		assert!(command(&[""], Duration::from_secs(1)).is_err());
-	}
-
-	#[test]
-	fn commands_time_out_and_can_be_cancelled() {
-		assert!(
-			command(&["sleep", "30"], Duration::from_millis(20))
-				.unwrap_err()
-				.contains("timed out")
-		);
-		let stopped = Arc::new(AtomicBool::new(false));
-		let cancelled = Arc::clone(&stopped);
-		let worker = thread::spawn(move || {
-			command_cancellable(&["sleep", "30"], Duration::from_secs(60), Some(&cancelled))
-		});
-		thread::sleep(Duration::from_millis(50));
-		stopped.store(true, Ordering::SeqCst);
-		assert!(worker.join().unwrap().unwrap_err().contains("cancelled"));
-	}
-
-	#[test]
-	fn timeout_does_not_wait_for_descendants_holding_output_pipes() {
-		let start = Instant::now();
-		assert!(
-			command(&["sh", "-c", "sleep 2 & wait"], Duration::from_millis(20))
-				.unwrap_err()
-				.contains("timed out")
-		);
-		assert!(start.elapsed() < Duration::from_secs(1));
 	}
 }
