@@ -8,7 +8,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const nextTheme = theme === "dark" ? "light" : "dark";
     themeToggle.textContent = `${nextTheme === "light" ? "☼" : "☾"} ${nextTheme} mode`;
     themeToggle.setAttribute("aria-label", `Switch to ${nextTheme} mode`);
-    themeColor.content = theme === "dark" ? "#101b1d" : "#f6f8f5";
+    themeColor.content = theme === "dark" ? "#171923" : "#f8f6f0";
   };
   themeToggle.addEventListener("click", () => {
     const theme = currentTheme() === "dark" ? "light" : "dark";
