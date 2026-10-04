@@ -73,6 +73,9 @@ Duplex profiles and talk-group membership still need normal configuration.
 Existing audio routing continues during pairing. Holds, bounce, and presses
 during pairing do not repeat; a fresh release and press is required.
 Failures are logged; SIGINT/SIGTERM cancels pairing and releases the GPIO.
+Incomplete attempts remove the selected device's new bond for retry; cleanup
+failures log a manual recovery command. Fully paired and trusted headsets are
+saved even if shutdown interrupts the initial connection.
 .TP
 .BI run " --mode MODE"
 Select full-duplex (default) or half-duplex. Half-duplex requires a play/pause

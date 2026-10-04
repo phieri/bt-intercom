@@ -93,7 +93,8 @@ requirements, an AppArmor profile, and a systemd user unit. The packages install
 the profile at `/etc/apparmor.d/usr.bin.bt-intercom`; AppArmor must be enabled
 on the host for it to be enforced. The profile allows the default configuration
 and runtime paths, PipeWire and BlueZ access, read access to PTT input
-devices, and Raspberry Pi GPIO access (not `/dev/mem`). Custom `XDG_CONFIG_HOME` paths may need a local profile adjustment.
+devices, and Raspberry Pi GPIO access (not `/dev/mem`). Custom `XDG_CONFIG_HOME`
+paths may need a local profile adjustment.
 Custom `TMPDIR` paths may also need an adjustment for temporary PTT audio.
 Install `cargo-deb` and
 `cargo-generate-rpm`, then build packages with `cargo deb` and
@@ -223,6 +224,9 @@ intercom route, not pairing alone; one headset by itself has no intercom route.
 Failures are logged and can be retried with a fresh press. Holding the button,
 contact bounce, a button held at startup, and presses during pairing do not
 start repeated attempts. Ctrl-C/SIGTERM cancels pairing and releases the GPIO.
+Incomplete attempts remove the newly selected device's bond so it remains
+eligible for a retry; if cleanup fails, the log gives a manual recovery command.
+Headsets fully paired and trusted before shutdown are still saved for the next run.
 
 This option is disabled by default, errors clearly on unsupported boards or
 missing GPIO permissions, and requires full-duplex **without `--ptt`**. New

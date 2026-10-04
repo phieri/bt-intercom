@@ -5,6 +5,7 @@
 use std::collections::BTreeSet;
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -74,8 +75,12 @@ impl PairButton {
 			})
 	}
 
-	pub(crate) fn start(pin: InputPin, mut allowed: BTreeSet<String>) -> Self {
-		let cancelled = Arc::new(AtomicBool::new(false));
+	pub(crate) fn start(
+		pin: InputPin,
+		mut allowed: BTreeSet<String>,
+		cancelled: Arc<AtomicBool>,
+		network_path: PathBuf,
+	) -> Self {
 		let stopped = Arc::clone(&cancelled);
 		let (sender, events) = mpsc::channel();
 		let worker = thread::spawn(move || {
@@ -94,11 +99,23 @@ impl PairButton {
 								&stopped,
 							)
 						},
+						rollback_headset,
 					);
-					if let Ok(ref device) = result {
-						allowed.insert(device.clone());
+					let result = result.and_then(|device| {
+						if let Err(error) =
+							crate::enroll_headset(&network_path, &mut allowed, device.clone())
+						{
+							return Err(rollback_error(&device, error, rollback_headset));
+						}
+						Ok(device)
+					});
+					if stopped.load(Ordering::SeqCst) {
+						if let Err(error) = result {
+							log::warn!("Button pairing stopped: {error}");
+						}
+						break;
 					}
-					if stopped.load(Ordering::SeqCst) || sender.send(result).is_err() {
+					if sender.send(result).is_err() {
 						break;
 					}
 					// Ignore presses during pairing; require a fresh stable release.
@@ -152,6 +169,7 @@ fn pair_headset(
 	allowed: &BTreeSet<String>,
 	mut execute: impl FnMut(&[&str], Duration) -> Result<String, String>,
 	mut pair: impl FnMut(&str) -> Result<(), String>,
+	mut rollback: impl FnMut(&str) -> Result<(), String>,
 ) -> Result<String, String> {
 	let scan = execute(
 		&["bluetoothctl", "--timeout", "15", "scan", "bredr"],
@@ -175,20 +193,26 @@ fn pair_headset(
 		[] => return Err("no unpaired HFP/HSP headset discovered; put one headset in pairing mode and press the button again".into()),
 		_ => return Err("multiple unpaired headsets discovered; leave only the intended headset in pairing mode and try again".into()),
 	};
-	pair(device)?;
-	let info = execute(&["bluetoothctl", "info", device], Duration::from_secs(15))?;
-	if !device_flag(&info, "Paired") {
-		return Err(format!(
-			"pairing did not succeed for {device}; PIN/confirmation headsets require interactive pairing"
-		));
-	}
-	execute(
-		&["bluetoothctl", "--timeout", "15", "trust", device],
-		Duration::from_secs(20),
-	)?;
-	let info = execute(&["bluetoothctl", "info", device], Duration::from_secs(15))?;
-	if !device_flag(&info, "Trusted") {
-		return Err(format!("trust did not succeed for {device}"));
+	let enrollment = (|| {
+		pair(device)?;
+		let info = execute(&["bluetoothctl", "info", device], Duration::from_secs(15))?;
+		if !device_flag(&info, "Paired") {
+			return Err(format!(
+				"pairing did not succeed for {device}; PIN/confirmation headsets require interactive pairing"
+			));
+		}
+		execute(
+			&["bluetoothctl", "--timeout", "15", "trust", device],
+			Duration::from_secs(20),
+		)?;
+		let info = execute(&["bluetoothctl", "info", device], Duration::from_secs(15))?;
+		if !device_flag(&info, "Trusted") {
+			return Err(format!("trust did not succeed for {device}"));
+		}
+		Ok(())
+	})();
+	if let Err(error) = enrollment {
+		return Err(rollback_error(device, error, &mut rollback));
 	}
 	// Retain a successfully paired headset even if its first connection fails.
 	if let Err(error) = execute(
@@ -198,6 +222,25 @@ fn pair_headset(
 		log::warn!("Paired {device}, but initial connection failed: {error}");
 	}
 	Ok(device.clone())
+}
+
+fn rollback_headset(device: &str) -> Result<(), String> {
+	// Only called for a device selected as unpaired by this attempt. Cleanup
+	// must remain bounded but run even when the pairing operation was cancelled.
+	crate::command(&["bluetoothctl", "remove", device], Duration::from_secs(20)).map(|_| ())
+}
+
+fn rollback_error(
+	device: &str,
+	error: String,
+	mut rollback: impl FnMut(&str) -> Result<(), String>,
+) -> String {
+	match rollback(device) {
+		Ok(()) => error,
+		Err(cleanup) => format!(
+			"{error}; could not remove incomplete pairing: {cleanup}; run bluetoothctl remove {device} before retrying"
+		),
+	}
 }
 
 // Positional bluetoothctl commands do not register their own agent. Keep an
@@ -307,6 +350,16 @@ mod tests {
 	}
 
 	#[test]
+	fn released_startup_arms_only_after_debounce() {
+		let now = Instant::now();
+		let mut button = Button::new(false, now);
+		assert!(!button.sample(false, now));
+		assert!(!button.sample(false, now + DEBOUNCE));
+		assert!(!button.sample(true, now + DEBOUNCE + Duration::from_millis(1)));
+		assert!(button.sample(true, now + DEBOUNCE * 2 + Duration::from_millis(1)));
+	}
+
+	#[test]
 	fn parses_only_valid_observed_devices_and_headset_uuids() {
 		assert_eq!(
 			discovered_devices(
@@ -356,6 +409,7 @@ mod tests {
 				paired = Some(device.to_string());
 				Ok(())
 			},
+			|_| panic!("successful pairing must not be rolled back"),
 		)
 		.unwrap();
 		assert_eq!(result, "AA:BB:CC:DD:EE:01");
@@ -387,6 +441,7 @@ mod tests {
 					}
 				},
 				|_| panic!("must not pair"),
+				|_| panic!("must not remove existing or ambiguous devices"),
 			)
 			.unwrap_err();
 			assert!(error.contains(expect_error), "{error}");
@@ -397,6 +452,7 @@ mod tests {
 	fn stops_on_command_failure_or_unverified_pairing_and_trust() {
 		for fail_at in 0..6 {
 			let mut call = 0;
+			let mut rolled_back = false;
 			let result = pair_headset(
 				&BTreeSet::new(),
 				|args, _| {
@@ -412,9 +468,15 @@ mod tests {
 					}
 				},
 				|_| Ok(()),
+				|device| {
+					assert_eq!(device, "AA:BB:CC:DD:EE:01");
+					rolled_back = true;
+					Ok(())
+				},
 			);
 			assert_eq!(call, fail_at + 1);
 			assert_eq!(result.is_ok(), fail_at == 5);
+			assert_eq!(rolled_back, (2..5).contains(&fail_at));
 		}
 		for fail_at in [2, 4] {
 			let mut call = 0;
@@ -430,12 +492,36 @@ mod tests {
 							headset_info(current >= 2 && current != fail_at, false)
 						})
 					},
-					|_| Ok(())
+					|_| Ok(()),
+					|_| Ok(()),
 				)
 				.is_err()
 			);
 			assert_eq!(call, fail_at + 1);
 		}
+	}
+
+	#[test]
+	fn failed_pairing_rolls_back_and_reports_cleanup_failures() {
+		let mut calls = 0;
+		let error = pair_headset(
+			&BTreeSet::new(),
+			|args, _| {
+				calls += 1;
+				if args.contains(&"scan") {
+					Ok("Device AA:BB:CC:DD:EE:01 Headset".into())
+				} else {
+					Ok(headset_info(false, false))
+				}
+			},
+			|_| Err("pairing cancelled".into()),
+			|_| Err("BlueZ unavailable".into()),
+		)
+		.unwrap_err();
+		assert_eq!(calls, 2);
+		assert!(error.contains("pairing cancelled"));
+		assert!(error.contains("BlueZ unavailable"));
+		assert!(error.contains("bluetoothctl remove AA:BB:CC:DD:EE:01"));
 	}
 
 	#[test]
@@ -482,6 +568,18 @@ mod tests {
 			.contains("cancelled")
 		);
 		cancel.join().unwrap();
+		assert!(start.elapsed() < Duration::from_secs(5));
+	}
+
+	#[test]
+	fn detects_fragmented_registration_and_prompts_without_newlines() {
+		let start = Instant::now();
+		let error = headless_pair_session(
+			&["sh", "-c", "printf 'Agent regi'; sleep 0.02; printf 'stered\\n'; read -r action address; printf '[agent] Confirm passkey'; sleep 60"],
+			"AA:BB:CC:DD:EE:01",
+			&AtomicBool::new(false),
+		).unwrap_err();
+		assert!(error.contains("headless pairing failed"));
 		assert!(start.elapsed() < Duration::from_secs(5));
 	}
 }

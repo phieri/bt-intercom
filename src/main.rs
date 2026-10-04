@@ -858,8 +858,14 @@ fn run(action: CliCommand) -> Result<(), String> {
 			};
 			let mut router = Router::new(allowed);
 			let reconnect_devices = Arc::new(Mutex::new(router.allowed.clone()));
-			let pairing =
-				pairing_pin.map(|pin| pair_button::PairButton::start(pin, router.allowed.clone()));
+			let pairing = pairing_pin.map(|pin| {
+				pair_button::PairButton::start(
+					pin,
+					router.allowed.clone(),
+					Arc::clone(&stopped),
+					network_path.clone(),
+				)
+			});
 			let mut dashboard = show_dashboard
 				.then(|| Dashboard::start(router.allowed.clone(), Arc::clone(&stopped)));
 			let mut headsets = BTreeMap::new();
@@ -907,11 +913,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 						while let Ok(event) = pairing.events.try_recv() {
 							match event {
 								Ok(device) => {
-									enroll_headset(
-										&network_path,
-										&mut router.allowed,
-										device.clone(),
-									)?;
+									router.allowed.insert(device.clone());
 									*reconnect_devices.lock().unwrap() = router.allowed.clone();
 									if let Some(ref mut current) = dashboard {
 										current.stop();
