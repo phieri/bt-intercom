@@ -51,10 +51,7 @@ mod tests {
 	#[test]
 	fn chooses_a_safe_nonempty_bluetooth_name() {
 		for (info, expected) in [
-			(
-				"Name: Device name\nAlias: User name\n",
-				Some("User name"),
-			),
+			("Name: Device name\nAlias: User name\n", Some("User name")),
 			("Alias: \nName: Device name\n", Some("Device name")),
 			("Alias: Unsafe\u{1b}[31m name", Some("Unsafe[31m name")),
 			("Alias: \nName: \n", None),

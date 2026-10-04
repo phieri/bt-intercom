@@ -112,7 +112,13 @@ mod tests {
 			(true, false, "XTERM-256COLOR", "", ColorLevel::Ansi256),
 			(true, false, "xterm", "24bit", ColorLevel::TrueColor),
 			(true, false, "xterm", "TRUECOLOR", ColorLevel::TrueColor),
-			(true, false, "xterm-256color", "24bit", ColorLevel::TrueColor),
+			(
+				true,
+				false,
+				"xterm-256color",
+				"24bit",
+				ColorLevel::TrueColor,
+			),
 			(true, false, "xterm", "", ColorLevel::Ansi16),
 		] {
 			assert_eq!(
