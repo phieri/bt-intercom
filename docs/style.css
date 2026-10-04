@@ -35,8 +35,8 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--mint); outline-
 .site-header nav a:hover { color: var(--paper); }
 .site-header nav .nav-cta { padding: .55rem .8rem; border: 1px solid var(--line); border-radius: .35rem; color: var(--paper); }
 .site-header nav .nav-cta span { padding-left: .4rem; color: var(--mint); }
-.site-header nav .theme-toggle { padding: .5rem .7rem; border: 1px solid var(--line); border-radius: .35rem; background: transparent; color: var(--paper); font: inherit; font-size: .78rem; cursor: pointer; }
-.site-header nav .theme-toggle:hover { border-color: var(--mint); color: var(--mint); }
+.theme-toggle { padding: .5rem .7rem; border: 1px solid var(--line); border-radius: .35rem; background: transparent; color: var(--paper); font: inherit; font-size: .78rem; cursor: pointer; }
+.theme-toggle:hover { border-color: var(--mint); color: var(--mint); }
 .hero { display: grid; grid-template-columns: 1.05fr .95fr; align-items: center; gap: clamp(3rem, 8vw, 7rem); padding-block: clamp(4.5rem, 10vw, 8rem); }
 .hero-copy { padding-block: .5rem; }
 .eyebrow { display: flex; align-items: center; gap: .55rem; margin: 0 0 1.15rem; color: var(--mint); font-family: var(--mono); font-size: .7rem; letter-spacing: .055em; }
@@ -252,8 +252,8 @@ footer > a:last-child:hover { color: var(--mint); }
   :root:not([data-theme]) .tui-card { --mint: #8be0bd; --paper: #f2f0e8; --muted: #a8b5af; }
 }
 @media (max-width: 600px) {
-  .site-header nav .theme-toggle { padding: .42rem .5rem; font-size: .68rem; }
+  .theme-toggle { padding: .42rem .5rem; font-size: .68rem; }
 }
 @media (max-width: 360px) {
-  .site-header nav .theme-toggle { padding: .36rem .4rem; font-size: .62rem; }
+  .theme-toggle { padding: .36rem .4rem; font-size: .62rem; }
 }

@@ -1,8 +1,3 @@
-try {
-  const theme = localStorage.getItem("theme");
-  if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
-} catch {}
-
 document.addEventListener("DOMContentLoaded", () => {
   const themeToggle = document.getElementById("theme-toggle");
   const themeColor = document.querySelector('meta[name="theme-color"]');
@@ -18,9 +13,6 @@ document.addEventListener("DOMContentLoaded", () => {
   themeToggle.addEventListener("click", () => {
     const theme = currentTheme() === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = theme;
-    try {
-      localStorage.setItem("theme", theme);
-    } catch {}
     updateThemeToggle();
   });
   colorScheme.addEventListener("change", () => {
