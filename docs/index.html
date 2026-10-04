@@ -21,7 +21,8 @@
       document.addEventListener("DOMContentLoaded", () => {
         const themeToggle = document.getElementById("theme-toggle");
         const themeColor = document.querySelector('meta[name="theme-color"]');
-        const currentTheme = () => document.documentElement.dataset.theme || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        const colorScheme = window.matchMedia("(prefers-color-scheme: dark)");
+        const currentTheme = () => document.documentElement.dataset.theme || (colorScheme.matches ? "dark" : "light");
         const updateThemeToggle = () => {
           const theme = currentTheme();
           const nextTheme = theme === "dark" ? "light" : "dark";
@@ -36,6 +37,9 @@
             localStorage.setItem("theme", theme);
           } catch {}
           updateThemeToggle();
+        });
+        colorScheme.addEventListener("change", () => {
+          if (!document.documentElement.dataset.theme) updateThemeToggle();
         });
         updateThemeToggle();
         if (window.AsciinemaPlayer) {
