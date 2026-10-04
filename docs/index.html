@@ -3,23 +3,15 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="dark">
+    <meta name="color-scheme" content="light dark">
     <meta name="theme-color" content="#101b1d">
     <meta name="description" content="A local Bluetooth headset intercom for Linux. Set up talk groups, manage them in the terminal control panel, and choose full- or half-duplex conversation.">
     <title>bt-intercom · Your headsets, in conversation</title>
     <link rel="preload" href="demo.cast" as="fetch" crossorigin>
+    <script src="script.js"></script>
     <link rel="stylesheet" href="vendor/asciinema-player.css">
     <link rel="stylesheet" href="style.css">
     <script src="vendor/asciinema-player.min.js" defer></script>
-    <script>
-      document.addEventListener("DOMContentLoaded", () => {
-        if (window.AsciinemaPlayer) {
-          const container = document.getElementById("player");
-          container.replaceChildren();
-          AsciinemaPlayer.create("demo.cast", container, { fit: "width", cols: 86, rows: 18, loop: 3, poster: 'npt:0:16'});
-        }
-      });
-    </script>
   </head>
   <body>
     <a class="skip" href="#main">Skip to content</a>
@@ -29,6 +21,7 @@
         <a href="#how-it-works">How it works</a>
         <a href="#control-panel">Control panel</a>
         <a class="nav-cta" href="https://github.com/phieri/bt-intercom#requirements">Setup guide <span aria-hidden="true">↗</span></a>
+        <button class="theme-toggle" id="theme-toggle" type="button">Light mode</button>
       </nav>
     </header>
     <main id="main">
