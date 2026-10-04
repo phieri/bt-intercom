@@ -3,16 +3,41 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="color-scheme" content="dark">
+    <meta name="color-scheme" content="light dark">
     <meta name="theme-color" content="#101b1d">
     <meta name="description" content="A local Bluetooth headset intercom for Linux. Set up talk groups, manage them in the terminal control panel, and choose full- or half-duplex conversation.">
     <title>bt-intercom · Your headsets, in conversation</title>
     <link rel="preload" href="demo.cast" as="fetch" crossorigin>
+    <script>
+      try {
+        const theme = localStorage.getItem("theme");
+        if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
+      } catch {}
+    </script>
     <link rel="stylesheet" href="vendor/asciinema-player.css">
     <link rel="stylesheet" href="style.css">
     <script src="vendor/asciinema-player.min.js" defer></script>
     <script>
       document.addEventListener("DOMContentLoaded", () => {
+        const themeToggle = document.getElementById("theme-toggle");
+        const themeColor = document.querySelector('meta[name="theme-color"]');
+        const currentTheme = () => document.documentElement.dataset.theme || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        const updateThemeToggle = () => {
+          const theme = currentTheme();
+          const nextTheme = theme === "dark" ? "light" : "dark";
+          themeToggle.textContent = `${nextTheme === "light" ? "☼" : "☾"} ${nextTheme} mode`;
+          themeToggle.setAttribute("aria-label", `Switch to ${nextTheme} mode`);
+          themeColor.content = theme === "dark" ? "#101b1d" : "#f6f8f5";
+        };
+        themeToggle.addEventListener("click", () => {
+          const theme = currentTheme() === "dark" ? "light" : "dark";
+          document.documentElement.dataset.theme = theme;
+          try {
+            localStorage.setItem("theme", theme);
+          } catch {}
+          updateThemeToggle();
+        });
+        updateThemeToggle();
         if (window.AsciinemaPlayer) {
           const container = document.getElementById("player");
           container.replaceChildren();
@@ -29,6 +54,7 @@
         <a href="#how-it-works">How it works</a>
         <a href="#control-panel">Control panel</a>
         <a class="nav-cta" href="https://github.com/phieri/bt-intercom#requirements">Setup guide <span aria-hidden="true">↗</span></a>
+        <button class="theme-toggle" id="theme-toggle" type="button">Light mode</button>
       </nav>
     </header>
     <main id="main">
