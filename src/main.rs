@@ -77,7 +77,8 @@ struct Cli {
 		short = 'v',
 		short_alias = 'V',
 		long = "version",
-		action = clap::ArgAction::Version
+		action = clap::ArgAction::Version,
+		required = false
 	)]
 	version: bool,
 	#[command(subcommand)]
