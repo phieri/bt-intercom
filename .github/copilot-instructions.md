@@ -1,27 +1,59 @@
 # Copilot instructions
 
-## Project overview
+These instructions are for coding agents working in `bt-intercom`. Keep them
+focused on implementation and contribution guidance. The README is the source
+of truth for user-facing setup, CLI behavior, supported hardware, and limits.
+When a change affects those topics, update the README as well.
 
-This is the bt-intercom Rust CLI for a local Bluetooth Classic intercom with
-selectable half-duplex and full-duplex modes on Linux; Raspberry Pi is one
-supported platform. BlueZ handles pairing and PipeWire/WirePlumber provides
-HFP/HSP headset audio. The README is the source of truth for setup, supported
-hardware, and operational limitations.
+## Working in this repository
 
-## Code layout
+- Inspect the affected implementation and nearby tests before changing behavior.
+- Make the smallest complete change that addresses the task; avoid unrelated
+  cleanup.
+- Add or update tests where practical, following the existing test patterns.
+- Preserve cleanup on success, failure, cancellation, and shutdown paths.
+- Keep errors actionable. Warnings should remain non-fatal when recovery is
+  intended.
 
-- `src/main.rs` implements the CLI, reconnect behavior,
-  push-to-talk, and the main run loop.
-- `src/process.rs` provides bounded subprocess execution, cancellation, and
-  process-group cleanup.
-- `src/network.rs` validates, persists, restores, and enrolls the headset
-  allowlist.
-- `src/router.rs` discovers PipeWire topology and manages inter-headset links.
-- `src/dashboard.rs` polls Bluetooth status and renders the optional terminal
+## Project structure
+
+- `src/main.rs`: CLI, orchestration, reconnect loop, pairing, and PTT.
+- `src/process.rs`: bounded subprocess execution, cancellation, and process
+  cleanup.
+- `src/bluez.rs`: parsing of `bluetoothctl` output shared by the CLI and
   dashboard.
-- Unit tests live alongside their implementation in `#[cfg(test)]` modules.
+- `src/network.rs`, `src/groups.rs`: persistence and validation for the headset
+  network and talk groups.
+- `src/router.rs`: PipeWire discovery and managed audio links.
+- `src/transmit.rs`: transmit state and half-duplex floor/queue behavior.
+- `src/pair_button.rs`: Raspberry Pi GPIO pairing-button support.
+- `src/dashboard.rs`, `src/tui.rs`, `src/terminal_style.rs`: terminal status
+  views and styling.
+- `src/atomic_file.rs`: atomic replacement for persisted files.
 
-## Development checks
+Unit tests are colocated with implementation in `#[cfg(test)]` modules.
+Prefer the existing synthetic PipeWire fixtures and injected command executors
+over requiring Bluetooth hardware or a live PipeWire session.
+
+## Behavioral invariants
+
+- Route only allowlisted Bluetooth devices exposing both source and sink ports
+  with the `headset-head-unit` profile. Never route a headset to itself or
+  modify links not owned by this process.
+- Each created PipeWire link belongs to a monitored `pw-cli -m` client and uses
+  `object.linger=false`. Release the link by closing its owning client; do not
+  delete links or ports by numeric ID because PipeWire may reuse IDs.
+- Run subprocesses through the bounded and cancellable mechanisms in
+  `src/process.rs`. Preserve process-group cleanup for cancellable commands;
+  interactive children that share the caller's terminal have different
+  job-control constraints.
+- PTT is driven by mapped Linux evdev devices and `KEY_PLAYPAUSE` press/release
+  events only. Keyboard input and headset call/answer keys must not activate it.
+- Keep talk-group routing and half-duplex floor behavior isolated by group.
+  With no configured groups, retain the documented all-to-all behavior.
+- Use `crate::atomic_file::write` when replacing persisted configuration files.
+
+## Validation
 
 Run the same host checks as CI:
 
@@ -31,46 +63,26 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo test --locked
 ```
 
-Tests use synthetic PipeWire graphs and mocked command behavior; they do not
-require Bluetooth hardware or a live PipeWire session. Add tests
-near the code they cover, using the existing fixtures and injected command
-executors where practical. These checks do not replace hardware validation for
-changes affecting actual headset/audio behavior.
+These checks do not validate real Bluetooth connections or audio transport.
+Changes affecting headset or audio behavior also need hardware validation where
+available.
 
-## Important implementation constraints
+## Runtime and build
 
-- Routing is limited to allowlisted Bluetooth devices exposing both source and
-  sink ports with the `headset-head-unit` profile. Never route a headset to
-  itself or alter links not owned by this process.
-- Each created PipeWire link is owned by a monitored `pw-cli -m` client with
-  `object.linger=false`. Release links by closing their client; do not delete
-  links or ports by numeric ID, since PipeWire may reuse IDs.
-- External commands have timeouts and cancellation/cleanup behavior. Preserve
-  process-group cleanup for cancellable commands and bounded execution when
-  adding subprocess calls.
-- PTT uses mapped Linux evdev devices and only `KEY_PLAYPAUSE` press/release
-  events. Keep keyboard input and headset call/answer keys from activating it.
-- User-facing failures are generally returned as `Result<_, String>`; warnings
-  are non-fatal and logged separately. Keep failures actionable and preserve
-  cleanup on errors.
+The application invokes `bluetoothctl`, `pw-dump`, `pw-cli`, and `pw-play`.
+It must run as the same user as PipeWire, not under `sudo`. Host tests need
+neither these utilities nor live devices.
 
-## Build targets and runtime
-
-The CI cross-build matrix is `arm-unknown-linux-gnueabihf` (ARMv6),
-`armv7-unknown-linux-gnueabihf`, and `aarch64-unknown-linux-gnu`. For Pi Zero W
-and other ARMv6 devices, use the ARMv6 target via `cross` version 0.2.5; the
-Ubuntu ARMhf linker defaults to ARMv7 and is not a substitute. Match the target
-to both the Pi model and OS bitness as documented in the README.
-
-At runtime the application invokes `bluetoothctl`, `pw-dump`, `pw-cli`, and
-`pw-play`. It must run in the same user session as PipeWire, not under `sudo`.
-Host tests do not need these utilities or access to live devices.
+CI cross-builds `arm-unknown-linux-gnueabihf` (ARMv6),
+`armv7-unknown-linux-gnueabihf`, and `aarch64-unknown-linux-gnu`. For ARMv6,
+use `cross` version 0.2.5; Ubuntu's ARMhf linker defaults to ARMv7 and cannot
+replace the ARMv6 target. Choose the target for both the device and OS bitness
+as documented in the README.
 
 ## Documentation and workflows
 
-The build workflow runs formatting, Clippy, tests, and cross-compilation. Its
-path filters skip changes limited to `docs/`, `README.md`, and the Pages
-workflow. The Pages workflow generates the accessible transcript from
-`docs/demo.cast`, downloads pinned asciinema-player assets, verifies their
-checksums, and deploys `docs/` from `main` (or by manual dispatch). Generated
-assets under `docs/vendor/` are ignored; do not commit them.
+The build workflow runs formatting, Clippy, tests, and cross-compilation. The
+Pages workflow generates the accessible transcript from `docs/demo.cast`,
+downloads pinned asciinema-player assets, verifies their checksums, and deploys
+`docs/` from `main` or by manual dispatch. Generated assets in `docs/vendor/`
+are ignored; do not commit them.
