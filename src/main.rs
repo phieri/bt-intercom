@@ -31,7 +31,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use bluez::{bluetooth_name, device_flag, normalize_address};
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use clap_complete::Shell;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
@@ -58,7 +58,11 @@ struct PttButton {
 #[derive(Parser)]
 #[command(
 	name = "bt-intercom",
-	version,
+	version = concat!(
+		env!("CARGO_PKG_VERSION"),
+		"\nBuild datetime: ",
+		env!("BT_INTERCOM_BUILD_DATETIME")
+	),
 	long_version = concat!(
 		env!("CARGO_PKG_VERSION"),
 		"\nBuild datetime: ",
@@ -70,6 +74,16 @@ struct PttButton {
 struct Cli {
 	#[command(subcommand)]
 	command: CliCommand,
+}
+
+fn cli_command() -> clap::Command {
+	Cli::command().disable_version_flag(true).arg(
+		clap::Arg::new("version")
+			.short('V')
+			.short_alias('v')
+			.long("version")
+			.action(clap::ArgAction::Version),
+	)
 }
 
 #[derive(Subcommand)]
@@ -845,10 +859,11 @@ fn main() {
 		.format_timestamp_secs()
 		.init();
 
-	let cli = Cli::try_parse().unwrap_or_else(|error| error.exit());
+	let matches = cli_command().get_matches();
+	let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
 	match cli.command {
 		CliCommand::Completions { shell } => {
-			let mut command = Cli::command();
+			let mut command = cli_command();
 			clap_complete::generate(
 				shell,
 				&mut command,
@@ -1132,12 +1147,33 @@ mod tests {
 	}
 
 	#[test]
-	fn long_version_includes_package_version_and_build_datetime() {
-		let command = Cli::command();
-		assert_eq!(command.get_version(), Some(env!("CARGO_PKG_VERSION")));
+	fn version_flags_print_the_long_version_with_build_datetime() {
+		let command = cli_command();
 		let long_version = command.get_long_version().unwrap().to_string();
-		assert!(long_version.contains(env!("CARGO_PKG_VERSION")));
-		assert!(long_version.contains(env!("BT_INTERCOM_BUILD_DATETIME")));
+		assert_eq!(command.get_version(), Some(long_version.as_str()));
+
+		let short = command
+			.clone()
+			.try_get_matches_from(["bt-intercom", "-v"])
+			.err()
+			.unwrap()
+			.to_string();
+		let long = command
+			.clone()
+			.try_get_matches_from(["bt-intercom", "--version"])
+			.err()
+			.unwrap()
+			.to_string();
+		let legacy_short = command
+			.try_get_matches_from(["bt-intercom", "-V"])
+			.err()
+			.unwrap()
+			.to_string();
+
+		assert_eq!(short, long);
+		assert_eq!(short, legacy_short);
+		assert!(short.contains(env!("CARGO_PKG_VERSION")));
+		assert!(short.contains(env!("BT_INTERCOM_BUILD_DATETIME")));
 	}
 
 	#[test]
