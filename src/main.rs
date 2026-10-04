@@ -37,6 +37,7 @@ use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
 use dashboard::Dashboard;
+use dashboard::RunStatus;
 use groups::{config_path as talk_groups_path, load as load_talk_groups};
 use network::{
 	headset_path as headset_network_path, load as load_headsets, load_for_run as load_run_headsets,
@@ -805,7 +806,11 @@ fn run(action: CliCommand) -> Result<(), String> {
 									&router.allowed,
 									&headsets,
 									&links,
-									input.is_none() || !transmit.sources().is_empty(),
+									RunStatus {
+										mode,
+										transmitting: input.is_none()
+											|| !transmit.sources().is_empty(),
+									},
 									last_error.as_deref(),
 									&mut output,
 								)

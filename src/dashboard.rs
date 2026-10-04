@@ -15,6 +15,7 @@ use crate::bluez::{
 };
 use crate::process::{COMMAND_TIMEOUT, command_cancellable};
 use crate::router::Headset;
+use crate::transmit::Mode;
 
 #[derive(Debug, PartialEq, Eq)]
 /// Bluetooth connection and optional signal-strength information.
@@ -40,6 +41,11 @@ pub struct Dashboard {
 	state: BTreeMap<String, Option<Bluetooth>>,
 	shutdown: mpsc::Sender<()>,
 	worker: Option<JoinHandle<()>>,
+}
+
+pub struct RunStatus {
+	pub mode: Mode,
+	pub transmitting: bool,
 }
 
 impl Dashboard {
@@ -95,14 +101,18 @@ impl Dashboard {
 		allowed: &BTreeSet<String>,
 		headsets: &BTreeMap<String, Headset>,
 		links: &BTreeSet<(u64, u64)>,
-		transmitting: bool,
+		status: RunStatus,
 		error: Option<&str>,
 		output: &mut impl Write,
 	) -> io::Result<()> {
 		writeln!(
 			output,
-			"bt-intercom | {} | {} owned active links",
-			if transmitting {
+			"bt-intercom | {} | {} | {} owned active links",
+			match status.mode {
+				Mode::HalfDuplex => "half-duplex",
+				Mode::FullDuplex => "full-duplex",
+			},
+			if status.transmitting {
 				"transmitting"
 			} else {
 				"muted"
@@ -253,14 +263,17 @@ mod tests {
 				&allowed,
 				&headsets,
 				&BTreeSet::from([(3, 4)]),
-				false,
+				RunStatus {
+					mode: Mode::HalfDuplex,
+					transmitting: false,
+				},
 				None,
 				&mut output,
 			)
 			.unwrap();
 		let text = String::from_utf8(output).unwrap();
 		assert!(!text.contains('\u{1b}'));
-		assert!(text.contains("muted | 1 owned active links"));
+		assert!(text.contains("half-duplex | muted | 1 owned active links"));
 		assert!(text.contains("HEADSET NAME             ADDRESS             CONNECTED"));
 		assert!(!text.contains("PAIRED"));
 		assert!(text.contains("AA:BB:CC:DD:EE:01  ?"));
@@ -327,7 +340,10 @@ mod tests {
 				&allowed,
 				&BTreeMap::new(),
 				&BTreeSet::new(),
-				false,
+				RunStatus {
+					mode: Mode::FullDuplex,
+					transmitting: false,
+				},
 				None,
 				&mut output,
 			)
@@ -369,7 +385,10 @@ mod tests {
 				&allowed,
 				&BTreeMap::new(),
 				&BTreeSet::new(),
-				false,
+				RunStatus {
+					mode: Mode::FullDuplex,
+					transmitting: false,
+				},
 				None,
 				&mut output,
 			)
