@@ -31,7 +31,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use bluez::{bluetooth_name, device_flag, normalize_address};
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use clap_complete::Shell;
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
@@ -58,7 +58,6 @@ struct PttButton {
 #[derive(Parser)]
 #[command(
 	name = "bt-intercom",
-	disable_version_flag = true,
 	version = concat!(
 		env!("CARGO_PKG_VERSION"),
 		"\nBuild datetime: ",
@@ -73,16 +72,14 @@ struct PttButton {
 	arg_required_else_help = true
 )]
 struct Cli {
-	#[arg(
-		short = 'v',
-		short_alias = 'V',
-		long = "version",
-		action = clap::ArgAction::Version,
-		required = false
-	)]
-	version: bool,
 	#[command(subcommand)]
 	command: CliCommand,
+}
+
+fn cli_command() -> clap::Command {
+	let mut command = Cli::command();
+	command.mut_arg("version", |arg| arg.short_alias('v'));
+	command
 }
 
 #[derive(Subcommand)]
@@ -858,10 +855,11 @@ fn main() {
 		.format_timestamp_secs()
 		.init();
 
-	let cli = Cli::try_parse().unwrap_or_else(|error| error.exit());
+	let matches = cli_command().get_matches();
+	let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
 	match cli.command {
 		CliCommand::Completions { shell } => {
-			let mut command = Cli::command();
+			let mut command = cli_command();
 			clap_complete::generate(
 				shell,
 				&mut command,
@@ -1146,19 +1144,24 @@ mod tests {
 
 	#[test]
 	fn version_flags_print_the_long_version_with_build_datetime() {
-		let command = Cli::command();
+		let command = cli_command();
 		let long_version = command.get_long_version().unwrap().to_string();
 		assert_eq!(command.get_version(), Some(long_version.as_str()));
 
-		let short = Cli::try_parse_from(["bt-intercom", "-v"])
+		let short = command
+			.clone()
+			.try_get_matches_from(["bt-intercom", "-v"])
 			.err()
 			.unwrap()
 			.to_string();
-		let long = Cli::try_parse_from(["bt-intercom", "--version"])
+		let long = command
+			.clone()
+			.try_get_matches_from(["bt-intercom", "--version"])
 			.err()
 			.unwrap()
 			.to_string();
-		let legacy_short = Cli::try_parse_from(["bt-intercom", "-V"])
+		let legacy_short = command
+			.try_get_matches_from(["bt-intercom", "-V"])
 			.err()
 			.unwrap()
 			.to_string();
