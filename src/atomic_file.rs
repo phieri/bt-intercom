@@ -71,4 +71,22 @@ mod tests {
 		assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
 		fs::remove_dir_all(directory).unwrap();
 	}
+
+	#[test]
+	fn removes_temporary_file_when_replacement_fails() {
+		let directory = std::env::temp_dir().join(format!(
+			"bt-intercom-atomic-file-failure-{}-{}",
+			std::process::id(),
+			NEXT_TEMP_FILE.fetch_add(1, Ordering::Relaxed)
+		));
+		fs::create_dir_all(&directory).unwrap();
+		let path = directory.join("config");
+		fs::create_dir(&path).unwrap();
+
+		assert!(write(&path, b"new").is_err());
+		assert!(path.is_dir());
+		assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+
+		fs::remove_dir_all(directory).unwrap();
+	}
 }

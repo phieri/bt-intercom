@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use rppal::gpio::{Gpio, InputPin};
 
 use crate::bluez::device_flag;
+use crate::process::COMMAND_TIMEOUT;
 
 const GPIO: u8 = 17;
 const DEBOUNCE: Duration = Duration::from_millis(60);
@@ -91,7 +92,9 @@ impl PairButton {
 					log::info!("Pairing button pressed; scanning for one unpaired headset");
 					let result = pair_headset(
 						&allowed,
-						|args, timeout| crate::command_cancellable(args, timeout, Some(&stopped)),
+						|args, timeout| {
+							crate::process::command_cancellable(args, timeout, Some(&stopped))
+						},
 						|device| {
 							headless_pair_session(
 								&["bluetoothctl", "--agent", "NoInputNoOutput"],
@@ -103,7 +106,7 @@ impl PairButton {
 					);
 					let result = result.and_then(|device| {
 						if let Err(error) =
-							crate::enroll_headset(&network_path, &mut allowed, device.clone())
+							crate::network::enroll(&network_path, &mut allowed, device.clone())
 						{
 							return Err(rollback_error(&device, error, rollback_headset));
 						}
@@ -183,7 +186,7 @@ fn pair_headset(
 	}
 	let mut candidates = Vec::new();
 	for device in observed.difference(allowed) {
-		let info = execute(&["bluetoothctl", "info", device], Duration::from_secs(15))?;
+		let info = execute(&["bluetoothctl", "info", device], COMMAND_TIMEOUT)?;
 		if !device_flag(&info, "Paired") && is_headset(&info) {
 			candidates.push(device.clone());
 		}
@@ -195,7 +198,7 @@ fn pair_headset(
 	};
 	let enrollment = (|| {
 		pair(device)?;
-		let info = execute(&["bluetoothctl", "info", device], Duration::from_secs(15))?;
+		let info = execute(&["bluetoothctl", "info", device], COMMAND_TIMEOUT)?;
 		if !device_flag(&info, "Paired") {
 			return Err(format!(
 				"pairing did not succeed for {device}; PIN/confirmation headsets require interactive pairing"
@@ -205,7 +208,7 @@ fn pair_headset(
 			&["bluetoothctl", "--timeout", "15", "trust", device],
 			Duration::from_secs(20),
 		)?;
-		let info = execute(&["bluetoothctl", "info", device], Duration::from_secs(15))?;
+		let info = execute(&["bluetoothctl", "info", device], COMMAND_TIMEOUT)?;
 		if !device_flag(&info, "Trusted") {
 			return Err(format!("trust did not succeed for {device}"));
 		}
@@ -227,7 +230,8 @@ fn pair_headset(
 fn rollback_headset(device: &str) -> Result<(), String> {
 	// Only called for a device selected as unpaired by this attempt. Cleanup
 	// must remain bounded but run even when the pairing operation was cancelled.
-	crate::command(&["bluetoothctl", "remove", device], Duration::from_secs(20)).map(|_| ())
+	crate::process::command(&["bluetoothctl", "remove", device], Duration::from_secs(20))
+		.map(|_| ())
 }
 
 fn rollback_error(
@@ -321,7 +325,7 @@ fn headless_pair_session(args: &[&str], device: &str, stopped: &AtomicBool) -> R
 	})();
 	drop(messages);
 	drop(input);
-	crate::kill_process_group(&mut child);
+	crate::process::kill_process_group(&mut child);
 	let _ = child.wait();
 	let _ = reader.join();
 	result

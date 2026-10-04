@@ -10,8 +10,10 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use crate::bluez::{bluetooth_name, device_flag, property};
-use crate::command_cancellable;
+use crate::bluez::{
+	FAIR_RSSI, GOOD_RSSI, STRONG_RSSI, bluetooth_name, device_flag, signal_strength,
+};
+use crate::process::{COMMAND_TIMEOUT, command_cancellable};
 use crate::router::Headset;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -23,12 +25,10 @@ pub struct Bluetooth {
 }
 
 fn bluetooth_info(info: &str) -> Bluetooth {
-	let rssi =
-		property(info, "RSSI").and_then(|value| value.split_whitespace().next()?.parse().ok());
 	Bluetooth {
 		name: bluetooth_name(info),
 		connected: device_flag(info, "Connected"),
-		rssi,
+		rssi: signal_strength(info),
 	}
 }
 
@@ -55,7 +55,7 @@ impl Dashboard {
 					}
 					let info = command_cancellable(
 						&["bluetoothctl", "info", address],
-						Duration::from_secs(15),
+						COMMAND_TIMEOUT,
 						Some(&stopped),
 					)
 					.ok()
@@ -113,6 +113,25 @@ impl Dashboard {
 			output,
 			"HEADSET NAME             ADDRESS             CONNECTED  DUPLEX  TX/RX LINKS  SIGNAL"
 		)?;
+		let mut source_owners = BTreeMap::new();
+		let mut sink_owners = BTreeMap::new();
+		for (address, headset) in headsets {
+			for port in &headset.sources {
+				source_owners.insert(port.id, address.as_str());
+			}
+			for port in &headset.sinks {
+				sink_owners.insert(port.id, address.as_str());
+			}
+		}
+		let mut link_counts: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
+		for &(output_port, input_port) in links {
+			if let Some(address) = source_owners.get(&output_port) {
+				link_counts.entry(address).or_default().0 += 1;
+			}
+			if let Some(address) = sink_owners.get(&input_port) {
+				link_counts.entry(address).or_default().1 += 1;
+			}
+		}
 		for address in allowed {
 			let bluetooth = self.state.get(address).and_then(Option::as_ref);
 			let status = |flag: Option<bool>| match flag {
@@ -121,29 +140,24 @@ impl Dashboard {
 				None => "?",
 			};
 			let headset = headsets.get(address);
-			let (tx, rx) = headset.map_or((0, 0), |headset| {
-				(
-					links
-						.iter()
-						.filter(|(out, _)| headset.sources.iter().any(|port| port.id == *out))
-						.count(),
-					links
-						.iter()
-						.filter(|(_, input)| headset.sinks.iter().any(|port| port.id == *input))
-						.count(),
-				)
-			});
+			let (tx, rx) = link_counts
+				.get(address.as_str())
+				.copied()
+				.unwrap_or_default();
 			let signal = bluetooth
 				.filter(|info| info.connected)
 				.and_then(|info| info.rssi)
 				.map_or_else(
 					|| "unknown".to_string(),
 					|rssi| {
-						let quality = match rssi {
-							-60.. => "strong",
-							-70..=-61 => "good",
-							-80..=-71 => "fair",
-							_ => "weak",
+						let quality = if rssi >= STRONG_RSSI {
+							"strong"
+						} else if rssi >= GOOD_RSSI {
+							"good"
+						} else if rssi >= FAIR_RSSI {
+							"fair"
+						} else {
+							"weak"
 						};
 						format!("{rssi} dBm ({quality})")
 					},

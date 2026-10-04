@@ -10,8 +10,12 @@ hardware, and operational limitations.
 
 ## Code layout
 
-- `src/main.rs` implements the CLI, Bluetooth commands, subprocess management,
-  reconnect behavior, push-to-talk, and the main run loop.
+- `src/main.rs` implements the CLI, reconnect behavior,
+  push-to-talk, and the main run loop.
+- `src/process.rs` provides bounded subprocess execution, cancellation, and
+  process-group cleanup.
+- `src/network.rs` validates, persists, restores, and enrolls the headset
+  allowlist.
 - `src/router.rs` discovers PipeWire topology and manages inter-headset links.
 - `src/dashboard.rs` polls Bluetooth status and renders the optional terminal
   dashboard.
