@@ -104,6 +104,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "bt-intercom"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "clap_complete",
+ "crossterm",
+ "ctrlc",
+ "env_logger",
+ "libc",
+ "log",
+ "ratatui",
+ "rppal",
+ "serde_json",
+]
+
+[[package]]
 name = "by_address"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -868,18 +884,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
-name = "bt-intercom"
-version = "0.1.0"
+name = "rppal"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1ce3b019009cff02cb6b0e96e7cc2e5c5b90187dc1a490f8ef1521d0596b026"
 dependencies = [
- "clap",
- "clap_complete",
- "crossterm",
- "ctrlc",
- "env_logger",
  "libc",
- "log",
- "ratatui",
- "serde_json",
 ]
 
 [[package]]

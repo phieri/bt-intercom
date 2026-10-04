@@ -9,6 +9,7 @@ mod atomic_file;
 mod bluez;
 mod dashboard;
 mod groups;
+mod pair_button;
 mod router;
 mod terminal_style;
 mod transmit;
@@ -23,9 +24,9 @@ use std::io::{IsTerminal, Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -102,6 +103,10 @@ enum CliCommand {
 		/// Reconnect disconnected headsets every 30 seconds.
 		#[arg(long)]
 		connect: bool,
+		/// Pair one nearby Just Works headset on a Raspberry Pi GPIO17 button press.
+		/// Requires full-duplex without --ptt; wire physical pin 11 to ground.
+		#[arg(long, conflicts_with = "ptt")]
+		pair_button: bool,
 		/// Map a headset address to an evdev input path; repeat once per headset.
 		#[arg(long, value_name = "ADDRESS=/dev/input/eventX", value_parser = parse_ptt_binding)]
 		ptt: Vec<PttButton>,
@@ -413,6 +418,26 @@ fn load_headsets(path: &Path) -> Result<BTreeSet<String>, String> {
 	Ok(allowed)
 }
 
+fn load_run_headsets(path: &Path, pair_button: bool) -> Result<BTreeSet<String>, String> {
+	if pair_button && !path.try_exists().map_err(|error| error.to_string())? {
+		Ok(BTreeSet::new())
+	} else {
+		load_headsets(path)
+	}
+}
+
+fn enroll_headset(
+	path: &Path,
+	allowed: &mut BTreeSet<String>,
+	device: String,
+) -> Result<(), String> {
+	let mut enrolled = allowed.clone();
+	enrolled.insert(device);
+	save_headsets(path, &enrolled)?;
+	*allowed = enrolled;
+	Ok(())
+}
+
 /// Parses and validates one or more Bluetooth addresses.
 fn addresses(args: &[String]) -> Result<BTreeSet<String>, String> {
 	if args.is_empty() {
@@ -693,14 +718,15 @@ fn connect_disconnected(
 
 /// Repeats connection checks until cancelled or explicitly woken for shutdown.
 fn reconnect_worker(
-	allowed: BTreeSet<String>,
+	allowed: Arc<Mutex<BTreeSet<String>>>,
 	stopped: Arc<AtomicBool>,
 	shutdown: Receiver<()>,
 	retry: Duration,
 	mut execute: impl FnMut(&[&str], Duration) -> Result<String, String>,
 ) {
 	loop {
-		connect_disconnected(&allowed, &stopped, &mut execute);
+		let devices = allowed.lock().unwrap().clone();
+		connect_disconnected(&devices, &stopped, &mut execute);
 		if stopped.load(Ordering::SeqCst) {
 			break;
 		}
@@ -790,6 +816,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 			addresses: devices,
 			interval,
 			connect,
+			pair_button,
 			ptt: buttons,
 			mode,
 			dashboard: show_dashboard,
@@ -805,7 +832,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 			if explicit_network {
 				save_headsets(&network_path, &allowed)?;
 			} else {
-				allowed = load_headsets(&network_path)?;
+				allowed = load_run_headsets(&network_path, pair_button)?;
 				validate_mode(mode, &buttons, &allowed)?;
 			}
 			let groups_path = talk_groups_path(&network_path)?;
@@ -824,7 +851,15 @@ fn run(action: CliCommand) -> Result<(), String> {
 			} else {
 				Some(ptt_input(buttons)?)
 			};
+			let pairing_pin = if pair_button {
+				Some(pair_button::PairButton::open()?)
+			} else {
+				None
+			};
 			let mut router = Router::new(allowed);
+			let reconnect_devices = Arc::new(Mutex::new(router.allowed.clone()));
+			let pairing =
+				pairing_pin.map(|pin| pair_button::PairButton::start(pin, router.allowed.clone()));
 			let mut dashboard = show_dashboard
 				.then(|| Dashboard::start(router.allowed.clone(), Arc::clone(&stopped)));
 			let mut headsets = BTreeMap::new();
@@ -833,7 +868,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 			let mut redraw = true;
 			let (shutdown, shutdown_rx) = mpsc::channel();
 			let connector = if connect {
-				let devices = router.allowed.clone();
+				let devices = Arc::clone(&reconnect_devices);
 				let cancelled = Arc::clone(&stopped);
 				Some(thread::spawn(move || {
 					reconnect_worker(
@@ -868,6 +903,31 @@ fn run(action: CliCommand) -> Result<(), String> {
 			let mut last_update: Option<Instant> = None;
 			let result: Result<(), String> = (|| {
 				while !stopped.load(Ordering::SeqCst) {
+					if let Some(ref pairing) = pairing {
+						while let Ok(event) = pairing.events.try_recv() {
+							match event {
+								Ok(device) => {
+									enroll_headset(
+										&network_path,
+										&mut router.allowed,
+										device.clone(),
+									)?;
+									*reconnect_devices.lock().unwrap() = router.allowed.clone();
+									if let Some(ref mut current) = dashboard {
+										current.stop();
+										dashboard = Some(Dashboard::start(
+											router.allowed.clone(),
+											Arc::clone(&stopped),
+										));
+									}
+									log::info!("Paired and saved {device}; added to the intercom");
+									last_update = None;
+									redraw = true;
+								}
+								Err(error) => log::warn!("Button pairing failed: {error}"),
+							}
+						}
+					}
 					if let Some(ref input) = input
 						&& drain_ptt(input, &mut transmit)?
 					{
@@ -1005,6 +1065,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 				Ok(())
 			})();
 			stopped.store(true, Ordering::SeqCst);
+			drop(pairing);
 			let _ = shutdown.send(());
 			if let Some(ref mut dashboard) = dashboard {
 				dashboard.stop();
@@ -1166,6 +1227,74 @@ mod tests {
 	fn missing_saved_network_explains_how_to_create_it() {
 		let error = load_headsets(&temporary_network_path()).unwrap_err();
 		assert!(error.contains("run with headset addresses first"));
+	}
+
+	#[test]
+	fn only_button_mode_can_start_without_a_saved_network() {
+		let path = temporary_network_path();
+		assert!(load_run_headsets(&path, false).is_err());
+		assert!(load_run_headsets(&path, true).unwrap().is_empty());
+		fs::create_dir_all(path.parent().unwrap()).unwrap();
+		fs::write(&path, "invalid\n").unwrap();
+		assert!(load_run_headsets(&path, true).is_err());
+		fs::write(&path, "AA:BB:CC:DD:EE:01\n").unwrap();
+		assert_eq!(
+			load_run_headsets(&path, true).unwrap(),
+			BTreeSet::from(["AA:BB:CC:DD:EE:01".into()])
+		);
+		fs::remove_dir_all(path.parent().unwrap()).unwrap();
+	}
+
+	#[test]
+	fn enrollment_preserves_network_and_only_allows_saved_devices() {
+		let path = temporary_network_path();
+		let mut allowed = BTreeSet::from(["AA:BB:CC:DD:EE:01".into()]);
+		enroll_headset(&path, &mut allowed, "AA:BB:CC:DD:EE:02".into()).unwrap();
+		assert_eq!(load_headsets(&path).unwrap(), allowed);
+		assert_eq!(allowed.len(), 2);
+		enroll_headset(&path, &mut allowed, "AA:BB:CC:DD:EE:02".into()).unwrap();
+		assert_eq!(allowed.len(), 2);
+		let before = allowed.clone();
+		assert!(
+			enroll_headset(
+				&path.join("not-a-directory"),
+				&mut allowed,
+				"AA:BB:CC:DD:EE:03".into(),
+			)
+			.is_err()
+		);
+		assert_eq!(allowed, before);
+		assert_eq!(load_headsets(&path).unwrap(), before);
+		fs::remove_dir_all(path.parent().unwrap()).unwrap();
+	}
+
+	#[test]
+	fn pairing_button_is_opt_in_and_incompatible_with_ptt() {
+		let CliCommand::Run { pair_button, .. } =
+			Cli::try_parse_from(["bt-intercom", "run"]).unwrap().command
+		else {
+			panic!("expected run");
+		};
+		assert!(!pair_button);
+		let CliCommand::Run { pair_button, .. } =
+			Cli::try_parse_from(["bt-intercom", "run", "--pair-button"])
+				.unwrap()
+				.command
+		else {
+			panic!("expected run");
+		};
+		assert!(pair_button);
+		assert!(
+			Cli::try_parse_from([
+				"bt-intercom",
+				"run",
+				"--pair-button",
+				"--ptt",
+				"AA:BB:CC:DD:EE:01=/dev/input/event4",
+			])
+			.is_err()
+		);
+		assert!(validate_mode(Mode::HalfDuplex, &[], &BTreeSet::new()).is_err());
 	}
 
 	#[test]
@@ -1590,7 +1719,7 @@ mod tests {
 		let (attempt, attempts) = mpsc::channel();
 		let worker = thread::spawn(move || {
 			reconnect_worker(
-				["AA:BB:CC:DD:EE:01".into()].into(),
+				Arc::new(Mutex::new(["AA:BB:CC:DD:EE:01".into()].into())),
 				Arc::new(AtomicBool::new(false)),
 				receiver,
 				Duration::from_millis(10),
@@ -1606,6 +1735,32 @@ mod tests {
 		worker.join().unwrap();
 	}
 
+	#[test]
+	fn reconnect_worker_picks_up_newly_enrolled_devices() {
+		let devices = Arc::new(Mutex::new(BTreeSet::from(["AA:BB:CC:DD:EE:01".into()])));
+		let updated = Arc::clone(&devices);
+		let stopped = Arc::new(AtomicBool::new(false));
+		let cancelled = Arc::clone(&stopped);
+		let (_shutdown, receiver) = mpsc::channel();
+		let mut calls = Vec::new();
+		reconnect_worker(devices, stopped, receiver, Duration::ZERO, |args, _| {
+			calls.push(args[2].to_string());
+			if calls.len() == 1 {
+				updated.lock().unwrap().insert("AA:BB:CC:DD:EE:02".into());
+			} else if args[2] == "AA:BB:CC:DD:EE:02" {
+				cancelled.store(true, Ordering::SeqCst);
+			}
+			Ok("Connected: yes\n".into())
+		});
+		assert_eq!(
+			calls,
+			[
+				"AA:BB:CC:DD:EE:01",
+				"AA:BB:CC:DD:EE:01",
+				"AA:BB:CC:DD:EE:02"
+			]
+		);
+	}
 	#[test]
 	fn commands_capture_output_errors_and_do_not_read_ptt_input() {
 		let timeout = Duration::from_secs(5);

@@ -33,6 +33,7 @@ Show each headset's Bluetooth name, duplex audio availability, and port counts.
 .BI run " [ADDRESS ...]"
 Run the intercom. Explicit addresses are saved for future runs; if omitted, the
 previously saved network is restored.
+With --pair-button, a missing saved network starts empty for headless enrollment.
 .TP
 .BI completions " SHELL"
 Write shell completion definitions to standard output. Supported shells include
@@ -52,6 +53,26 @@ Set the routing update interval (default: 2 seconds).
 .TP
 .B run --connect
 Retry disconnected headsets every 30 seconds.
+.TP
+.B run --pair-button
+Enable a Raspberry Pi headless pairing button on BCM GPIO17 (physical pin 11).
+With power off, wire a normally-open momentary button between pin 11 and GND
+(physical pin 9). The input uses the internal 3.3 V pull-up; never connect 5 V.
+Requires full-duplex without --ptt, GPIO device permissions for the PipeWire
+user, and a powered Bluetooth controller. Do not run with sudo.
+.PP
+Put only the intended headset in pairing mode, then press and release the button.
+A debounced press scans Bluetooth Classic for 15 seconds and pairs exactly one
+observed, unpaired HFP/HSP headset advertising a headset/handsfree UUID.
+Ambiguous discovery does not pair anything. Only Just Works headsets requiring
+no PIN or confirmation are supported; other headsets need interactive pairing.
+Just Works does not authenticate identity; use a trusted environment.
+Successful pairing is verified, trusted, saved, and added to the running network.
+Connection is attempted immediately; --connect retries new devices too.
+Duplex profiles and talk-group membership still need normal configuration.
+Existing audio routing continues during pairing. Holds, bounce, and presses
+during pairing do not repeat; a fresh release and press is required.
+Failures are logged; SIGINT/SIGTERM cancels pairing and releases the GPIO.
 .TP
 .BI run " --mode MODE"
 Select full-duplex (default) or half-duplex. Half-duplex requires a play/pause
