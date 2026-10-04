@@ -92,8 +92,9 @@ terminal.
 requirements, an AppArmor profile, and a systemd user unit. The packages install
 the profile at `/etc/apparmor.d/usr.bin.bt-intercom`; AppArmor must be enabled
 on the host for it to be enforced. The profile allows the default configuration
-and runtime paths, PipeWire and BlueZ access, and read access to PTT input
-devices. Custom `XDG_CONFIG_HOME` paths may need a local profile adjustment.
+and runtime paths, PipeWire and BlueZ access, read access to PTT input
+devices, and Raspberry Pi GPIO access (not `/dev/mem`). Custom `XDG_CONFIG_HOME`
+paths may need a local profile adjustment.
 Custom `TMPDIR` paths may also need an adjustment for temporary PTT audio.
 Install `cargo-deb` and
 `cargo-generate-rpm`, then build packages with `cargo deb` and
@@ -180,6 +181,74 @@ network.
 Best-effort beeps confirm when an intercom route becomes active. Their temporary
 WAV file is created under `XDG_RUNTIME_DIR` when it is an absolute path, falling
 back to the system temporary directory otherwise; it is removed during shutdown.
+
+### Raspberry Pi headless pairing button
+
+On a supported Raspberry Pi, `run --pair-button` enables a normally-open
+momentary button on **BCM GPIO17, physical header pin 11**. With the Pi powered
+off, wire the button between pin 11 and **GND, physical pin 9**. The input uses
+the internal 3.3 V pull-up, so pressing the button pulls it low; no external
+pull-up is needed. Never connect it to 5 V. Reserve GPIO17 for this button;
+do not use it with a HAT, overlay, or another GPIO application.
+
+Run as your PipeWire user, with access to `/dev/gpiomem` (older Pis),
+`/dev/gpiomem0` (Pi 5), and `/dev/gpiochip*`. Raspberry Pi OS normally grants
+this through the `gpio` group. If necessary:
+
+```sh
+sudo usermod -aG gpio "$USER"
+```
+
+Log out and back in for group membership to take effect. Ensure Bluetooth is
+powered on and BlueZ permits this user to pair/trust devices. Do **not** run the
+intercom with `sudo`.
+
+```sh
+bt-intercom run --connect --pair-button
+```
+
+This can start without a saved network. Put **only the intended headset** in
+pairing mode, then press and release the button. Each debounced press scans
+Bluetooth Classic for 15 seconds and pairs only when exactly one observed,
+unpaired HFP/HSP headset is found. Existing network devices, already-paired
+devices, and playback-only A2DP devices are skipped; ambiguous discovery fails
+without pairing. Headsets must advertise a headset/handsfree service UUID during
+discovery and support **Just Works** pairing without a PIN or confirmation.
+Other headsets still need interactive `pair` or a Bluetooth UI.
+
+Successful pairing is verified, trusted, and saved in the normal headset network,
+then added to the running intercom without a restart. Connection is attempted
+immediately; `--connect` also retries newly enrolled headsets. Pairing runs in
+the background, leaving existing audio routing active. Beeps confirm an active
+intercom route, not pairing alone; one headset by itself has no intercom route.
+Failures are logged and can be retried with a fresh press. Holding the button,
+contact bounce, a button held at startup, and presses during pairing do not
+start repeated attempts. Ctrl-C/SIGTERM cancels pairing and releases the GPIO.
+Incomplete attempts remove the newly selected device's bond so it remains
+eligible for a retry; if cleanup fails, the log gives a manual recovery command.
+Headsets fully paired and trusted before shutdown are still saved for the next run.
+
+This option is disabled by default, errors clearly on unsupported boards or
+missing GPIO permissions, and requires full-duplex **without `--ptt`**. New
+headsets still require the duplex PipeWire profile; configured talk groups are
+unchanged, so add the new headset to a group when groups are in use.
+Just Works does not authenticate the headset's identity: pair only in a trusted
+environment and verify the enrolled address in the logs.
+
+For the packaged headless user service, use `systemctl --user edit bt-intercom`
+and add:
+
+```ini
+[Service]
+ExecStart=
+ExecStart=/usr/bin/bt-intercom run --connect --pair-button
+```
+
+Then run `systemctl --user daemon-reload` and
+`systemctl --user restart bt-intercom`. For startup without a login, enable user
+lingering with `sudo loginctl enable-linger "$USER"` and ensure PipeWire and
+WirePlumber start in that user's session. Inspect pairing logs with
+`journalctl --user -u bt-intercom`.
 
 ### Terminal control panel and talk groups
 
