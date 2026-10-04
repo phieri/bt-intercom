@@ -77,15 +77,13 @@ struct Cli {
 }
 
 fn cli_command() -> clap::Command {
-	Cli::command()
-		.disable_version_flag(true)
-		.arg(
-			clap::Arg::new("version")
-				.short('V')
-				.short_alias('v')
-				.long("version")
-				.action(clap::ArgAction::Version),
-		)
+	Cli::command().disable_version_flag(true).arg(
+		clap::Arg::new("version")
+			.short('V')
+			.short_alias('v')
+			.long("version")
+			.action(clap::ArgAction::Version),
+	)
 }
 
 #[derive(Subcommand)]
