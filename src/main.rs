@@ -77,9 +77,7 @@ struct Cli {
 }
 
 fn cli_command() -> clap::Command {
-	let mut command = Cli::command();
-	command.mut_arg("version", |arg| arg.short_alias('v'));
-	command
+	Cli::command().mut_arg("version", |arg| arg.short_alias('v'))
 }
 
 #[derive(Subcommand)]
