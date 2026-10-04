@@ -1,5 +1,11 @@
 # Copilot instructions
 
+These repository-specific instructions guide coding agents working on
+`bt-intercom`. Treat the README as the source of truth for user-facing setup and
+behavior; keep this file focused on implementation guidance. Before changing
+behavior, inspect the affected code and nearby tests, add or update tests where
+practical, and update the README when user-facing behavior or setup changes.
+
 ## Project overview
 
 This is the bt-intercom Rust CLI for a local Bluetooth Classic intercom with
