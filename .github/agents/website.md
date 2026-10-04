@@ -20,4 +20,12 @@ description: Specialized agent for creating and improving website design and con
 * **Intentional Copywriting:** 
   * Write from the user's perspective using plain, active language (e.g., "Save changes," not "Submit").
   * Keep empty states and error messages clear, direct, and instructional rather than apologetic or vague.
+  * Avoid technical jargong and three-letter acronyms in descriptive texts.
+* **Code quality:**
+  * Use semantic HTML.
+  * Don't inline JavaScript.
+  * Don't inline CSS styling.
+  * What can be achieved with just CSS shall be done with CSS instead of JavaScript.
+  * Target current browser versions and one version before.
+  * Write code according to good accessibility practices.
 * **The "Coco Chanel" Rule:** Before finalising, look at the design and remove one unnecessary decorative element.
