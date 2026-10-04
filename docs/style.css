@@ -238,9 +238,15 @@ footer > a:last-child:hover { color: var(--mint); }
     --mint-hover: #36592e;
   }
 }
-:root[data-theme="light"] .player-panel { --muted: #a8b5af; }
+:root[data-theme="light"] .group-card-dark { background: #eeece4; }
+:root[data-theme="light"] .start-banner { border-color: #cbd7bd; background: #e9efdf; }
+:root[data-theme="light"] .tui-card { --mint: #b9df75; --paper: #f4f0e6; --muted: #b2b5c1; }
+:root[data-theme="light"] .player-panel { --muted: #b2b5c1; }
 @media (prefers-color-scheme: light) {
-  :root:not([data-theme]) .player-panel { --muted: #a8b5af; }
+  :root:not([data-theme]) .group-card-dark { background: #eeece4; }
+  :root:not([data-theme]) .start-banner { border-color: #cbd7bd; background: #e9efdf; }
+  :root:not([data-theme]) .tui-card { --mint: #b9df75; --paper: #f4f0e6; --muted: #b2b5c1; }
+  :root:not([data-theme]) .player-panel { --muted: #b2b5c1; }
 }
 @media (max-width: 600px) {
   .theme-toggle { padding: .42rem .5rem; font-size: .68rem; }
