@@ -93,31 +93,40 @@ mod tests {
 
 	#[test]
 	fn no_color_requires_a_non_empty_value() {
-		assert!(!no_color_requested(None));
-		assert!(!no_color_requested(Some(OsString::new())));
-		assert!(no_color_requested(Some(OsString::from("1"))));
+		for (value, expected) in [
+			(None, false),
+			(Some(OsString::new()), false),
+			(Some(OsString::from("1")), true),
+		] {
+			assert_eq!(no_color_requested(value), expected);
+		}
 	}
 
 	#[test]
-	fn color_level_respects_terminal_and_no_color() {
-		assert_eq!(
-			color_level(false, false, "xterm-256color", ""),
-			ColorLevel::None
-		);
-		assert_eq!(
-			color_level(true, true, "xterm-256color", "truecolor"),
-			ColorLevel::None
-		);
-		assert_eq!(color_level(true, false, "dumb", ""), ColorLevel::None);
-		assert_eq!(
-			color_level(true, false, "xterm-256color", ""),
-			ColorLevel::Ansi256
-		);
-		assert_eq!(
-			color_level(true, false, "xterm", "24bit"),
-			ColorLevel::TrueColor
-		);
-		assert_eq!(color_level(true, false, "xterm", ""), ColorLevel::Ansi16);
+	fn detects_color_level_from_terminal_capabilities() {
+		for (terminal, no_color, term, colorterm, expected) in [
+			(false, false, "xterm-256color", "", ColorLevel::None),
+			(true, true, "xterm-256color", "truecolor", ColorLevel::None),
+			(true, false, "DUMB", "", ColorLevel::None),
+			(true, false, "xterm-256color", "", ColorLevel::Ansi256),
+			(true, false, "XTERM-256COLOR", "", ColorLevel::Ansi256),
+			(true, false, "xterm", "24bit", ColorLevel::TrueColor),
+			(true, false, "xterm", "TRUECOLOR", ColorLevel::TrueColor),
+			(
+				true,
+				false,
+				"xterm-256color",
+				"24bit",
+				ColorLevel::TrueColor,
+			),
+			(true, false, "xterm", "", ColorLevel::Ansi16),
+		] {
+			assert_eq!(
+				color_level(terminal, no_color, term, colorterm),
+				expected,
+				"{terminal:?} {no_color:?} {term:?} {colorterm:?}"
+			);
+		}
 	}
 
 	#[test]
@@ -125,7 +134,14 @@ mod tests {
 		let palette = Palette {
 			level: ColorLevel::None,
 		};
-		assert_eq!(palette.color(Meaning::Success), Color::Reset);
-		assert_eq!(palette.color(Meaning::Error), Color::Reset);
+		for meaning in [
+			Meaning::Success,
+			Meaning::Error,
+			Meaning::Warning,
+			Meaning::Info,
+			Meaning::Selection,
+		] {
+			assert_eq!(palette.color(meaning), Color::Reset);
+		}
 	}
 }

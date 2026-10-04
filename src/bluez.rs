@@ -29,27 +29,35 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn parses_device_properties_and_flags() {
-		assert_eq!(property("  Connected : yes  \n", "Connected"), Some("yes"));
-		assert_eq!(property("Not Connected: yes\n", "Connected"), None);
-		assert!(device_flag("Paired: yes\n", "Paired"));
-		assert!(!device_flag("Paired: no\n", "Paired"));
+	fn parses_properties_and_flags() {
+		for (info, field, expected) in [
+			("  Connected : yes  \n", "Connected", Some("yes")),
+			("Name: device: one\n", "Name", Some("device: one")),
+			("Connected: no\nConnected: yes\n", "Connected", Some("no")),
+			("Not Connected: yes\n", "Connected", None),
+		] {
+			assert_eq!(property(info, field), expected);
+		}
+		for (info, flag, expected) in [
+			("Paired: yes\n", "Paired", true),
+			("Paired: no\n", "Paired", false),
+			("Paired: YES\n", "Paired", false),
+			("Not Paired: yes\n", "Paired", false),
+		] {
+			assert_eq!(device_flag(info, flag), expected);
+		}
 	}
 
 	#[test]
-	fn prefers_alias_and_ignores_control_characters() {
-		assert_eq!(
-			bluetooth_name("Name: Device name\nAlias: User name\n"),
-			Some("User name".into())
-		);
-		assert_eq!(
-			bluetooth_name("Alias: \nName: Device name\n"),
-			Some("Device name".into())
-		);
-		assert_eq!(
-			bluetooth_name("Alias: Unsafe\u{1b}[31m name"),
-			Some("Unsafe[31m name".into())
-		);
-		assert_eq!(bluetooth_name("Alias: \nName: \n"), None);
+	fn chooses_a_safe_nonempty_bluetooth_name() {
+		for (info, expected) in [
+			("Name: Device name\nAlias: User name\n", Some("User name")),
+			("Alias: \nName: Device name\n", Some("Device name")),
+			("Alias: Unsafe\u{1b}[31m name", Some("Unsafe[31m name")),
+			("Alias: \nName: \n", None),
+			("Alias: \u{7f}\nName: \u{1}Fallback\n", Some("Fallback")),
+		] {
+			assert_eq!(bluetooth_name(info).as_deref(), expected);
+		}
 	}
 }
