@@ -58,7 +58,12 @@ struct PttButton {
 #[derive(Parser)]
 #[command(
 	name = "bt-intercom",
-	version,
+	disable_version_flag = true,
+	version = concat!(
+		env!("CARGO_PKG_VERSION"),
+		"\nBuild datetime: ",
+		env!("BT_INTERCOM_BUILD_DATETIME")
+	),
 	long_version = concat!(
 		env!("CARGO_PKG_VERSION"),
 		"\nBuild datetime: ",
@@ -68,6 +73,13 @@ struct PttButton {
 	arg_required_else_help = true
 )]
 struct Cli {
+	#[arg(
+		short = 'v',
+		short_alias = 'V',
+		long = "version",
+		action = clap::ArgAction::Version
+	)]
+	version: bool,
 	#[command(subcommand)]
 	command: CliCommand,
 }
@@ -1132,12 +1144,28 @@ mod tests {
 	}
 
 	#[test]
-	fn long_version_includes_package_version_and_build_datetime() {
+	fn version_flags_print_the_long_version_with_build_datetime() {
 		let command = Cli::command();
-		assert_eq!(command.get_version(), Some(env!("CARGO_PKG_VERSION")));
 		let long_version = command.get_long_version().unwrap().to_string();
-		assert!(long_version.contains(env!("CARGO_PKG_VERSION")));
-		assert!(long_version.contains(env!("BT_INTERCOM_BUILD_DATETIME")));
+		assert_eq!(command.get_version(), Some(long_version.as_str()));
+
+		let short = Cli::try_parse_from(["bt-intercom", "-v"])
+			.err()
+			.unwrap()
+			.to_string();
+		let long = Cli::try_parse_from(["bt-intercom", "--version"])
+			.err()
+			.unwrap()
+			.to_string();
+		let legacy_short = Cli::try_parse_from(["bt-intercom", "-V"])
+			.err()
+			.unwrap()
+			.to_string();
+
+		assert_eq!(short, long);
+		assert_eq!(short, legacy_short);
+		assert!(short.contains(env!("CARGO_PKG_VERSION")));
+		assert!(short.contains(env!("BT_INTERCOM_BUILD_DATETIME")));
 	}
 
 	#[test]
