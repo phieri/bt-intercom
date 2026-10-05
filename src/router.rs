@@ -2,8 +2,8 @@
 
 //! PipeWire topology discovery and ownership-safe inter-headset audio routing.
 //!
-//! Routing is limited to allowlisted Bluetooth devices using the duplex HFP/HSP
-//! profile. Each created link is owned by a monitored `pw-cli` client, so
+//! Routing is limited to allowlisted Bluetooth devices using HFP microphones
+//! and HFP speakers, or opt-in A2DP receivers. Each link has a `pw-cli` owner, so
 //! dropping that client releases the link without relying on reusable object IDs.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -15,6 +15,7 @@ use serde_json::Value;
 
 use crate::groups::TalkGroup;
 use crate::process::{COMMAND_TIMEOUT, command};
+use crate::transport::{self, Transport};
 
 /// A directed PipeWire link, represented as `(output_port_id, input_port_id)`.
 type Link = (u64, u64);
@@ -90,6 +91,30 @@ fn id_string(value: &Value) -> Option<String> {
 	}
 }
 
+fn has_hfp_node(snapshot: &Value, device_id: u64) -> bool {
+	snapshot.as_array().into_iter().flatten().any(|object| {
+		let props = &object["info"]["props"];
+		object["type"] == "PipeWire:Interface:Node"
+			&& props.get("device.id").and_then(id_string).as_deref()
+				== Some(device_id.to_string().as_str())
+			&& property(props, "api.bluez5.profile")
+				.is_some_and(|profile| transport::profile_matches(profile, HEADSET_PROFILE))
+	})
+}
+
+fn validate_mixed_devices(devices: &BTreeMap<String, transport::Device>) -> Result<(), String> {
+	for (address, device) in devices {
+		for family in [HEADSET_PROFILE, "a2dp-sink"] {
+			if device.index(family).is_none() {
+				return Err(format!(
+					"{address}: no available advertised {family} profile; SCO/A2DP requires both HFP and A2DP on every connected headset; check headset support and PipeWire Bluetooth configuration"
+				));
+			}
+		}
+	}
+	Ok(())
+}
+
 /// Extract allowlisted headset ports and existing links from a `pw-dump` snapshot.
 ///
 /// Nodes are included only when they belong to a listed Bluetooth device and
@@ -97,6 +122,14 @@ fn id_string(value: &Value) -> Option<String> {
 pub fn topology(
 	objects: &Value,
 	allowed: &BTreeSet<String>,
+) -> Result<(BTreeMap<String, Headset>, BTreeSet<Link>), String> {
+	topology_for_transport(objects, allowed, Transport::Hfp)
+}
+
+fn topology_for_transport(
+	objects: &Value,
+	allowed: &BTreeSet<String>,
+	transport: Transport,
 ) -> Result<(BTreeMap<String, Headset>, BTreeSet<Link>), String> {
 	let objects = objects
 		.as_array()
@@ -127,11 +160,15 @@ pub fn topology(
 				if matches!(
 					property(props, "media.class"),
 					Some("Audio/Source" | "Audio/Sink")
-				) && property(props, "api.bluez5.profile") == Some(HEADSET_PROFILE)
-					&& let (Some(device), Some(class)) = (
-						props.get("device.id").and_then(id_string),
-						property(props, "media.class"),
-					) {
+				) && property(props, "api.bluez5.profile").is_some_and(|profile| {
+					transport::profile_matches(profile, HEADSET_PROFILE)
+						|| (transport == Transport::ScoA2dp
+							&& property(props, "media.class") == Some("Audio/Sink")
+							&& transport::profile_matches(profile, "a2dp-sink"))
+				}) && let (Some(device), Some(class)) = (
+					props.get("device.id").and_then(id_string),
+					property(props, "media.class"),
+				) {
 					nodes.insert(id, (device, class));
 				}
 			}
@@ -343,6 +380,10 @@ pub struct Router<F = fn(&[&str]) -> Result<String, String>> {
 	execute: F,
 	start_link: StartLink,
 	owned: BTreeMap<Link, (Box<dyn LinkHandle>, Instant)>,
+	transport: Transport,
+	transport_sources: Option<BTreeSet<String>>,
+	profile_changes: BTreeMap<String, (transport::Device, u64, Instant)>,
+	transition_started: Option<Instant>,
 }
 
 fn default_command(args: &[&str]) -> Result<String, String> {
@@ -394,7 +435,212 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 			execute,
 			start_link,
 			owned: BTreeMap::new(),
+			transport: Transport::Hfp,
+			transport_sources: None,
+			profile_changes: BTreeMap::new(),
+			transition_started: None,
 		}
+	}
+
+	pub fn set_transport(&mut self, transport: Transport) {
+		if self.transport != transport {
+			self.close();
+			self.transport_sources = None;
+			self.profile_changes.clear();
+			self.transition_started = None;
+			self.transport = transport;
+		}
+	}
+
+	pub fn transport_devices(&mut self) -> Result<BTreeMap<String, transport::Device>, String> {
+		let snapshot = self.snapshot()?;
+		transport::devices(&snapshot, &self.allowed)
+	}
+
+	/// Close old routes, observe all receiver demotions, then enable SCO sources.
+	/// Commands are asynchronous; callers must retry until profiles and ports
+	/// are observed ready, with a 30-second deadline for the entire transition.
+	/// Last selected profiles are intentionally left on exit.
+	pub fn prepare_transport(&mut self, sources: &BTreeSet<String>) -> Result<bool, String> {
+		let result = self.prepare_transport_inner(sources);
+		if matches!(result, Ok(true)) {
+			self.transition_started = None;
+		} else {
+			self.close();
+		}
+		result
+	}
+
+	fn prepare_transport_inner(&mut self, sources: &BTreeSet<String>) -> Result<bool, String> {
+		if self.transport == Transport::Hfp {
+			return Ok(true);
+		}
+		if let Some(address) = sources
+			.iter()
+			.find(|address| !self.allowed.contains(*address))
+		{
+			return Err(format!("{address}: requested source is not allowlisted"));
+		}
+		if self.transport_sources.as_ref() != Some(sources) {
+			self.close();
+			self.transport_sources = Some(sources.clone());
+			self.transition_started = Some(Instant::now());
+		}
+		let started = self.transition_started.get_or_insert_with(Instant::now);
+		if started.elapsed() >= Duration::from_secs(30) {
+			return Err("SCO/A2DP transport did not become ready within 30 seconds: expected HFP microphone/speaker ports for requested sources and A2DP speaker ports with no old HFP nodes for receivers; inspect pw-dump, Bluetooth connections and WirePlumber profile policy".into());
+		}
+		let snapshot = self.snapshot()?;
+		let devices = transport::devices(&snapshot, &self.allowed)?;
+		self.profile_changes
+			.retain(|address, (expected, index, _)| {
+				devices.get(address).is_some_and(|current| {
+					current.same_identity(expected) && current.current != Some(*index)
+				})
+			});
+		let (headsets, _) = topology_for_transport(&snapshot, &self.allowed, self.transport)?;
+		for address in headsets.keys() {
+			if !devices.contains_key(address) {
+				return Err(format!(
+					"{address}: SCO/A2DP requires an allowlisted PipeWire Device with matching api.bluez5.path and object.serial"
+				));
+			}
+		}
+		if sources.iter().any(|address| !devices.contains_key(address)) {
+			// A disconnect between the input and transport snapshots is normal.
+			// Retry discovery so Transmit can retire that held request.
+			return Ok(false);
+		}
+		let mut controllers = BTreeMap::new();
+		for address in sources {
+			let device = &devices[address];
+			if let Some(previous) = controllers.insert(&device.controller, address) {
+				return Err(format!(
+					"SCO capacity conflict on {}: {previous} and {address}; select at most one source per controller",
+					device.controller
+				));
+			}
+		}
+		validate_mixed_devices(&devices)?;
+		// A previously accepted promotion can still arrive after the floor
+		// changes. Observe it before issuing its demotion or another promotion.
+		for (address, (_, _, started)) in &self.profile_changes {
+			if started.elapsed() >= Duration::from_secs(15) {
+				return Err(format!(
+					"{address}: timed out waiting for the requested PipeWire profile; inspect pw-dump and Bluetooth connection"
+				));
+			}
+		}
+		if !self.profile_changes.is_empty() {
+			return Ok(false);
+		}
+		let mut demoting = false;
+		for (address, device) in &devices {
+			if !sources.contains(address) {
+				if !device.is_profile("a2dp-sink") {
+					self.change_profile(address, device, "a2dp-sink", sources)?;
+					demoting = true;
+				} else if has_hfp_node(&snapshot, device.id) {
+					demoting = true;
+				}
+			}
+		}
+		if demoting {
+			return Ok(false);
+		}
+		let mut ready = true;
+		for address in sources {
+			let device = &devices[address];
+			if !device.is_profile(HEADSET_PROFILE) {
+				self.change_profile(address, device, HEADSET_PROFILE, sources)?;
+				ready = false;
+			}
+		}
+		Ok(ready
+			&& devices.iter().all(|(address, device)| {
+				headsets.get(address).is_some_and(|headset| {
+					if sources.contains(address) {
+						device.is_profile(HEADSET_PROFILE) && headset.has_duplex_audio()
+					} else {
+						device.is_profile("a2dp-sink") && !headset.sinks.is_empty()
+					}
+				})
+			}))
+	}
+
+	fn change_profile(
+		&mut self,
+		address: &str,
+		expected: &transport::Device,
+		family: &str,
+		sources: &BTreeSet<String>,
+	) -> Result<(), String> {
+		// IDs are reusable. Re-read serial, BlueZ path and advertised indices
+		// immediately before issuing a mutation.
+		let snapshot = self.snapshot()?;
+		let devices = transport::devices(&snapshot, &self.allowed)?;
+		let (headsets, _) = topology_for_transport(&snapshot, &self.allowed, self.transport)?;
+		for address in headsets.keys() {
+			if !devices.contains_key(address) {
+				return Err(format!(
+					"{address}: device metadata changed before profile selection; retry discovery"
+				));
+			}
+		}
+		if sources.iter().any(|address| !devices.contains_key(address))
+			|| !headsets.contains_key(address)
+		{
+			return Ok(());
+		}
+		validate_mixed_devices(&devices)?;
+		let mut controllers = BTreeSet::new();
+		for address in sources {
+			if !controllers.insert(&devices[address].controller) {
+				return Err("SCO controller assignment changed before profile selection; retry discovery with one source per controller".into());
+			}
+		}
+		let current = devices
+			.get(address)
+			.filter(|device| device.same_identity(expected))
+			.ok_or_else(|| {
+				format!("{address}: PipeWire device identity changed; retry discovery")
+			})?;
+		let index = current
+			.index(family)
+			.ok_or_else(|| format!("{address}: {family} profile is no longer available"))?;
+		if current.is_profile(family) {
+			return Ok(());
+		}
+		if family == HEADSET_PROFILE
+			&& devices.iter().any(|(address, device)| {
+				!sources.contains(address)
+					&& (!device.is_profile("a2dp-sink") || has_hfp_node(&snapshot, device.id))
+			}) {
+			return Ok(());
+		}
+		if let Some((device, pending, started)) = self.profile_changes.get(address)
+			&& device.same_identity(current)
+			&& *pending == index
+		{
+			if started.elapsed() >= Duration::from_secs(15) {
+				return Err(format!(
+					"{address}: timed out waiting for {family}; inspect pw-dump and Bluetooth connection"
+				));
+			}
+			return Ok(());
+		}
+		self.close();
+		(self.execute)(&[
+			"pw-cli",
+			"set-param",
+			&current.id.to_string(),
+			"Profile",
+			&format!("{{ index: {index}, save: false }}"),
+		])
+		.map_err(|error| format!("{address}: could not select {family}: {error}"))?;
+		self.profile_changes
+			.insert(address.into(), (current.clone(), index, Instant::now()));
+		Ok(())
 	}
 
 	/// Routes every allowlisted microphone when transmitting, or removes all
@@ -442,8 +688,14 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 		group_sources: &BTreeMap<Option<String>, BTreeSet<String>>,
 		groups: &[TalkGroup],
 	) -> Result<BTreeMap<String, Headset>, String> {
+		let sources = group_sources.values().flatten().cloned().collect();
+		if !self.prepare_transport(&sources)? {
+			self.close();
+			return self.inspect().map(|(headsets, _)| headsets);
+		}
 		let snapshot = self.snapshot()?;
-		let (headsets, existing) = topology(&snapshot, &self.allowed)?;
+		let (headsets, existing) =
+			topology_for_transport(&snapshot, &self.allowed, self.transport)?;
 		let desired = desired_links_by_group(&headsets, group_sources, groups);
 		let mut failures = Vec::new();
 		let live = self.owned_links(&snapshot);
@@ -506,13 +758,17 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 	/// Reads the current allowlisted headset topology and all observed links.
 	pub fn inspect(&mut self) -> Result<(BTreeMap<String, Headset>, BTreeSet<Link>), String> {
 		let snapshot = self.snapshot()?;
-		topology(&snapshot, &self.allowed)
+		if self.transport == Transport::Hfp {
+			topology(&snapshot, &self.allowed)
+		} else {
+			topology_for_transport(&snapshot, &self.allowed, self.transport)
+		}
 	}
 
 	/// Reads headset topology and only links owned by this router instance.
 	pub fn inspect_owned(&mut self) -> Result<(BTreeMap<String, Headset>, BTreeSet<Link>), String> {
 		let snapshot = self.snapshot()?;
-		let (headsets, _) = topology(&snapshot, &self.allowed)?;
+		let (headsets, _) = topology_for_transport(&snapshot, &self.allowed, self.transport)?;
 		Ok((headsets, self.owned_links(&snapshot)))
 	}
 
@@ -573,6 +829,407 @@ mod tests {
 
 	fn allowed() -> BTreeSet<String> {
 		[A.to_string(), B.to_string()].into()
+	}
+
+	fn transport_fixture() -> Vec<Value> {
+		let mut objects = fixture();
+		for object in &mut objects {
+			if object["type"] == "PipeWire:Interface:Device" {
+				let address = object["info"]["props"]["api.bluez5.address"]
+					.as_str()
+					.unwrap()
+					.to_owned();
+				object["info"]["props"]["api.bluez5.path"] =
+					json!(format!("/org/bluez/hci0/dev_{}", address.replace(':', "_")));
+				object["info"]["props"]["object.serial"] =
+					json!(object["id"].as_u64().unwrap() + 1000);
+				object["info"]["params"] = json!({
+					"EnumProfile": [
+						{"index":17,"name":"headset-head-unit-msbc","available":"yes"},
+						{"index":41,"name":"a2dp-sink-sbc","available":"yes"}
+					],
+					"Profile":[{"index":17}]
+				});
+			}
+		}
+		objects
+	}
+
+	fn observe_profile(server: &PipeWire, base: u64, hfp: bool) {
+		let mut objects = server.objects.borrow_mut();
+		for object in objects.iter_mut() {
+			if object["id"] == base {
+				object["info"]["params"]["Profile"] = json!([{"index":if hfp {17} else {41}}]);
+			}
+			if object["id"] == base + 1 {
+				object["info"]["props"]["api.bluez5.profile"] = json!(if hfp {
+					"headset-head-unit-msbc"
+				} else {
+					"a2dp-sink-sbc"
+				});
+			}
+			if object["id"] == base + 2 {
+				object["info"]["props"]["api.bluez5.profile"] = json!(if hfp {
+					"headset-head-unit-msbc"
+				} else {
+					"a2dp-sink-sbc"
+				});
+			}
+		}
+	}
+
+	#[test]
+	fn sco_a2dp_waits_for_demotion_before_promoting_a_new_floor() {
+		let server = PipeWire::new();
+		*server.objects.borrow_mut() = transport_fixture();
+		let mut router = server.router();
+		router.set_transport(Transport::ScoA2dp);
+		let a = [A.to_string()].into();
+		let b = [B.to_string()].into();
+		assert!(!router.prepare_transport(&a).unwrap());
+		assert!(!router.prepare_transport(&a).unwrap());
+		let changes = || {
+			server
+				.calls
+				.borrow()
+				.iter()
+				.filter(|call| call.get(1).is_some_and(|arg| arg == "set-param"))
+				.cloned()
+				.collect::<Vec<_>>()
+		};
+		assert_eq!(changes().len(), 1);
+		assert_eq!(changes()[0][2], "20");
+		assert_eq!(changes()[0][4], "{ index: 41, save: false }");
+		// A Profile acknowledgement alone is insufficient while old HFP nodes remain.
+		server.objects.borrow_mut()[6]["info"]["params"]["Profile"] = json!([{"index":41}]);
+		assert!(!router.prepare_transport(&a).unwrap());
+		observe_profile(&server, 20, false);
+		assert!(router.prepare_transport(&a).unwrap());
+		let (headsets, _) = router.inspect().unwrap();
+		assert!(headsets[B].sources.is_empty());
+		assert!(!headsets[B].sinks.is_empty());
+		router.update_sources(&a).unwrap();
+		assert_eq!(
+			router.inspect_owned().unwrap().1,
+			[(13, 24), (13, 25)].into()
+		);
+		assert!(!router.prepare_transport(&b).unwrap());
+		assert_eq!(server.links(), 0);
+		assert_eq!(changes().len(), 2);
+		assert_eq!(changes()[1][2], "10");
+		assert!(!router.prepare_transport(&b).unwrap());
+		assert_eq!(changes().len(), 2);
+		observe_profile(&server, 10, false);
+		assert!(!router.prepare_transport(&b).unwrap());
+		assert_eq!(changes()[2][2], "20");
+		assert_eq!(changes()[2][4], "{ index: 17, save: false }");
+		assert!(!router.prepare_transport(&b).unwrap());
+		observe_profile(&server, 20, true);
+		assert!(router.prepare_transport(&b).unwrap());
+	}
+
+	#[test]
+	fn changed_floor_waits_for_a_previous_in_flight_promotion() {
+		let server = PipeWire::new();
+		*server.objects.borrow_mut() = transport_fixture();
+		observe_profile(&server, 10, false);
+		observe_profile(&server, 20, false);
+		let mut router = server.router();
+		router.set_transport(Transport::ScoA2dp);
+		assert!(!router.prepare_transport(&[A.to_string()].into()).unwrap());
+		assert!(!router.prepare_transport(&[B.to_string()].into()).unwrap());
+		let changes = || {
+			server
+				.calls
+				.borrow()
+				.iter()
+				.filter(|call| call.get(1).is_some_and(|arg| arg == "set-param"))
+				.cloned()
+				.collect::<Vec<_>>()
+		};
+		assert_eq!(changes().len(), 1);
+		observe_profile(&server, 10, true);
+		assert!(!router.prepare_transport(&[B.to_string()].into()).unwrap());
+		assert_eq!(changes().len(), 2);
+		assert_eq!(changes()[1][2], "10");
+		assert_eq!(changes()[1][4], "{ index: 41, save: false }");
+	}
+
+	#[test]
+	fn mixed_transport_rejects_capacity_conflicts_and_unsupported_profiles() {
+		let server = PipeWire::new();
+		*server.objects.borrow_mut() = transport_fixture();
+		let mut router = server.router();
+		let devices = router.transport_devices().unwrap();
+		assert_eq!(devices[A].controller, devices[B].controller);
+		router.set_transport(Transport::ScoA2dp);
+		assert!(
+			router
+				.prepare_transport(&allowed())
+				.unwrap_err()
+				.contains("capacity conflict")
+		);
+		server.objects.borrow_mut()[6]["info"]["params"]["EnumProfile"][1]["available"] =
+			json!("no");
+		assert!(
+			router
+				.prepare_transport(&[A.to_string()].into())
+				.unwrap_err()
+				.contains("no available advertised a2dp-sink")
+		);
+		server.objects.borrow_mut()[6]["info"]["params"]["EnumProfile"] = json!([]);
+		assert!(!router.transport_devices().unwrap()[B].hfp_available);
+		assert!(!router.transport_devices().unwrap()[B].a2dp_available);
+		*server.objects.borrow_mut() = transport_fixture();
+		server.objects.borrow_mut()[6]["info"]["params"]["EnumProfile"][0]["available"] =
+			json!("no");
+		assert!(
+			router
+				.prepare_transport(&[A.to_string()].into())
+				.unwrap_err()
+				.contains("no available advertised headset-head-unit")
+		);
+		*server.objects.borrow_mut() = transport_fixture();
+		server.objects.borrow_mut()[0]["info"]["params"]["EnumProfile"][1]["available"] =
+			json!("no");
+		assert!(
+			router
+				.prepare_transport(&[A.to_string()].into())
+				.unwrap_err()
+				.contains("no available advertised a2dp-sink")
+		);
+	}
+
+	#[test]
+	fn profile_mutations_revalidate_serial_and_bluez_address() {
+		let mut objects = transport_fixture();
+		objects[6]["info"]["props"]["api.bluez5.path"] =
+			json!("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_99");
+		let mut router = Router::with_executor(allowed(), |args: &[&str]| {
+			assert_eq!(args, ["pw-dump"]);
+			Ok(json!(objects).to_string())
+		});
+		router.set_transport(Transport::ScoA2dp);
+		assert!(!router.transport_devices().unwrap().contains_key(B));
+		assert!(router.prepare_transport(&[A.to_string()].into()).is_err());
+
+		let mut calls = 0;
+		let mut router = Router::with_executor(allowed(), |args: &[&str]| {
+			assert_eq!(args, ["pw-dump"]);
+			let mut objects = transport_fixture();
+			calls += 1;
+			if calls > 1 {
+				objects[6]["info"]["props"]["object.serial"] = json!(9999);
+			}
+			Ok(json!(objects).to_string())
+		});
+		router.set_transport(Transport::ScoA2dp);
+		assert!(
+			router
+				.prepare_transport(&[A.to_string()].into())
+				.unwrap_err()
+				.contains("identity changed")
+		);
+	}
+
+	#[test]
+	fn disconnected_allowed_devices_are_not_transport_errors() {
+		let server = PipeWire::new();
+		let mut objects = transport_fixture();
+		objects.retain(|object| {
+			object["id"]
+				.as_u64()
+				.is_none_or(|id| !(20..26).contains(&id))
+		});
+		*server.objects.borrow_mut() = objects;
+		let mut router = server.router();
+		router.set_transport(Transport::ScoA2dp);
+		assert!(router.prepare_transport(&[A.to_string()].into()).unwrap());
+		assert!(!router.prepare_transport(&[B.to_string()].into()).unwrap());
+		assert!(
+			router
+				.prepare_transport(&[C.to_string()].into())
+				.unwrap_err()
+				.contains("not allowlisted")
+		);
+
+		let mut calls = 0;
+		let mut router = Router::with_executor(allowed(), |args: &[&str]| {
+			assert_eq!(args, ["pw-dump"]);
+			calls += 1;
+			let mut objects = transport_fixture();
+			if calls > 1 {
+				objects.retain(|object| {
+					object["id"]
+						.as_u64()
+						.is_none_or(|id| !(20..26).contains(&id))
+				});
+			}
+			Ok(json!(objects).to_string())
+		});
+		router.set_transport(Transport::ScoA2dp);
+		assert!(!router.prepare_transport(&[A.to_string()].into()).unwrap());
+	}
+
+	#[test]
+	fn promotion_retries_if_fresh_snapshot_shows_an_unfinished_demotion() {
+		let server = PipeWire::new();
+		*server.objects.borrow_mut() = transport_fixture();
+		observe_profile(&server, 10, false);
+		observe_profile(&server, 20, false);
+		let mut calls = 0;
+		let mut router = Router::with_executor(allowed(), |args: &[&str]| {
+			assert_eq!(args, ["pw-dump"]);
+			calls += 1;
+			if calls > 1 {
+				observe_profile(&server, 20, true);
+			}
+			Ok(json!(*server.objects.borrow()).to_string())
+		});
+		router.set_transport(Transport::ScoA2dp);
+		assert!(!router.prepare_transport(&[A.to_string()].into()).unwrap());
+	}
+
+	#[test]
+	fn readiness_deadline_covers_missing_ports_and_external_profile_changes() {
+		let server = PipeWire::new();
+		*server.objects.borrow_mut() = transport_fixture();
+		observe_profile(&server, 20, false);
+		server
+			.objects
+			.borrow_mut()
+			.retain(|object| object["id"] != 13);
+		let mut router = server.router();
+		router.set_transport(Transport::ScoA2dp);
+		let sources = [A.to_string()].into();
+		assert!(!router.prepare_transport(&sources).unwrap());
+		assert!(router.profile_changes.is_empty());
+		let started = router.transition_started;
+		assert!(!router.prepare_transport(&sources).unwrap());
+		assert_eq!(router.transition_started, started);
+		server
+			.objects
+			.borrow_mut()
+			.push(transport_fixture()[3].clone());
+		assert!(router.prepare_transport(&sources).unwrap());
+		assert!(router.transition_started.is_none());
+		router.update_sources(&sources).unwrap();
+		assert_eq!(server.links(), 2);
+
+		// A later external profile change starts a fresh bounded transition,
+		// even when the requested floor has not changed.
+		server
+			.objects
+			.borrow_mut()
+			.iter_mut()
+			.find(|object| object["id"] == 20)
+			.unwrap()["info"]["params"]["Profile"] = json!([{"index":17}]);
+		assert!(!router.prepare_transport(&sources).unwrap());
+		assert_eq!(server.links(), 0);
+		let started = router.transition_started;
+		assert!(!router.prepare_transport(&sources).unwrap());
+		assert_eq!(router.transition_started, started);
+		observe_profile(&server, 20, false);
+		assert!(router.prepare_transport(&sources).unwrap());
+		assert!(router.transition_started.is_none());
+
+		server
+			.objects
+			.borrow_mut()
+			.retain(|object| object["id"] != 13);
+		assert!(!router.prepare_transport(&sources).unwrap());
+		router.transition_started = Some(Instant::now() - Duration::from_secs(31));
+		assert!(
+			router
+				.prepare_transport(&sources)
+				.unwrap_err()
+				.contains("within 30 seconds")
+		);
+		assert_eq!(server.links(), 0);
+	}
+
+	#[test]
+	fn readiness_deadline_covers_stale_hfp_nodes_after_profile_acknowledgement() {
+		let server = PipeWire::new();
+		*server.objects.borrow_mut() = transport_fixture();
+		let mut router = server.router();
+		router.set_transport(Transport::ScoA2dp);
+		let sources = [A.to_string()].into();
+		assert!(!router.prepare_transport(&sources).unwrap());
+		server.objects.borrow_mut()[6]["info"]["params"]["Profile"] = json!([{"index":41}]);
+		assert!(!router.prepare_transport(&sources).unwrap());
+		assert!(router.profile_changes.is_empty());
+		router.transition_started = Some(Instant::now() - Duration::from_secs(31));
+		assert!(
+			router
+				.prepare_transport(&sources)
+				.unwrap_err()
+				.contains("within 30 seconds")
+		);
+	}
+
+	#[test]
+	fn duplicate_live_devices_reject_ambiguous_controllers_only_in_mixed_mode() {
+		let server = PipeWire::new();
+		let mut objects = transport_fixture();
+		let mut duplicate = objects[0].clone();
+		duplicate["id"] = json!(30);
+		duplicate["info"]["props"]["object.serial"] = json!(1030);
+		duplicate["info"]["props"]["api.bluez5.path"] =
+			json!("/org/bluez/hci1/dev_AA_BB_CC_DD_EE_01");
+		objects.push(duplicate);
+		*server.objects.borrow_mut() = objects;
+		let mut router = server.router();
+		let error = router.transport_devices().unwrap_err();
+		assert!(error.contains("multiple live PipeWire Device"));
+		assert!(error.contains("hci0") && error.contains("hci1"));
+		// Advisory metadata errors must not change legacy HFP discovery.
+		router.update(true).unwrap();
+		assert_eq!(server.links(), 4);
+		router.set_transport(Transport::ScoA2dp);
+		assert!(
+			router
+				.prepare_transport(&[A.to_string()].into())
+				.unwrap_err()
+				.contains("multiple live PipeWire Device")
+		);
+		assert_eq!(server.links(), 0);
+	}
+
+	#[test]
+	fn a2dp_is_opt_in_and_never_supplies_a_microphone() {
+		let server = PipeWire::new();
+		*server.objects.borrow_mut() = transport_fixture();
+		observe_profile(&server, 20, false);
+		let mut router = server.router();
+		assert!(router.inspect().unwrap().0[B].sinks.is_empty());
+		router.set_transport(Transport::ScoA2dp);
+		let devices = router.transport_devices().unwrap();
+		assert_eq!(devices[B].controller, "/org/bluez/hci0");
+		assert!(devices[B].hfp_available && devices[B].a2dp_available);
+		let headsets = router.inspect().unwrap().0;
+		assert!(headsets[B].sources.is_empty());
+		assert_eq!(desired_links(&headsets), [(13, 24), (13, 25)].into());
+	}
+
+	#[test]
+	fn transport_switching_preserves_external_links_and_last_profiles() {
+		let server = PipeWire::new();
+		*server.objects.borrow_mut() = transport_fixture();
+		server.external_link();
+		let mut router = server.router();
+		router.update(true).unwrap();
+		router.set_transport(Transport::ScoA2dp);
+		assert_eq!(server.links(), 1);
+		assert!(!router.prepare_transport(&[A.to_string()].into()).unwrap());
+		observe_profile(&server, 20, false);
+		assert!(router.prepare_transport(&[A.to_string()].into()).unwrap());
+		router.close();
+		assert_eq!(server.links(), 1);
+		assert_eq!(
+			server.objects.borrow()[6]["info"]["params"]["Profile"][0]["index"],
+			41
+		);
 	}
 
 	#[test]
@@ -778,6 +1435,11 @@ mod tests {
 			}
 			if self.fail_next.replace(false) {
 				return Err("simulated pw-cli failure".into());
+			}
+			if args.get(1) == Some(&"set-param") {
+				assert_eq!(args[0], "pw-cli");
+				assert_eq!(args[3], "Profile");
+				return Ok(String::new());
 			}
 			let mut objects = self.objects.borrow_mut();
 			assert_eq!(&args[..4], ["pw-cli", "-m", "create-link", "-"]);
