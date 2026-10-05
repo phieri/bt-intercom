@@ -32,6 +32,19 @@ pub(crate) fn normalize_address(value: &str) -> Option<String> {
 	Some(value.to_ascii_uppercase())
 }
 
+pub(crate) fn controller_addresses(info: &str) -> std::collections::BTreeSet<String> {
+	info.lines()
+		.filter_map(|line| {
+			let address = line
+				.trim()
+				.strip_prefix("Controller ")?
+				.split_whitespace()
+				.next()?;
+			normalize_address(address)
+		})
+		.collect()
+}
+
 pub(crate) fn signal_strength(info: &str) -> Option<i32> {
 	property(info, "RSSI").and_then(|value| value.split_whitespace().next()?.parse().ok())
 }
@@ -69,6 +82,19 @@ mod tests {
 		] {
 			assert_eq!(device_flag(info, flag), expected);
 		}
+	}
+
+	#[test]
+	fn controller_list_uses_addresses_not_aliases_or_default_markers() {
+		assert_eq!(
+			controller_addresses(
+				"Controller aa:bb:cc:dd:ee:01 Built-in [default]\n\
+				 Controller AA:BB:CC:DD:EE:02 USB radio\n\
+				 Controller AA:BB:CC:DD:EE:02 duplicate\n\
+				 Controller invalid alias\nDevice AA:BB:CC:DD:EE:03 headset\n"
+			),
+			["AA:BB:CC:DD:EE:01".into(), "AA:BB:CC:DD:EE:02".into()].into()
+		);
 	}
 
 	#[test]

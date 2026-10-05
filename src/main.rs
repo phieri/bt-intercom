@@ -15,6 +15,7 @@ mod process;
 mod router;
 mod terminal_style;
 mod transmit;
+mod transport;
 
 mod tui;
 
@@ -46,6 +47,7 @@ use network::{
 use process::{COMMAND_TIMEOUT, command, command_cancellable};
 use router::{Headset, Router, has_active_intercom_connection, has_active_source_route};
 use transmit::{Mode, Transmit};
+use transport::Transport;
 
 const PTT_BEEP_WAV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ptt-beep.wav"));
 
@@ -139,6 +141,10 @@ enum CliCommand {
 		/// headsets reset to PTT and require a fresh press after reconnection.
 		#[arg(long, value_enum, default_value_t = Mode::FullDuplex)]
 		mode: Mode,
+		/// Audio transport: hfp leaves profiles unchanged; sco-a2dp switches
+		/// the talker to HFP and listeners to A2DP (requires half-duplex PTT).
+		#[arg(long, value_enum, default_value_t = Transport::Hfp)]
+		transport: Transport,
 		/// Show the live terminal dashboard.
 		#[arg(long)]
 		dashboard: bool,
@@ -376,6 +382,52 @@ fn validate_mode(
 	Ok(())
 }
 
+fn validate_transport(mode: Mode, transport: Transport) -> Result<(), String> {
+	if transport == Transport::ScoA2dp && mode != Mode::HalfDuplex {
+		return Err("--transport sco-a2dp requires --mode half-duplex and --ptt for every headset; use one controller per headset for full-duplex".into());
+	}
+	Ok(())
+}
+
+fn controller_warnings(devices: &BTreeMap<String, transport::Device>) -> Vec<String> {
+	let mut controllers: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+	for (address, device) in devices {
+		controllers
+			.entry(&device.controller)
+			.or_default()
+			.push(address);
+	}
+	controllers
+		.into_iter()
+		.filter(|(_, addresses)| addresses.len() > 1)
+		.map(|(controller, addresses)| {
+			format!(
+				"{} headsets share {controller} ({}). HFP listeners also need SCO/eSCO; full-duplex requires verified synchronous-link capacity, normally one headset per controller. Use --mode half-duplex --transport sco-a2dp with PTT when sharing a radio.",
+				addresses.len(),
+				addresses.join(", ")
+			)
+		})
+		.collect()
+}
+
+fn refresh_transport_requests(
+	transmit: &mut Transmit,
+	devices: &BTreeMap<String, transport::Device>,
+	disconnected: &BTreeSet<String>,
+) -> bool {
+	let before = transmit.sources().clone();
+	let available: BTreeSet<_> = devices.keys().cloned().collect();
+	transmit.topology(&available.difference(disconnected).cloned().collect());
+	transmit.set_controllers(
+		&devices
+			.iter()
+			.map(|(address, device)| (address.clone(), device.controller.clone()))
+			.collect(),
+	);
+	transmit.topology(&available);
+	before != *transmit.sources()
+}
+
 /// Drain timestamped transitions before selecting sources and again after slow
 /// routing work, so a released/cancelled request never earns a stale beep.
 fn drain_ptt(input: &Receiver<PttEvent>, transmit: &mut Transmit) -> Result<bool, String> {
@@ -557,6 +609,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 			let allowed = addresses(&devices)?;
 			let mut router = Router::new(allowed);
 			let (headsets, _) = router.inspect()?;
+			let transport_devices = router.transport_devices()?;
 			for address in &router.allowed {
 				let name = command(&["bluetoothctl", "info", address], COMMAND_TIMEOUT)
 					.ok()
@@ -576,6 +629,15 @@ fn run(action: CliCommand) -> Result<(), String> {
 					),
 					None => println!("{identity}: not found in PipeWire"),
 				}
+				if let Some(device) = transport_devices.get(address) {
+					println!(
+						"  controller: {}; HFP: {}; A2DP: {}",
+						device.controller, device.hfp_available, device.a2dp_available
+					);
+				}
+			}
+			for warning in controller_warnings(&transport_devices) {
+				log::warn!("{warning}");
 			}
 		}
 		CliCommand::Run {
@@ -585,8 +647,10 @@ fn run(action: CliCommand) -> Result<(), String> {
 			pair_button,
 			ptt: buttons,
 			mode,
+			transport,
 			dashboard: show_dashboard,
 		} => {
+			validate_transport(mode, transport)?;
 			let mut allowed = devices.into_iter().collect();
 			validate_mode(mode, &buttons, &allowed)?;
 			let interval = Duration::from_secs_f64(interval);
@@ -607,6 +671,15 @@ fn run(action: CliCommand) -> Result<(), String> {
 			let signal = Arc::clone(&stopped);
 			ctrlc::set_handler(move || signal.store(true, Ordering::SeqCst))
 				.map_err(|e| e.to_string())?;
+			if connect
+				&& let Ok(controllers) =
+					command_cancellable(&["bluetoothctl", "list"], COMMAND_TIMEOUT, Some(&stopped))
+				&& bluez::controller_addresses(&controllers).len() > 1
+			{
+				log::warn!(
+					"Multiple Bluetooth controllers detected: --connect addresses only BlueZ's default controller. Keep other controllers' headsets connected using an adapter-aware Bluetooth manager, or connect them in a bluetoothctl session after select CONTROLLER_MAC."
+				);
+			}
 			let mut transmit =
 				Transmit::new(mode, buttons.iter().map(|button| button.address.clone()));
 			transmit.set_groups(&groups);
@@ -622,7 +695,10 @@ fn run(action: CliCommand) -> Result<(), String> {
 			} else {
 				None
 			};
-			let mut router = Router::new(allowed);
+			let mut router = Router::with_executor(allowed, |args: &[&str]| {
+				command_cancellable(args, COMMAND_TIMEOUT, Some(&stopped))
+			});
+			router.set_transport(transport);
 			let reconnect_devices = Arc::new(Mutex::new(router.allowed.clone()));
 			let pairing = pairing_pin.map(|pin| {
 				pair_button::PairButton::start(
@@ -662,6 +738,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 				}
 			};
 			let mut connected_headsets = BTreeSet::new();
+			let mut reported_controller_warnings = BTreeSet::new();
 			if input.is_some() {
 				match mode {
 					Mode::HalfDuplex => log::info!(
@@ -711,9 +788,33 @@ fn run(action: CliCommand) -> Result<(), String> {
 							}
 							Err(error) => Some(error),
 						};
-						// Retire a disconnected floor/queued request before selecting
-						// the next sources. Only successful snapshots prove absence.
-						if let Some(ref input) = input {
+						if transport == Transport::ScoA2dp {
+							let devices = router.transport_devices();
+							guard_half_update(mode, &devices, || router.close())?;
+							let devices = devices?;
+							transmit.set_controllers(
+								&devices
+									.iter()
+									.map(|(address, device)| {
+										(address.clone(), device.controller.clone())
+									})
+									.collect(),
+							);
+							transmit.topology(&devices.keys().cloned().collect());
+						} else {
+							if let Ok(devices) = router.transport_devices() {
+								for warning in controller_warnings(&devices) {
+									if reported_controller_warnings.insert(warning.clone()) {
+										log::warn!("{warning}");
+									}
+								}
+							}
+						}
+						// Profile transitions deliberately remove microphone ports.
+						// Only legacy HFP treats missing duplex ports as a disconnect.
+						if transport == Transport::Hfp
+							&& let Some(ref input) = input
+						{
 							let snapshot = router.inspect_owned();
 							drain_ptt(input, &mut transmit)?;
 							if let Ok((current, _)) = snapshot {
@@ -730,7 +831,19 @@ fn run(action: CliCommand) -> Result<(), String> {
 						} else {
 							router.allowed.clone()
 						};
-						let update = if groups.is_empty() && input.is_none() {
+						let prepared = router.prepare_transport(&sources);
+						guard_half_update(mode, &prepared, || router.close())?;
+						let transport_ready = prepared?;
+						if let Some(ref input) = input
+							&& drain_ptt(input, &mut transmit)?
+						{
+							router.close();
+							last_update = None;
+							continue;
+						}
+						let update = if !transport_ready {
+							router.inspect().map(|(headsets, _)| headsets)
+						} else if groups.is_empty() && input.is_none() {
 							router.update(true)
 						} else if mode == Mode::HalfDuplex && !groups.is_empty() {
 							router.update_group_sources_in_groups(transmit.group_sources(), &groups)
@@ -745,13 +858,23 @@ fn run(action: CliCommand) -> Result<(), String> {
 								headsets = current;
 								links = active;
 								if let Some(ref input) = input {
-									let available = headsets
-										.iter()
-										.filter(|(_, headset)| headset.has_duplex_audio())
-										.map(|(address, _)| address.clone())
-										.collect();
 									changed |= drain_ptt(input, &mut transmit)?;
-									changed |= transmit.topology(&available);
+									if transport == Transport::ScoA2dp {
+										let devices = router.transport_devices();
+										guard_half_update(mode, &devices, || router.close())?;
+										changed |= refresh_transport_requests(
+											&mut transmit,
+											&devices?,
+											&router.take_transport_disconnects(),
+										);
+									} else {
+										let available = headsets
+											.iter()
+											.filter(|(_, headset)| headset.has_duplex_audio())
+											.map(|(address, _)| address.clone())
+											.collect();
+										changed |= transmit.topology(&available);
+									}
 									if !changed {
 										changed |= confirm_transmissions(
 											mode,
@@ -778,6 +901,10 @@ fn run(action: CliCommand) -> Result<(), String> {
 								links.clear();
 								inspect_error = Some(error);
 							}
+						}
+						if changed {
+							router.close();
+							links.clear();
 						}
 						if dashboard.is_some() {
 							last_error = config_error.or_else(|| update.err()).or(inspect_error);
@@ -886,9 +1013,178 @@ mod tests {
 	use std::ffi::OsStr;
 
 	#[test]
+	fn transport_disappearance_then_reconnect_requires_a_fresh_ptt_press() {
+		let address = "AA:BB:CC:DD:EE:01".to_owned();
+		for disappear_at in [2, 3] {
+			let current = if disappear_at == 3 { 41 } else { 17 };
+			let connected = serde_json::json!([{
+				"type":"PipeWire:Interface:Device", "id":10,
+				"info":{
+					"props":{
+						"api.bluez5.address":address,
+						"api.bluez5.path":"/org/bluez/hci0/dev_AA_BB_CC_DD_EE_01",
+						"object.serial":1010
+					},
+					"params":{
+						"EnumProfile":[
+							{"index":17,"name":"headset-head-unit","available":"yes"},
+							{"index":41,"name":"a2dp-sink","available":"yes"}
+						],
+						"Profile":[{"index":current}]
+					}
+				}
+			}]);
+			let mut snapshots = 0;
+			let mut router = Router::with_executor([address.clone()].into(), |args: &[&str]| {
+				assert_eq!(args, ["pw-dump"]);
+				snapshots += 1;
+				Ok(if snapshots == disappear_at {
+					"[]".into()
+				} else {
+					connected.to_string()
+				})
+			});
+			router.set_transport(Transport::ScoA2dp);
+			let mut transmit = Transmit::new(Mode::HalfDuplex, [address.clone()]);
+			let before = router.transport_devices().unwrap();
+			refresh_transport_requests(&mut transmit, &before, &BTreeSet::new());
+			let at = Instant::now();
+			assert!(transmit.event(&address, true, at));
+			assert_eq!(transmit.sources(), &[address.clone()].into());
+
+			// Exercise disappearance in both prepare's initial snapshot and
+			// the identity snapshot immediately before profile promotion.
+			assert!(!router.prepare_transport(transmit.sources()).unwrap());
+			assert!(!router.prepare_transport(transmit.sources()).unwrap());
+			let reconnected = router.transport_devices().unwrap();
+			assert!(reconnected.contains_key(&address));
+			let disconnected = router.take_transport_disconnects();
+			assert_eq!(disconnected, [address.clone()].into());
+			assert!(router.take_transport_disconnects().is_empty());
+			assert!(refresh_transport_requests(
+				&mut transmit,
+				&reconnected,
+				&disconnected
+			));
+			assert!(transmit.sources().is_empty());
+			assert!(transmit.pending.is_empty());
+			assert!(!refresh_transport_requests(
+				&mut transmit,
+				&reconnected,
+				&BTreeSet::new()
+			));
+			assert!(!transmit.event(&address, true, at + Duration::from_millis(1)));
+			assert!(transmit.event(&address, false, at + Duration::from_millis(2)));
+			assert!(transmit.event(&address, true, at + Duration::from_millis(3)));
+			assert_eq!(transmit.sources(), &[address.clone()].into());
+		}
+	}
+
+	#[test]
+	fn queued_transport_disappearance_is_retired_even_after_reconnection() {
+		let a = "AA:BB:CC:DD:EE:01".to_owned();
+		let b = "AA:BB:CC:DD:EE:02".to_owned();
+		for disappear_at in [2, 3] {
+			let device = |id: u64, address: &str, current: u64| {
+				serde_json::json!({
+					"type":"PipeWire:Interface:Device", "id":id,
+					"info":{
+						"props":{
+							"api.bluez5.address":address,
+							"api.bluez5.path":format!("/org/bluez/hci0/dev_{}", address.replace(':', "_")),
+							"object.serial":id + 1000
+						},
+						"params":{
+							"EnumProfile":[
+								{"index":17,"name":"headset-head-unit","available":"yes"},
+								{"index":41,"name":"a2dp-sink","available":"yes"}
+							],
+							"Profile":[{"index":current}]
+						}
+					}
+				})
+			};
+			let source = device(10, &a, if disappear_at == 3 { 41 } else { 17 });
+			let connected = serde_json::json!([source.clone(), device(20, &b, 41)]);
+			let absent = serde_json::json!([source]);
+			let mut snapshots = 0;
+			let mut router =
+				Router::with_executor([a.clone(), b.clone()].into(), |args: &[&str]| {
+					if args[0] == "pw-dump" {
+						snapshots += 1;
+						Ok(if snapshots == disappear_at {
+							absent.to_string()
+						} else {
+							connected.to_string()
+						})
+					} else {
+						assert_eq!(&args[..2], ["pw-cli", "set-param"]);
+						Ok(String::new())
+					}
+				});
+			router.set_transport(Transport::ScoA2dp);
+			let mut transmit = Transmit::new(Mode::HalfDuplex, [a.clone(), b.clone()]);
+			refresh_transport_requests(
+				&mut transmit,
+				&router.transport_devices().unwrap(),
+				&BTreeSet::new(),
+			);
+			let at = Instant::now();
+			transmit.event(&a, true, at);
+			transmit.event(&b, true, at + Duration::from_millis(1));
+			assert_eq!(transmit.sources(), &[a.clone()].into());
+			assert!(!router.prepare_transport(transmit.sources()).unwrap());
+			let reconnected = router.transport_devices().unwrap();
+			assert!(reconnected.contains_key(&b));
+			let disconnected = router.take_transport_disconnects();
+			assert_eq!(disconnected, [b.clone()].into());
+			assert!(!refresh_transport_requests(
+				&mut transmit,
+				&reconnected,
+				&disconnected
+			));
+			transmit.event(&a, false, at + Duration::from_millis(2));
+			assert!(transmit.sources().is_empty());
+			assert!(!transmit.event(&b, true, at + Duration::from_millis(3)));
+			transmit.event(&b, false, at + Duration::from_millis(4));
+			transmit.event(&b, true, at + Duration::from_millis(5));
+			assert_eq!(transmit.sources(), &[b.clone()].into());
+		}
+	}
+
+	#[test]
 	fn validates_address_before_invoking_commands() {
 		assert!(address("invalid; rm -rf /").is_err());
 		assert_eq!(address("aa:bb:cc:dd:ee:ff").unwrap(), "AA:BB:CC:DD:EE:FF");
+	}
+
+	#[test]
+	fn mixed_transport_is_opt_in_and_requires_half_duplex() {
+		let CliCommand::Run { transport, .. } =
+			Cli::try_parse_from(["bt-intercom", "run"]).unwrap().command
+		else {
+			panic!("expected run");
+		};
+		assert_eq!(transport, Transport::Hfp);
+		let CliCommand::Run {
+			transport, mode, ..
+		} = Cli::try_parse_from([
+			"bt-intercom",
+			"run",
+			"--transport",
+			"sco-a2dp",
+			"--mode",
+			"half-duplex",
+		])
+		.unwrap()
+		.command
+		else {
+			panic!("expected run");
+		};
+		assert!(validate_transport(mode, transport).is_ok());
+		assert!(validate_transport(Mode::FullDuplex, transport).is_err());
+		assert!(validate_transport(Mode::HalfDuplex, Transport::Hfp).is_ok());
+		assert!(Cli::try_parse_from(["bt-intercom", "run", "--transport", "auracast"]).is_err());
 	}
 
 	#[test]

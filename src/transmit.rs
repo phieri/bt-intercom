@@ -31,6 +31,8 @@ pub struct Transmit {
 	queues: BTreeMap<Option<String>, VecDeque<String>>,
 	group_sources: BTreeMap<Option<String>, BTreeSet<String>>,
 	active: BTreeSet<String>,
+	controllers: Option<BTreeMap<String, String>>,
+	request_order: VecDeque<String>,
 	pub pending: BTreeSet<String>,
 }
 
@@ -43,8 +45,17 @@ impl Transmit {
 			queues: BTreeMap::new(),
 			group_sources: BTreeMap::new(),
 			active: BTreeSet::new(),
+			controllers: None,
+			request_order: VecDeque::new(),
 			pending: BTreeSet::new(),
 		}
+	}
+
+	/// Opt into one SCO source per controller, independently of talk groups.
+	/// Missing mappings cannot receive a grant, but held requests remain queued.
+	pub fn set_controllers(&mut self, controllers: &BTreeMap<String, String>) {
+		self.controllers = Some(controllers.clone());
+		self.refresh();
 	}
 
 	/// Replace talk groups. Half-duplex requests are retired when membership
@@ -56,6 +67,7 @@ impl Transmit {
 		self.groups = groups.to_vec();
 		if self.mode == Mode::HalfDuplex {
 			self.queues.clear();
+			self.request_order.clear();
 			for button in self.buttons.values_mut() {
 				button.requested = false;
 			}
@@ -79,6 +91,7 @@ impl Transmit {
 		match self.mode {
 			Mode::HalfDuplex => {
 				if pressed {
+					self.request_order.push_back(address.to_owned());
 					for membership in memberships {
 						self.queues
 							.entry(membership)
@@ -86,6 +99,7 @@ impl Transmit {
 							.push_back(address.to_owned());
 					}
 				} else {
+					self.request_order.retain(|queued| queued != address);
 					for queue in self.queues.values_mut() {
 						queue.retain(|queued| queued != address);
 					}
@@ -115,6 +129,7 @@ impl Transmit {
 		let before = self.active.clone();
 		for (address, button) in &mut self.buttons {
 			if !available.contains(address) {
+				self.request_order.retain(|queued| queued != address);
 				button.requested = false;
 				button.open = false;
 				button.presses.clear();
@@ -130,7 +145,7 @@ impl Transmit {
 	fn refresh(&mut self) {
 		let (next, group_sources) = match self.mode {
 			Mode::HalfDuplex => {
-				let group_sources = self
+				let mut group_sources = self
 					.queues
 					.iter()
 					.filter_map(|(group, queue)| {
@@ -139,6 +154,57 @@ impl Transmit {
 							.map(|address| (group.clone(), BTreeSet::from([address.clone()])))
 					})
 					.collect::<BTreeMap<_, _>>();
+				if let Some(controllers) = &self.controllers {
+					let candidates = group_sources;
+					group_sources = BTreeMap::new();
+					let mut reserved: BTreeMap<&String, &String> = BTreeMap::new();
+					// Keep existing resource reservations before considering new
+					// floors; lexical group names must not preempt a held source.
+					for address in &self.request_order {
+						let Some(controller) = controllers.get(address) else {
+							continue;
+						};
+						if reserved
+							.get(controller)
+							.is_some_and(|owner| *owner != address)
+						{
+							continue;
+						}
+						for (group, addresses) in &self.group_sources {
+							if addresses.contains(address)
+								&& candidates
+									.get(group)
+									.is_some_and(|sources| sources.contains(address))
+							{
+								reserved.insert(controller, address);
+								group_sources
+									.entry(group.clone())
+									.or_default()
+									.insert(address.clone());
+							}
+						}
+					}
+					for address in &self.request_order {
+						let Some(controller) = controllers.get(address) else {
+							continue;
+						};
+						if reserved
+							.get(controller)
+							.is_some_and(|owner| *owner != address)
+						{
+							continue;
+						}
+						for (group, addresses) in &candidates {
+							if addresses.contains(address) {
+								reserved.insert(controller, address);
+								group_sources
+									.entry(group.clone())
+									.or_default()
+									.insert(address.clone());
+							}
+						}
+					}
+				}
 				let active = group_sources.values().flatten().cloned().collect();
 				(active, group_sources)
 			}
@@ -257,6 +323,65 @@ mod tests {
 		);
 		release(&mut t, "a", now, 4);
 		assert_eq!(t.sources(), &set(&["b", "c"]));
+	}
+
+	#[test]
+	fn controller_floors_preserve_held_reservations_and_global_fifo() {
+		let (mut t, now) = setup(Mode::HalfDuplex);
+		t.set_groups(&[
+			group("Zulu", &["a"]),
+			group("Alpha", &["b"]),
+			group("Middle", &["c"]),
+		]);
+		t.set_controllers(&BTreeMap::from([
+			("a".into(), "hci0".into()),
+			("b".into(), "hci0".into()),
+			("c".into(), "hci0".into()),
+		]));
+		press(&mut t, "a", now, 0);
+		press(&mut t, "c", now, 1);
+		press(&mut t, "b", now, 2);
+		assert_eq!(t.sources(), &set(&["a"]));
+		release(&mut t, "a", now, 3);
+		assert_eq!(t.sources(), &set(&["c"]));
+		release(&mut t, "c", now, 4);
+		assert_eq!(t.sources(), &set(&["b"]));
+	}
+
+	#[test]
+	fn unmapped_controller_requests_are_retained_but_not_granted() {
+		let (mut t, now) = setup(Mode::HalfDuplex);
+		t.set_groups(&[group("Red", &["a"]), group("Blue", &["b"])]);
+		t.set_controllers(&BTreeMap::new());
+		press(&mut t, "a", now, 0);
+		press(&mut t, "b", now, 1);
+		assert!(t.sources().is_empty());
+		t.set_controllers(&BTreeMap::from([
+			("a".into(), "hci0".into()),
+			("b".into(), "hci1".into()),
+		]));
+		assert_eq!(t.sources(), &set(&["a", "b"]));
+		t.set_controllers(&BTreeMap::from([("b".into(), "hci1".into())]));
+		assert_eq!(t.sources(), &set(&["b"]));
+		t.set_controllers(&BTreeMap::from([
+			("a".into(), "hci0".into()),
+			("b".into(), "hci1".into()),
+		]));
+		assert_eq!(t.sources(), &set(&["a", "b"]));
+	}
+
+	#[test]
+	fn enabling_constraints_keeps_the_oldest_existing_reservation() {
+		let (mut t, now) = setup(Mode::HalfDuplex);
+		t.set_groups(&[group("Zulu", &["a"]), group("Alpha", &["b"])]);
+		press(&mut t, "a", now, 0);
+		press(&mut t, "b", now, 1);
+		assert_eq!(t.sources(), &set(&["a", "b"]));
+		t.set_controllers(&BTreeMap::from([
+			("a".into(), "hci0".into()),
+			("b".into(), "hci0".into()),
+		]));
+		assert_eq!(t.sources(), &set(&["a"]));
 	}
 
 	#[test]

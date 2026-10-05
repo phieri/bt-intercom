@@ -17,17 +17,33 @@ headsets with the same Linux host to join the conversation.
 - Linux with Bluetooth Classic, BlueZ (`bluetoothctl`), PipeWire (`pw-dump`,
   `pw-cli`, `pw-play`)
   and WirePlumber. Run as the same user as PipeWire, **not with `sudo`**.
-- At least two Bluetooth Classic headsets that expose both microphone and
-  speaker audio through the HFP/HSP `headset-head-unit` profile. A2DP alone is
-  playback-only. Check profiles with `wpctl status`; select the duplex profile
-  with `wpctl set-profile DEVICE_ID PROFILE_INDEX`. The program does not change
-  profiles.
+- At least two Bluetooth Classic headsets supporting HFP/HSP microphone and
+  speaker audio. The default `--transport hfp` uses the `headset-head-unit`
+  profile and leaves profiles unchanged. Check devices with `wpctl status`;
+  select the duplex profile with `wpctl set-profile DEVICE_ID PROFILE_INDEX`.
+  The opt-in `--transport sco-a2dp` also requires A2DP playback on every headset.
 
 ### Raspberry Pi hardware
 
 Raspberry Pi Zero W, Zero 2 W, Pi 3, Pi 4 and Pi 5 have onboard Bluetooth
 Classic radios. Pi 1, Pi 2 and the original Pi Zero need a compatible USB
 adapter. The supported Linux artifact targets for these models are listed below.
+
+**A paired/connected device is not necessarily an available voice channel.**
+HFP/HSP duplex audio uses a synchronous SCO/eSCO link; A2DP playback uses an
+asynchronous ACL link. Treat each consumer controller, including a Pi's onboard
+radio, as having **one usable simultaneous SCO/eSCO audio link** unless you have
+verified otherwise on that exact controller/firmware. Bluetooth Classic permits
+more than one synchronous link in some configurations, so this is a conservative
+deployment policy, not a universal Bluetooth limit. Neither the number of paired
+devices nor the number of PipeWire microphone ports proves SCO capacity.
+
+For full-duplex with N headsets, use N independent Bluetooth controllers and
+pair one headset to each; merely plugging in extra USB adapters does not move
+existing bonds or distribute audio. For fewer controllers, see
+[SCO/A2DP half-duplex transport](#scoa2dp-half-duplex-transport) below. Additional
+radios still share the 2.4 GHz spectrum; bandwidth, interference, USB power and
+firmware can prevent reliable audio even with one headset per adapter.
 
 For example, on Raspberry Pi OS with PipeWire packages:
 
@@ -310,6 +326,116 @@ untouched, so exclusivity applies only to routes managed by this process.
 When a mapped headset loses duplex audio, its request and always-open choice
 are reset; after reconnecting, release and press again to talk.
 
+### SCO/A2DP half-duplex transport
+
+`--mode half-duplex` alone only gates PipeWire links: with the default HFP
+transport, listeners still need SCO/eSCO for their speakers. It does **not** solve
+a shared controller's synchronous-link limit.
+
+For headsets sharing a controller, opt into profile switching:
+
+```sh
+bt-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 --connect \
+  --mode half-duplex --transport sco-a2dp \
+  --ptt AA:BB:CC:DD:EE:01=/dev/input/event4 \
+  --ptt AA:BB:CC:DD:EE:02=/dev/input/event5
+```
+
+This transport selects advertised PipeWire profile indices rather than assuming
+fixed numbers. Idle/listening headsets use A2DP; the granted talker uses HFP/HSP
+for its microphone. Before granting another SCO link on a controller, the
+program closes its old routes, switches listeners to A2DP, and waits until the
+profile changes are observed before enabling the new talker's HFP profile.
+Only allowlisted Bluetooth devices are changed. Missing controller identity or
+required profiles produce actionable errors instead of assuming extra capacity.
+Temporary absence of microphone ports during a switch does not cancel a held
+PTT request. A genuine device disappearance retires the request.
+Status/dashboard duplex availability still describes HFP microphone and speaker
+ports: an idle A2DP listener is intentionally playback-only, not duplex-ready.
+
+Talk-group routing remains isolated. Each group keeps its FIFO queue, but groups
+sharing a radio also share its single SCO slot. Different radios can grant
+independent talkers. A headset cannot listen through A2DP while its own HFP
+profile is active, so overlapping groups may have listeners temporarily unable
+to receive; no simultaneous HFP+A2DP capability is assumed. Profiles are left
+in their last selected state on exit, rather than restoring multiple HFP
+profiles and immediately recreating the capacity conflict. Owned links are
+always released; existing external links and other applications' profile policy
+are not controlled. Avoid running another profile manager against these devices.
+
+**Hardware validation is required.** HFP/A2DP switching can interrupt audio and
+take seconds, and A2DP adds codec/buffering latency. The headset must preserve
+play/pause press **and release** events across profile changes; some do not.
+WirePlumber automatic profile switching may compete with this policy. Disable
+competing automatic switching for your deployment and test floor handoffs,
+queued releases, disconnects, cancellation, and shutdown on the actual hardware.
+This is not seamless voice conferencing, and ACL/A2DP capacity is not unlimited.
+
+#### Pairing across controllers
+
+Use an interactive `bluetoothctl` session to select each controller **before**
+scanning, pairing, trusting and connecting its assigned headset:
+
+```text
+list
+select CONTROLLER_MAC
+scan on
+pair HEADSET_MAC
+trust HEADSET_MAC
+connect HEADSET_MAC
+scan off
+quit
+```
+
+Repeat with another controller for the next headset. If a headset was already
+paired to the wrong adapter, remove that bond deliberately before re-pairing;
+the intercom never migrates bonds. Confirm controller paths and audio profiles
+with `pw-dump` and `wpctl status`. The GPIO pairing button uses BlueZ's default
+controller; it is not a multi-controller enrollment/load-balancing mechanism.
+`--connect` also uses BlueZ's default controller. Omit it for multi-controller
+deployments and use an adapter-aware Bluetooth manager to maintain connections,
+or reconnect manually after `select` in the same `bluetoothctl` session.
+Selections are process-local; selecting in one invocation does not configure
+the next invocation. Ordinary `info`/`connect` object-path arguments are not
+portable substitutes for controller selection.
+
+#### Why not Auracast?
+
+Auracast is Bluetooth **LE Audio broadcast**, not an alternative codec or profile
+for Bluetooth Classic A2DP/HFP. It requires a broadcast-capable LE Isochronous
+controller, compatible firmware/kernel/BlueZ/PipeWire support and Auracast
+receivers. An onboard Classic-capable Pi radio or an ordinary A2DP headset does
+not establish those capabilities. This release does not configure broadcast
+sources, broadcast discovery/assistant services, or LE Audio microphone
+unicast; it never silently treats A2DP or arbitrary LE nodes as Auracast.
+
+#### Evidence and deployment checks
+
+The transport design follows upstream documentation, not a claimed universal
+one-SCO hardware specification:
+
+- [BlueZ SCO/eSCO protocol](https://github.com/bluez/bluez/blob/master/doc/sco-protocol.rst):
+  synchronous point-to-point links reserve radio slots.
+- [BlueZ HFP tracing](https://github.com/bluez/bluez/blob/master/doc/btmon-hfp.rst):
+  verify synchronous connection completion and actual audio packets with `btmon`,
+  rather than interpreting a successful generic `connect` as audio readiness.
+- [BlueZ device API](https://github.com/bluez/bluez/blob/master/doc/org.bluez.Device.rst):
+  device objects are adapter-scoped; `Connect` succeeds when at least one profile
+  connects, not necessarily the voice profile.
+- [WirePlumber profile switching](https://pipewire.pages.freedesktop.org/wireplumber/daemon/configuration/settings.html):
+  automatic HFP switching is a separate policy and may compete with this program.
+- [PipeWire hardware quirks](https://github.com/PipeWire/pipewire/blob/master/spa/plugins/bluez5/bluez-hardware.conf):
+  support can depend jointly on the adapter, headset and kernel.
+- [BlueZ ISO protocol](https://github.com/bluez/bluez/blob/master/doc/iso-protocol.rst):
+  connected LE Audio and broadcast LE Audio use different ISO transports.
+
+Check the documentation matching your installed versions. On real hardware,
+verify one simultaneous SCO/eSCO stream per assigned radio, microphone audio
+reaching every intended listener (and no other groups), profile handoff timing,
+and ACL/A2DP stability under the maximum listener load. A linked PipeWire graph
+and a confirmation beep establish routing state, not measured voice quality or
+certified controller capacity.
+
 Find event devices with `evtest` or `libinput debug-events`.
 Use stable `/dev/input/by-id/` or `/dev/input/by-path/` paths where available.
 The running user needs permission to read the devices, and the Bluetooth stack
@@ -353,8 +479,9 @@ systemctl --user stop bt-intercom.service
 Bluetooth connection capacity and audio behavior depend on the adapter,
 firmware, OS and headset; simultaneous HFP/HSP connections are not guaranteed.
 The host needs no local microphone or speaker, but this is not a network
-intercom. There is no GPIO control, automatic profile switching, echo
-cancellation or audio processing. Headsets need acoustic isolation to avoid
+intercom. Profile switching is opt-in with `--transport sco-a2dp`; there is no
+automatic bond migration, Auracast broadcast, echo cancellation or audio
+processing. Headsets need acoustic isolation to avoid
 feedback. Host tests use synthetic PipeWire graphs and do not verify Bluetooth
 hardware or audio transport; test the actual devices, reconnects, PTT and
 shutdown behavior before relying on a deployment.
