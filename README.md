@@ -94,8 +94,11 @@ Elvish, add `use bt-intercom` to `~/.config/elvish/rc.elv`. Restart the shell
 after configuring completions.
 
 Runtime diagnostics are written to stderr and respect `RUST_LOG`. The default
-level is `info`; set `RUST_LOG=warn` to show warnings only. A systemd user
-service sends stdout and stderr to the journal.
+level is `info`; add `--verbose` before or after a command (for example,
+`bt-intercom run --verbose`) to enable debug diagnostics for subprocess
+execution and routing decisions. An explicit `RUST_LOG` overrides this default;
+set `RUST_LOG=warn` to show warnings only. `-v` remains an alias for `--version`.
+A systemd user service sends stdout and stderr to the journal.
 
 The terminal control panel uses semantic colors when the terminal supports
 them; it respects `NO_COLOR`, and uses a plain style when color is unavailable.

@@ -128,6 +128,11 @@ terminal.
 .B -h, --help
 Show command help.
 .TP
+.B --verbose
+Enable debug diagnostics for subprocess execution and routing decisions.
+May be placed before or after a command. An explicit RUST_LOG setting
+overrides the default log level selected by this option.
+.TP
 .B -v, -V, --version
 Show the program version and the UTC build datetime.
 .TP
