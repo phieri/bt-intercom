@@ -190,6 +190,8 @@ restore them. `--connect` retries disconnected headsets every 30 seconds; omit
 it if another Bluetooth manager keeps them connected. Routing is polled every
 two seconds by default; change that with `--interval SECONDS`. Ctrl-C or SIGTERM
 closes links created by this process. Existing PipeWire links are not modified.
+Shutdown also cancels and joins background workers, including idle headset
+button readers.
 Remove a headset from the saved intercom network with `bt-intercom remove ADDRESS`.
 This does not disconnect or unpair it; restart a running intercom or service
 for the change to take effect. Removing the last address clears the saved
@@ -451,7 +453,10 @@ full-duplex mode, Bluetooth status, duplex availability, owned route counts and
 optional RSSI. Because the dashboard runs inside `run`, it reflects that
 process's mode directly without inter-process communication. It requires an
 interactive terminal on stderr and is not intended for a service. Route counts
-show links, not measured speech or audio quality.
+show observed, channel-compatible links between different configured headsets,
+not measured speech or audio quality. Transmit confirmations use the same
+route-readiness checks. Both terminal views show failed Bluetooth status queries
+as unknown and report the polling error; a later successful poll clears it.
 
 An example full-duplex user service is in `examples/bt-intercom.service`. Pair
 and configure the headsets first, then install and enable it:

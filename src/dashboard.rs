@@ -5,42 +5,25 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
-use std::thread::{self, JoinHandle};
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use crate::bluez::{
-	FAIR_RSSI, GOOD_RSSI, STRONG_RSSI, bluetooth_name, device_flag, signal_strength,
-};
-use crate::process::{COMMAND_TIMEOUT, command_cancellable};
+use crate::bluez::{FAIR_RSSI, GOOD_RSSI, STRONG_RSSI};
+use crate::device_status::{HeadsetStatus, StatusUpdate, start_polling};
 use crate::router::Headset;
+use crate::routing_status::RoutingStatus;
 use crate::transmit::Mode;
-
-#[derive(Debug, PartialEq, Eq)]
-/// Bluetooth connection and optional signal-strength information.
-pub struct Bluetooth {
-	name: Option<String>,
-	connected: bool,
-	rssi: Option<i32>,
-}
-
-fn bluetooth_info(info: &str) -> Bluetooth {
-	Bluetooth {
-		name: bluetooth_name(info),
-		connected: device_flag(info, "Connected"),
-		rssi: signal_strength(info),
-	}
-}
+use crate::worker::Worker;
 
 /// Collects Bluetooth status updates and draws the current routing state.
 ///
 /// The polling worker can be stopped explicitly with [`Dashboard::stop`].
 pub struct Dashboard {
-	receiver: Receiver<(String, Option<Bluetooth>)>,
-	state: BTreeMap<String, Option<Bluetooth>>,
-	shutdown: mpsc::Sender<()>,
-	worker: Option<JoinHandle<()>>,
+	receiver: Receiver<StatusUpdate>,
+	state: BTreeMap<String, HeadsetStatus>,
+	status_error: Option<String>,
+	worker: Option<Worker>,
 }
 
 pub struct RunStatus {
@@ -51,36 +34,11 @@ pub struct RunStatus {
 impl Dashboard {
 	/// Starts polling each allowlisted device until shutdown or cancellation.
 	pub fn start(allowed: BTreeSet<String>, stopped: Arc<AtomicBool>) -> Self {
-		let (sender, receiver) = mpsc::channel();
-		let (shutdown, wake) = mpsc::channel();
-		let worker = thread::spawn(move || {
-			loop {
-				for address in &allowed {
-					if stopped.load(Ordering::SeqCst) {
-						return;
-					}
-					let info = command_cancellable(
-						&["bluetoothctl", "info", address],
-						COMMAND_TIMEOUT,
-						Some(&stopped),
-					)
-					.ok()
-					.map(|output| bluetooth_info(&output));
-					if sender.send((address.clone(), info)).is_err() {
-						return;
-					}
-				}
-				if wake.recv_timeout(Duration::from_secs(10)).is_ok()
-					|| stopped.load(Ordering::SeqCst)
-				{
-					return;
-				}
-			}
-		});
+		let (worker, receiver) = start_polling(allowed, false, Duration::from_secs(10), stopped);
 		Self {
 			receiver,
 			state: BTreeMap::new(),
-			shutdown,
+			status_error: None,
 			worker: Some(worker),
 		}
 	}
@@ -88,8 +46,9 @@ impl Dashboard {
 	/// Applies queued worker updates and reports whether the displayed state changed.
 	pub fn refresh(&mut self) -> bool {
 		let mut changed = false;
-		while let Ok((address, info)) = self.receiver.try_recv() {
-			self.state.insert(address, info);
+		while let Ok(update) = self.receiver.try_recv() {
+			self.state = update.statuses;
+			self.status_error = update.error;
 			changed = true;
 		}
 		changed
@@ -105,6 +64,7 @@ impl Dashboard {
 		error: Option<&str>,
 		output: &mut impl Write,
 	) -> io::Result<()> {
+		let routes = RoutingStatus::new(headsets, links);
 		writeln!(
 			output,
 			"bt-intercom | {} | {} | {} owned active links",
@@ -117,45 +77,23 @@ impl Dashboard {
 			} else {
 				"muted"
 			},
-			links.len()
+			routes.total_links()
 		)?;
 		writeln!(
 			output,
 			"HEADSET NAME             ADDRESS             CONNECTED  DUPLEX  TX/RX LINKS  SIGNAL"
 		)?;
-		let mut source_owners = BTreeMap::new();
-		let mut sink_owners = BTreeMap::new();
-		for (address, headset) in headsets {
-			for port in &headset.sources {
-				source_owners.insert(port.id, address.as_str());
-			}
-			for port in &headset.sinks {
-				sink_owners.insert(port.id, address.as_str());
-			}
-		}
-		let mut link_counts: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
-		for &(output_port, input_port) in links {
-			if let Some(address) = source_owners.get(&output_port) {
-				link_counts.entry(address).or_default().0 += 1;
-			}
-			if let Some(address) = sink_owners.get(&input_port) {
-				link_counts.entry(address).or_default().1 += 1;
-			}
-		}
 		for address in allowed {
-			let bluetooth = self.state.get(address).and_then(Option::as_ref);
+			let bluetooth = self.state.get(address);
 			let status = |flag: Option<bool>| match flag {
 				Some(true) => "yes",
 				Some(false) => "no",
 				None => "?",
 			};
 			let headset = headsets.get(address);
-			let (tx, rx) = link_counts
-				.get(address.as_str())
-				.copied()
-				.unwrap_or_default();
+			let (tx, rx) = routes.counts(address);
 			let signal = bluetooth
-				.filter(|info| info.connected)
+				.filter(|info| info.connected == Some(true))
 				.and_then(|info| info.rssi)
 				.map_or_else(
 					|| "unknown".to_string(),
@@ -181,7 +119,7 @@ impl Dashboard {
 					.chars()
 					.take(24)
 					.collect::<String>(),
-				status(bluetooth.map(|info| info.connected)),
+				status(bluetooth.and_then(|info| info.connected)),
 				status(headset.map(Headset::has_duplex_audio))
 			)?;
 		}
@@ -199,15 +137,22 @@ impl Dashboard {
 					.collect::<String>()
 			)?;
 		}
+		if let Some(error) = &self.status_error {
+			writeln!(
+				output,
+				"Last status error: {}",
+				error
+					.chars()
+					.filter(|ch| !ch.is_control())
+					.collect::<String>()
+			)?;
+		}
 		output.flush()
 	}
 
 	/// Signals the polling worker to exit and waits for it to finish.
 	pub fn stop(&mut self) {
-		let _ = self.shutdown.send(());
-		if let Some(worker) = self.worker.take() {
-			let _ = worker.join();
-		}
+		self.worker.take();
 	}
 }
 
@@ -215,28 +160,52 @@ impl Dashboard {
 mod tests {
 	use super::*;
 	use serde_json::json;
+	use std::sync::mpsc;
 
 	#[test]
-	fn parses_bluetooth_status_and_optional_signal() {
-		assert_eq!(
-			bluetooth_info(
-				"Name: Generic headset\nAlias: Alex's headset\nPaired: yes\nConnected: yes\nRSSI: -67 (0xffffffbd)\n"
-			),
-			Bluetooth {
-				name: Some("Alex's headset".into()),
-				connected: true,
-				rssi: Some(-67)
-			}
+	fn polling_errors_are_reported_and_cleared_by_recovery() {
+		let (sender, receiver) = mpsc::channel();
+		let mut dashboard = Dashboard {
+			receiver,
+			state: BTreeMap::new(),
+			status_error: None,
+			worker: None,
+		};
+		sender
+			.send(StatusUpdate {
+				statuses: BTreeMap::new(),
+				error: Some("Bluetooth\nunavailable".into()),
+			})
+			.unwrap();
+		assert!(dashboard.refresh());
+		let mut output = Vec::new();
+		dashboard
+			.draw(
+				&BTreeSet::new(),
+				&BTreeMap::new(),
+				&BTreeSet::new(),
+				RunStatus {
+					mode: Mode::FullDuplex,
+					transmitting: false,
+				},
+				None,
+				&mut output,
+			)
+			.unwrap();
+		assert!(
+			String::from_utf8(output)
+				.unwrap()
+				.contains("Last status error: Bluetoothunavailable")
 		);
-		assert_eq!(bluetooth_info("RSSI: unavailable\n").rssi, None);
-		assert_eq!(
-			bluetooth_name("Name: Device name\nAlias: \n"),
-			Some("Device name".into())
-		);
-		assert_eq!(
-			bluetooth_name("Alias: Unsafe\u{1b}[31m name"),
-			Some("Unsafe[31m name".into())
-		);
+		sender
+			.send(StatusUpdate {
+				statuses: BTreeMap::new(),
+				error: None,
+			})
+			.unwrap();
+		assert!(dashboard.refresh());
+		assert!(dashboard.status_error.is_none());
+		assert!(!dashboard.refresh());
 	}
 
 	#[test]
@@ -244,11 +213,10 @@ mod tests {
 		let allowed = BTreeSet::from(["AA:BB:CC:DD:EE:01".to_string()]);
 		let (sender, receiver) = mpsc::channel();
 		drop(sender);
-		let (shutdown, _) = mpsc::channel();
 		let dashboard = Dashboard {
 			receiver,
 			state: BTreeMap::new(),
-			shutdown,
+			status_error: None,
 			worker: None,
 		};
 		let objects = json!([
@@ -273,13 +241,65 @@ mod tests {
 			.unwrap();
 		let text = String::from_utf8(output).unwrap();
 		assert!(!text.contains('\u{1b}'));
-		assert!(text.contains("half-duplex | muted | 1 owned active links"));
+		assert!(text.contains("half-duplex | muted | 0 owned active links"));
 		assert!(text.contains("HEADSET NAME             ADDRESS             CONNECTED"));
 		assert!(!text.contains("PAIRED"));
 		assert!(text.contains("AA:BB:CC:DD:EE:01  ?"));
 		assert!(text.contains("no"));
-		assert!(text.contains("1/0"));
+		assert!(text.contains("0/0"));
 		assert!(text.contains("unknown"));
+	}
+
+	#[test]
+	fn rendered_counts_match_confirmation_readiness() {
+		let allowed = BTreeSet::from([
+			"AA:BB:CC:DD:EE:01".to_string(),
+			"AA:BB:CC:DD:EE:02".to_string(),
+		]);
+		let objects = json!([
+			{"type":"PipeWire:Interface:Device","id":1,"info":{"props":{"api.bluez5.address":"AA:BB:CC:DD:EE:01"}}},
+			{"type":"PipeWire:Interface:Node","id":2,"info":{"props":{"device.id":1,"media.class":"Audio/Source","api.bluez5.profile":"headset-head-unit"}}},
+			{"type":"PipeWire:Interface:Port","id":3,"info":{"props":{"node.id":2,"port.direction":"out"}}},
+			{"type":"PipeWire:Interface:Device","id":4,"info":{"props":{"api.bluez5.address":"AA:BB:CC:DD:EE:02"}}},
+			{"type":"PipeWire:Interface:Node","id":5,"info":{"props":{"device.id":4,"media.class":"Audio/Sink","api.bluez5.profile":"headset-head-unit"}}},
+			{"type":"PipeWire:Interface:Port","id":6,"info":{"props":{"node.id":5,"port.direction":"in"}}}
+		]);
+		let (headsets, _) = crate::router::topology(&objects, &allowed).unwrap();
+		let links = BTreeSet::from([(3, 6), (3, 99), (99, 6)]);
+		let routes = RoutingStatus::new(&headsets, &links);
+		assert!(routes.has_active_source_route("AA:BB:CC:DD:EE:01"));
+		assert!(!routes.has_active_intercom_connection("AA:BB:CC:DD:EE:01"));
+		let (_, receiver) = mpsc::channel();
+		let dashboard = Dashboard {
+			receiver,
+			state: BTreeMap::new(),
+			status_error: None,
+			worker: None,
+		};
+		let mut output = Vec::new();
+		dashboard
+			.draw(
+				&allowed,
+				&headsets,
+				&links,
+				RunStatus {
+					mode: Mode::HalfDuplex,
+					transmitting: true,
+				},
+				None,
+				&mut output,
+			)
+			.unwrap();
+		let text = String::from_utf8(output).unwrap();
+		assert!(text.contains("1 owned active links"));
+		assert!(
+			text.lines()
+				.any(|line| line.contains("EE:01") && line.contains("1/0"))
+		);
+		assert!(
+			text.lines()
+				.any(|line| line.contains("EE:02") && line.contains("0/1"))
+		);
 	}
 
 	#[test]
@@ -309,29 +329,30 @@ mod tests {
 			.map(|(index, (rssi, _))| {
 				(
 					format!("AA:BB:CC:DD:EE:{:02}", index + 1),
-					Some(Bluetooth {
+					HeadsetStatus {
 						name: None,
-						connected: true,
+						connected: Some(true),
+						duplex: false,
 						rssi: Some(*rssi),
-					}),
+					},
 				)
 			})
 			.chain([(
 				disconnected.clone(),
-				Some(Bluetooth {
+				HeadsetStatus {
 					name: None,
-					connected: false,
+					connected: Some(false),
+					duplex: false,
 					rssi: Some(-40),
-				}),
+				},
 			)])
 			.collect();
 		let (sender, receiver) = mpsc::channel();
 		drop(sender);
-		let (shutdown, _) = mpsc::channel();
 		let dashboard = Dashboard {
 			receiver,
 			state,
-			shutdown,
+			status_error: None,
 			worker: None,
 		};
 		let mut output = Vec::new();
@@ -365,18 +386,18 @@ mod tests {
 		let allowed = BTreeSet::from([address.clone()]);
 		let (sender, receiver) = mpsc::channel();
 		drop(sender);
-		let (shutdown, _) = mpsc::channel();
 		let dashboard = Dashboard {
 			receiver,
 			state: BTreeMap::from([(
 				address,
-				Some(Bluetooth {
+				HeadsetStatus {
 					name: Some("Alex's headset".into()),
-					connected: true,
+					connected: Some(true),
+					duplex: false,
 					rssi: None,
-				}),
+				},
 			)]),
-			shutdown,
+			status_error: None,
 			worker: None,
 		};
 		let mut output = Vec::new();
