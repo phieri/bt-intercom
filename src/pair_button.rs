@@ -10,13 +10,14 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
-use std::thread::{self, JoinHandle};
+use std::thread;
 use std::time::{Duration, Instant};
 
 use rppal::gpio::{Gpio, InputPin};
 
 use crate::bluez::device_flag;
 use crate::process::COMMAND_TIMEOUT;
+use crate::worker::Worker;
 
 const GPIO: u8 = 17;
 const DEBOUNCE: Duration = Duration::from_millis(60);
@@ -58,8 +59,7 @@ impl Button {
 
 pub(crate) struct PairButton {
 	pub(crate) events: Receiver<Result<String, String>>,
-	cancelled: Arc<AtomicBool>,
-	worker: Option<JoinHandle<()>>,
+	_worker: Worker,
 }
 
 impl PairButton {
@@ -82,9 +82,8 @@ impl PairButton {
 		cancelled: Arc<AtomicBool>,
 		network_path: PathBuf,
 	) -> Self {
-		let stopped = Arc::clone(&cancelled);
 		let (sender, events) = mpsc::channel();
-		let worker = thread::spawn(move || {
+		let worker = Worker::spawn(cancelled, move |stopped, wake| {
 			let mut button = Button::new(pin.is_low(), Instant::now());
 			log::info!("Pairing button ready on BCM GPIO17 (physical pin 11)");
 			while !stopped.load(Ordering::SeqCst) {
@@ -124,22 +123,17 @@ impl PairButton {
 					// Ignore presses during pairing; require a fresh stable release.
 					button = Button::new(pin.is_low(), Instant::now());
 				}
-				thread::sleep(Duration::from_millis(20));
+				if !matches!(
+					wake.recv_timeout(Duration::from_millis(20)),
+					Err(mpsc::RecvTimeoutError::Timeout)
+				) {
+					break;
+				}
 			}
 		});
 		Self {
 			events,
-			cancelled,
-			worker: Some(worker),
-		}
-	}
-}
-
-impl Drop for PairButton {
-	fn drop(&mut self) {
-		self.cancelled.store(true, Ordering::SeqCst);
-		if let Some(worker) = self.worker.take() {
-			let _ = worker.join();
+			_worker: worker,
 		}
 	}
 }

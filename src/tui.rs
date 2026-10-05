@@ -6,9 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
-use std::thread::{self, JoinHandle};
+use std::sync::atomic::AtomicBool;
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
@@ -18,24 +17,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table};
 use ratatui::{DefaultTerminal, Frame};
 
-use crate::bluez::{FAIR_RSSI, GOOD_RSSI, bluetooth_name, device_flag, signal_strength};
+use crate::bluez::{FAIR_RSSI, GOOD_RSSI};
+use crate::device_status::{HeadsetStatus, StatusUpdate, start_polling};
 use crate::groups::{TalkGroup, load, normalize_name, save};
-use crate::process::{COMMAND_TIMEOUT, command_cancellable};
-use crate::router::{Headset, Router};
 use crate::terminal_style::{Meaning, Palette};
-
-#[derive(Clone, Debug)]
-struct HeadsetStatus {
-	name: Option<String>,
-	connected: Option<bool>,
-	duplex: bool,
-	rssi: Option<i32>,
-}
-
-struct StatusUpdate {
-	statuses: BTreeMap<String, HeadsetStatus>,
-	error: Option<String>,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Focus {
@@ -439,57 +424,19 @@ impl Drop for TerminalRestore {
 	}
 }
 
-struct PollingWorker {
-	stopped: Arc<AtomicBool>,
-	shutdown: mpsc::Sender<()>,
-	worker: Option<JoinHandle<()>>,
-}
-
-impl PollingWorker {
-	fn start(allowed: BTreeSet<String>, status_tx: mpsc::Sender<StatusUpdate>) -> Self {
-		let stopped = Arc::new(AtomicBool::new(false));
-		let worker_stopped = Arc::clone(&stopped);
-		let (shutdown, shutdown_rx) = mpsc::channel();
-		let worker = thread::spawn(move || {
-			while !worker_stopped.load(Ordering::SeqCst) {
-				let Some(update) = poll_status(&allowed, &worker_stopped) else {
-					break;
-				};
-				if status_tx.send(update).is_err() {
-					break;
-				}
-				if shutdown_rx.recv_timeout(Duration::from_secs(5)).is_ok() {
-					break;
-				}
-			}
-		});
-		Self {
-			stopped,
-			shutdown,
-			worker: Some(worker),
-		}
-	}
-}
-
-impl Drop for PollingWorker {
-	fn drop(&mut self) {
-		self.stopped.store(true, Ordering::SeqCst);
-		let _ = self.shutdown.send(());
-		if let Some(worker) = self.worker.take() {
-			let _ = worker.join();
-		}
-	}
-}
-
 pub fn run(allowed: BTreeSet<String>, groups_path: PathBuf) -> Result<(), String> {
 	if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
 		return Err("the TUI requires an interactive terminal".into());
 	}
 	let mut app = ControlPanel::new(allowed, groups_path)?;
-	let (status_tx, status_rx) = mpsc::channel();
 	let mut terminal = ratatui::try_init().map_err(|error| error.to_string())?;
 	let _restore = TerminalRestore;
-	let polling = PollingWorker::start(app.allowed.clone(), status_tx);
+	let (polling, status_rx) = start_polling(
+		app.allowed.clone(),
+		true,
+		Duration::from_secs(5),
+		Arc::new(AtomicBool::new(false)),
+	);
 	let result = event_loop(&mut terminal, &mut app, &status_rx);
 	drop(_restore);
 	drop(polling);
@@ -516,44 +463,6 @@ fn event_loop(
 			return Ok(());
 		}
 	}
-}
-
-fn poll_status(allowed: &BTreeSet<String>, stopped: &AtomicBool) -> Option<StatusUpdate> {
-	let mut router = Router::with_executor(allowed.clone(), |args| {
-		command_cancellable(args, COMMAND_TIMEOUT, Some(stopped))
-	});
-	let (headsets, error) = match router.inspect() {
-		Ok((headsets, _)) => (headsets, None),
-		Err(error) => (BTreeMap::new(), Some(error)),
-	};
-	if stopped.load(Ordering::SeqCst) {
-		return None;
-	}
-	let mut statuses = BTreeMap::new();
-	for address in allowed {
-		if stopped.load(Ordering::SeqCst) {
-			return None;
-		}
-		let info = command_cancellable(
-			&["bluetoothctl", "info", address],
-			COMMAND_TIMEOUT,
-			Some(stopped),
-		)
-		.ok();
-		if stopped.load(Ordering::SeqCst) {
-			return None;
-		}
-		statuses.insert(
-			address.clone(),
-			HeadsetStatus {
-				name: info.as_deref().and_then(bluetooth_name),
-				connected: info.as_deref().map(|info| device_flag(info, "Connected")),
-				duplex: headsets.get(address).is_some_and(Headset::has_duplex_audio),
-				rssi: info.as_deref().and_then(signal_strength),
-			},
-		);
-	}
-	Some(StatusUpdate { statuses, error })
 }
 
 #[cfg(test)]
@@ -609,12 +518,6 @@ mod tests {
 		assert_eq!(panel.groups.len(), 1);
 		assert!(panel.error.as_deref().unwrap().contains("already exists"));
 		let _ = std::fs::remove_dir_all(path.parent().unwrap());
-	}
-
-	#[test]
-	fn cancelling_status_poll_stops_before_running_commands() {
-		let stopped = AtomicBool::new(true);
-		assert!(poll_status(&BTreeSet::new(), &stopped).is_none());
 	}
 
 	#[test]

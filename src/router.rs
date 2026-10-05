@@ -11,17 +11,16 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
 use serde_json::Value;
 
 use crate::groups::TalkGroup;
+use crate::pipewire::{Link, MONO_CHANNEL, OWNER_PROPERTY, Snapshot};
 use crate::process::{COMMAND_TIMEOUT, command};
+#[cfg(test)]
+use crate::routing_status::RoutingStatus;
 use crate::transport::{self, Transport};
 
-/// A directed PipeWire link, represented as `(output_port_id, input_port_id)`.
-type Link = (u64, u64);
-const OWNER_PROPERTY: &str = "bt-intercom.owner";
-const HEADSET_PROFILE: &str = "headset-head-unit";
-const MONO_CHANNEL: &str = "MONO";
 static NEXT_ROUTER: AtomicUsize = AtomicUsize::new(0);
 
 /// A live `pw-cli` client that owns a PipeWire link.
@@ -54,8 +53,8 @@ type StartLink = Box<dyn FnMut(&[&str]) -> Result<Box<dyn LinkHandle>, String>>;
 /// A PipeWire audio port and the channel it carries.
 pub struct Port {
 	pub(crate) id: u64,
-	node_id: Option<u64>,
-	channel: String,
+	pub(crate) node_id: Option<u64>,
+	pub(crate) channel: String,
 }
 
 #[derive(Debug, Default)]
@@ -79,153 +78,16 @@ impl Headset {
 	}
 }
 
-fn property<'a>(props: &'a Value, key: &str) -> Option<&'a str> {
-	props.get(key)?.as_str()
-}
-
-fn id_string(value: &Value) -> Option<String> {
-	match value {
-		Value::String(id) => Some(id.clone()),
-		Value::Number(id) => Some(id.to_string()),
-		_ => None,
-	}
-}
-
-fn has_hfp_node(snapshot: &Value, device_id: u64) -> bool {
-	snapshot.as_array().into_iter().flatten().any(|object| {
-		let props = &object["info"]["props"];
-		object["type"] == "PipeWire:Interface:Node"
-			&& props.get("device.id").and_then(id_string).as_deref()
-				== Some(device_id.to_string().as_str())
-			&& property(props, "api.bluez5.profile")
-				.is_some_and(|profile| transport::profile_matches(profile, HEADSET_PROFILE))
-	})
-}
-
-fn validate_mixed_devices(devices: &BTreeMap<String, transport::Device>) -> Result<(), String> {
-	for (address, device) in devices {
-		for family in [HEADSET_PROFILE, "a2dp-sink"] {
-			if device.index(family).is_none() {
-				return Err(format!(
-					"{address}: no available advertised {family} profile; SCO/A2DP requires both HFP and A2DP on every connected headset; check headset support and PipeWire Bluetooth configuration"
-				));
-			}
-		}
-	}
-	Ok(())
-}
-
 /// Extract allowlisted headset ports and existing links from a `pw-dump` snapshot.
 ///
 /// Nodes are included only when they belong to a listed Bluetooth device and
 /// use PipeWire's `headset-head-unit` profile.
+#[cfg(test)]
 pub fn topology(
 	objects: &Value,
 	allowed: &BTreeSet<String>,
 ) -> Result<(BTreeMap<String, Headset>, BTreeSet<Link>), String> {
-	topology_for_transport(objects, allowed, Transport::Hfp)
-}
-
-fn topology_for_transport(
-	objects: &Value,
-	allowed: &BTreeSet<String>,
-	transport: Transport,
-) -> Result<(BTreeMap<String, Headset>, BTreeSet<Link>), String> {
-	let objects = objects
-		.as_array()
-		.ok_or("pw-dump output must be an array")?;
-	let mut devices = BTreeMap::new();
-	let mut nodes = BTreeMap::new();
-	let mut ports = Vec::new();
-	let mut links = BTreeSet::new();
-	for object in objects {
-		let info = &object["info"];
-		let props = &info["props"];
-		let Some(id) = object.get("id").and_then(id_string) else {
-			continue;
-		};
-		match object["type"]
-			.as_str()
-			.and_then(|kind| kind.rsplit(':').next())
-		{
-			Some("Device") => {
-				if let Some(address) = property(props, "api.bluez5.address") {
-					let address = address.to_ascii_uppercase();
-					if allowed.contains(&address) {
-						devices.insert(id, address);
-					}
-				}
-			}
-			Some("Node") => {
-				if matches!(
-					property(props, "media.class"),
-					Some("Audio/Source" | "Audio/Sink")
-				) && property(props, "api.bluez5.profile").is_some_and(|profile| {
-					transport::profile_matches(profile, HEADSET_PROFILE)
-						|| (transport == Transport::ScoA2dp
-							&& property(props, "media.class") == Some("Audio/Sink")
-							&& transport::profile_matches(profile, "a2dp-sink"))
-				}) && let (Some(device), Some(class)) = (
-					props.get("device.id").and_then(id_string),
-					property(props, "media.class"),
-				) {
-					nodes.insert(id, (device, class));
-				}
-			}
-			Some("Port") => {
-				if let (Some(port_id), Some(node)) = (
-					object["id"].as_u64(),
-					props.get("node.id").and_then(id_string),
-				) {
-					ports.push((
-						port_id,
-						node,
-						property(props, "port.direction").unwrap_or("").to_owned(),
-						property(props, "audio.channel")
-							.unwrap_or(MONO_CHANNEL)
-							.to_owned(),
-					));
-				}
-			}
-			Some("Link") => {
-				if let (Some(output), Some(input)) = (
-					info["output-port-id"].as_u64(),
-					info["input-port-id"].as_u64(),
-				) {
-					links.insert((output, input));
-				}
-			}
-			_ => {}
-		}
-	}
-	let mut headsets: BTreeMap<_, _> = devices
-		.values()
-		.map(|address| (address.clone(), Headset::default()))
-		.collect();
-	for (id, node_id, direction, channel) in ports {
-		let Some((device_id, class)) = nodes.get(&node_id) else {
-			continue;
-		};
-		let Some(address) = devices.get(device_id) else {
-			continue;
-		};
-		let node_id = node_id.parse().ok();
-		let headset = headsets.get_mut(address).expect("known device");
-		if *class == "Audio/Source" && direction == "out" {
-			headset.sources.push(Port {
-				id,
-				node_id,
-				channel,
-			});
-		} else if *class == "Audio/Sink" && direction == "in" {
-			headset.sinks.push(Port {
-				id,
-				node_id,
-				channel,
-			});
-		}
-	}
-	Ok((headsets, links))
+	Ok(Snapshot::parse(objects)?.topology(allowed, Transport::Hfp))
 }
 
 /// Build cross-headset source-to-sink links whose channels are compatible.
@@ -237,7 +99,7 @@ pub fn desired_links(headsets: &BTreeMap<String, Headset>) -> BTreeSet<Link> {
 	desired_links_with_policy(headsets, None, None)
 }
 
-fn channels_compatible(output: &Port, input: &Port) -> bool {
+pub(crate) fn channels_compatible(output: &Port, input: &Port) -> bool {
 	output.channel == input.channel
 		|| output.channel == MONO_CHANNEL
 		|| input.channel == MONO_CHANNEL
@@ -328,48 +190,23 @@ pub fn desired_links_by_group(
 }
 
 /// Returns whether a headset's microphone has a live route to another headset.
+#[cfg(test)]
 pub fn has_active_source_route(
 	address: &str,
 	headsets: &BTreeMap<String, Headset>,
 	links: &BTreeSet<(u64, u64)>,
 ) -> bool {
-	let Some(source) = headsets.get(address) else {
-		return false;
-	};
-	headsets.iter().any(|(peer_address, peer)| {
-		peer_address != address
-			&& source.sources.iter().any(|output| {
-				peer.sinks.iter().any(|input| {
-					channels_compatible(output, input) && links.contains(&(output.id, input.id))
-				})
-			})
-	})
+	RoutingStatus::new(headsets, links).has_active_source_route(address)
 }
 
 /// Returns whether a headset has live microphone and speaker routes with a peer.
+#[cfg(test)]
 pub fn has_active_intercom_connection(
 	address: &str,
 	headsets: &BTreeMap<String, Headset>,
 	links: &BTreeSet<(u64, u64)>,
 ) -> bool {
-	let Some(headset) = headsets.get(address) else {
-		return false;
-	};
-	headsets.iter().any(|(peer_address, peer)| {
-		let sends_to_peer = peer_address != address
-			&& headset.sources.iter().any(|output| {
-				peer.sinks.iter().any(|input| {
-					channels_compatible(output, input) && links.contains(&(output.id, input.id))
-				})
-			});
-		let receives_from_peer = peer_address != address
-			&& peer.sources.iter().any(|output| {
-				headset.sinks.iter().any(|input| {
-					channels_compatible(output, input) && links.contains(&(output.id, input.id))
-				})
-			});
-		sends_to_peer && receives_from_peer
-	})
+	RoutingStatus::new(headsets, links).has_active_intercom_connection(address)
 }
 
 /// Reconciles desired headset routes with PipeWire while tracking owned links.
@@ -380,11 +217,7 @@ pub struct Router<F = fn(&[&str]) -> Result<String, String>> {
 	execute: F,
 	start_link: StartLink,
 	owned: BTreeMap<Link, (Box<dyn LinkHandle>, Instant)>,
-	transport: Transport,
-	transport_sources: Option<BTreeSet<String>>,
-	profile_changes: BTreeMap<String, (transport::Device, u64, Instant)>,
-	transition_started: Option<Instant>,
-	transport_disconnects: BTreeSet<String>,
+	coordinator: transport::Coordinator,
 }
 
 fn default_command(args: &[&str]) -> Result<String, String> {
@@ -436,33 +269,25 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 			execute,
 			start_link,
 			owned: BTreeMap::new(),
-			transport: Transport::Hfp,
-			transport_sources: None,
-			profile_changes: BTreeMap::new(),
-			transition_started: None,
-			transport_disconnects: BTreeSet::new(),
+			coordinator: transport::Coordinator::default(),
 		}
 	}
 
 	pub fn set_transport(&mut self, transport: Transport) {
-		if self.transport != transport {
+		if self.coordinator.transport != transport {
 			self.close();
-			self.transport_sources = None;
-			self.profile_changes.clear();
-			self.transition_started = None;
-			self.transport_disconnects.clear();
-			self.transport = transport;
+			self.coordinator = transport::Coordinator::new(transport);
 		}
 	}
 
 	pub fn transport_devices(&mut self) -> Result<BTreeMap<String, transport::Device>, String> {
 		let snapshot = self.snapshot()?;
-		transport::devices(&snapshot, &self.allowed)
+		snapshot.transport_devices(&self.allowed)
 	}
 
 	/// Consume observed allowlisted device disappearances, even after reconnect.
 	pub fn take_transport_disconnects(&mut self) -> BTreeSet<String> {
-		std::mem::take(&mut self.transport_disconnects)
+		self.coordinator.take_disconnects()
 	}
 
 	/// Close old routes, observe all receiver demotions, then enable SCO sources.
@@ -470,188 +295,10 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 	/// are observed ready, with a 30-second deadline for the entire transition.
 	/// Last selected profiles are intentionally left on exit.
 	pub fn prepare_transport(&mut self, sources: &BTreeSet<String>) -> Result<bool, String> {
-		let result = self.prepare_transport_inner(sources);
-		if matches!(result, Ok(true)) {
-			self.transition_started = None;
-		} else {
-			self.close();
-		}
-		result
-	}
-
-	fn prepare_transport_inner(&mut self, sources: &BTreeSet<String>) -> Result<bool, String> {
-		if self.transport == Transport::Hfp {
-			return Ok(true);
-		}
-		if let Some(address) = sources
-			.iter()
-			.find(|address| !self.allowed.contains(*address))
-		{
-			return Err(format!("{address}: requested source is not allowlisted"));
-		}
-		if self.transport_sources.as_ref() != Some(sources) {
-			self.close();
-			self.transport_sources = Some(sources.clone());
-			self.transition_started = Some(Instant::now());
-		}
-		let started = self.transition_started.get_or_insert_with(Instant::now);
-		if started.elapsed() >= Duration::from_secs(30) {
-			return Err("SCO/A2DP transport did not become ready within 30 seconds: expected HFP microphone/speaker ports for requested sources and A2DP speaker ports with no old HFP nodes for receivers; inspect pw-dump, Bluetooth connections and WirePlumber profile policy".into());
-		}
-		if !sources.is_disjoint(&self.transport_disconnects) {
-			return Ok(false);
-		}
-		let snapshot = self.snapshot()?;
-		let devices = transport::devices(&snapshot, &self.allowed)?;
-		self.profile_changes
-			.retain(|address, (expected, index, _)| {
-				devices.get(address).is_some_and(|current| {
-					current.same_identity(expected) && current.current != Some(*index)
-				})
-			});
-		let (headsets, _) = topology_for_transport(&snapshot, &self.allowed, self.transport)?;
-		for address in headsets.keys() {
-			if !devices.contains_key(address) {
-				return Err(format!(
-					"{address}: SCO/A2DP requires an allowlisted PipeWire Device with matching api.bluez5.path and object.serial"
-				));
-			}
-		}
-		if sources.iter().any(|address| !devices.contains_key(address)) {
-			// A disconnect between the input and transport snapshots is normal.
-			// Retry discovery so Transmit can retire that held request.
-			return Ok(false);
-		}
-		let mut controllers = BTreeMap::new();
-		for address in sources {
-			let device = &devices[address];
-			if let Some(previous) = controllers.insert(&device.controller, address) {
-				return Err(format!(
-					"SCO capacity conflict on {}: {previous} and {address}; select at most one source per controller",
-					device.controller
-				));
-			}
-		}
-		validate_mixed_devices(&devices)?;
-		// A previously accepted promotion can still arrive after the floor
-		// changes. Observe it before issuing its demotion or another promotion.
-		for (address, (_, _, started)) in &self.profile_changes {
-			if started.elapsed() >= Duration::from_secs(15) {
-				return Err(format!(
-					"{address}: timed out waiting for the requested PipeWire profile; inspect pw-dump and Bluetooth connection"
-				));
-			}
-		}
-		if !self.profile_changes.is_empty() {
-			return Ok(false);
-		}
-		let mut demoting = false;
-		for (address, device) in &devices {
-			if !sources.contains(address) {
-				if !device.is_profile("a2dp-sink") {
-					self.change_profile(address, device, "a2dp-sink", sources)?;
-					demoting = true;
-				} else if has_hfp_node(&snapshot, device.id) {
-					demoting = true;
-				}
-			}
-		}
-		if demoting {
-			return Ok(false);
-		}
-		let mut ready = true;
-		for address in sources {
-			let device = &devices[address];
-			if !device.is_profile(HEADSET_PROFILE) {
-				self.change_profile(address, device, HEADSET_PROFILE, sources)?;
-				ready = false;
-			}
-		}
-		Ok(ready
-			&& devices.iter().all(|(address, device)| {
-				headsets.get(address).is_some_and(|headset| {
-					if sources.contains(address) {
-						device.is_profile(HEADSET_PROFILE) && headset.has_duplex_audio()
-					} else {
-						device.is_profile("a2dp-sink") && !headset.sinks.is_empty()
-					}
-				})
-			}))
-	}
-
-	fn change_profile(
-		&mut self,
-		address: &str,
-		expected: &transport::Device,
-		family: &str,
-		sources: &BTreeSet<String>,
-	) -> Result<(), String> {
-		// IDs are reusable. Re-read serial, BlueZ path and advertised indices
-		// immediately before issuing a mutation.
-		let snapshot = self.snapshot()?;
-		let devices = transport::devices(&snapshot, &self.allowed)?;
-		let (headsets, _) = topology_for_transport(&snapshot, &self.allowed, self.transport)?;
-		for address in headsets.keys() {
-			if !devices.contains_key(address) {
-				return Err(format!(
-					"{address}: device metadata changed before profile selection; retry discovery"
-				));
-			}
-		}
-		if sources.iter().any(|address| !devices.contains_key(address))
-			|| !headsets.contains_key(address)
-		{
-			return Ok(());
-		}
-		validate_mixed_devices(&devices)?;
-		let mut controllers = BTreeSet::new();
-		for address in sources {
-			if !controllers.insert(&devices[address].controller) {
-				return Err("SCO controller assignment changed before profile selection; retry discovery with one source per controller".into());
-			}
-		}
-		let current = devices
-			.get(address)
-			.filter(|device| device.same_identity(expected))
-			.ok_or_else(|| {
-				format!("{address}: PipeWire device identity changed; retry discovery")
-			})?;
-		let index = current
-			.index(family)
-			.ok_or_else(|| format!("{address}: {family} profile is no longer available"))?;
-		if current.is_profile(family) {
-			return Ok(());
-		}
-		if family == HEADSET_PROFILE
-			&& devices.iter().any(|(address, device)| {
-				!sources.contains(address)
-					&& (!device.is_profile("a2dp-sink") || has_hfp_node(&snapshot, device.id))
-			}) {
-			return Ok(());
-		}
-		if let Some((device, pending, started)) = self.profile_changes.get(address)
-			&& device.same_identity(current)
-			&& *pending == index
-		{
-			if started.elapsed() >= Duration::from_secs(15) {
-				return Err(format!(
-					"{address}: timed out waiting for {family}; inspect pw-dump and Bluetooth connection"
-				));
-			}
-			return Ok(());
-		}
-		self.close();
-		(self.execute)(&[
-			"pw-cli",
-			"set-param",
-			&current.id.to_string(),
-			"Profile",
-			&format!("{{ index: {index}, save: false }}"),
-		])
-		.map_err(|error| format!("{address}: could not select {family}: {error}"))?;
-		self.profile_changes
-			.insert(address.into(), (current.clone(), index, Instant::now()));
-		Ok(())
+		self.coordinator
+			.prepare(sources, &self.allowed, &mut self.execute, || {
+				self.owned.clear()
+			})
 	}
 
 	/// Routes every allowlisted microphone when transmitting, or removes all
@@ -705,11 +352,10 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 			return self.inspect().map(|(headsets, _)| headsets);
 		}
 		let snapshot = self.snapshot()?;
-		let (headsets, existing) =
-			topology_for_transport(&snapshot, &self.allowed, self.transport)?;
+		let (headsets, existing) = snapshot.topology(&self.allowed, self.coordinator.transport);
 		let desired = desired_links_by_group(&headsets, group_sources, groups);
 		let mut failures = Vec::new();
-		let live = self.owned_links(&snapshot);
+		let live = snapshot.owned_links(&self.owner);
 		self.owned.retain(|link, (handle, started)| {
 			if !desired.contains(link) {
 				return false;
@@ -769,54 +415,18 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 	/// Reads the current allowlisted headset topology and all observed links.
 	pub fn inspect(&mut self) -> Result<(BTreeMap<String, Headset>, BTreeSet<Link>), String> {
 		let snapshot = self.snapshot()?;
-		if self.transport == Transport::Hfp {
-			topology(&snapshot, &self.allowed)
-		} else {
-			topology_for_transport(&snapshot, &self.allowed, self.transport)
-		}
+		Ok(snapshot.topology(&self.allowed, self.coordinator.transport))
 	}
 
 	/// Reads headset topology and only links owned by this router instance.
 	pub fn inspect_owned(&mut self) -> Result<(BTreeMap<String, Headset>, BTreeSet<Link>), String> {
 		let snapshot = self.snapshot()?;
-		let (headsets, _) = topology_for_transport(&snapshot, &self.allowed, self.transport)?;
-		Ok((headsets, self.owned_links(&snapshot)))
+		let (headsets, _) = snapshot.topology(&self.allowed, self.coordinator.transport);
+		Ok((headsets, snapshot.owned_links(&self.owner)))
 	}
 
-	fn snapshot(&mut self) -> Result<Value, String> {
-		let snapshot = serde_json::from_str(&(self.execute)(&["pw-dump"])?)
-			.map_err(|e| format!("invalid pw-dump JSON: {e}"))?;
-		if self.transport == Transport::ScoA2dp {
-			let (observed, _) = topology_for_transport(&snapshot, &self.allowed, self.transport)?;
-			// Device presence, not temporary profile ports, determines absence.
-			// Keep even queued headset disappearances until the input policy
-			// consumes them, regardless of subsequent reconnection.
-			self.transport_disconnects.extend(
-				self.allowed
-					.iter()
-					.filter(|address| !observed.contains_key(*address))
-					.cloned(),
-			);
-		}
-		Ok(snapshot)
-	}
-
-	fn owned_links(&self, snapshot: &Value) -> BTreeSet<Link> {
-		snapshot
-			.as_array()
-			.into_iter()
-			.flatten()
-			.filter(|object| {
-				object["type"] == "PipeWire:Interface:Link"
-					&& object["info"]["props"][OWNER_PROPERTY].as_str() == Some(&self.owner)
-			})
-			.filter_map(|object| {
-				Some((
-					object["info"]["output-port-id"].as_u64()?,
-					object["info"]["input-port-id"].as_u64()?,
-				))
-			})
-			.collect()
+	fn snapshot(&mut self) -> Result<Snapshot, String> {
+		self.coordinator.snapshot(&self.allowed, &mut self.execute)
 	}
 
 	/// Releases every link created by this router.
@@ -1127,16 +737,16 @@ mod tests {
 		router.set_transport(Transport::ScoA2dp);
 		let sources = [A.to_string()].into();
 		assert!(!router.prepare_transport(&sources).unwrap());
-		assert!(router.profile_changes.is_empty());
-		let started = router.transition_started;
+		assert!(router.coordinator.profile_changes.is_empty());
+		let started = router.coordinator.transition_started;
 		assert!(!router.prepare_transport(&sources).unwrap());
-		assert_eq!(router.transition_started, started);
+		assert_eq!(router.coordinator.transition_started, started);
 		server
 			.objects
 			.borrow_mut()
 			.push(transport_fixture()[3].clone());
 		assert!(router.prepare_transport(&sources).unwrap());
-		assert!(router.transition_started.is_none());
+		assert!(router.coordinator.transition_started.is_none());
 		router.update_sources(&sources).unwrap();
 		assert_eq!(server.links(), 2);
 
@@ -1150,19 +760,19 @@ mod tests {
 			.unwrap()["info"]["params"]["Profile"] = json!([{"index":17}]);
 		assert!(!router.prepare_transport(&sources).unwrap());
 		assert_eq!(server.links(), 0);
-		let started = router.transition_started;
+		let started = router.coordinator.transition_started;
 		assert!(!router.prepare_transport(&sources).unwrap());
-		assert_eq!(router.transition_started, started);
+		assert_eq!(router.coordinator.transition_started, started);
 		observe_profile(&server, 20, false);
 		assert!(router.prepare_transport(&sources).unwrap());
-		assert!(router.transition_started.is_none());
+		assert!(router.coordinator.transition_started.is_none());
 
 		server
 			.objects
 			.borrow_mut()
 			.retain(|object| object["id"] != 13);
 		assert!(!router.prepare_transport(&sources).unwrap());
-		router.transition_started = Some(Instant::now() - Duration::from_secs(31));
+		router.coordinator.transition_started = Some(Instant::now() - Duration::from_secs(31));
 		assert!(
 			router
 				.prepare_transport(&sources)
@@ -1182,8 +792,8 @@ mod tests {
 		assert!(!router.prepare_transport(&sources).unwrap());
 		server.objects.borrow_mut()[6]["info"]["params"]["Profile"] = json!([{"index":41}]);
 		assert!(!router.prepare_transport(&sources).unwrap());
-		assert!(router.profile_changes.is_empty());
-		router.transition_started = Some(Instant::now() - Duration::from_secs(31));
+		assert!(router.coordinator.profile_changes.is_empty());
+		router.coordinator.transition_started = Some(Instant::now() - Duration::from_secs(31));
 		assert!(
 			router
 				.prepare_transport(&sources)

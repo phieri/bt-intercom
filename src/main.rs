@@ -8,44 +8,50 @@
 mod atomic_file;
 mod bluez;
 mod dashboard;
+mod device_status;
 mod groups;
 mod network;
 mod pair_button;
+mod pipewire;
 mod process;
+mod ptt;
 mod router;
+mod routing_status;
+mod runtime_config;
+mod session;
 mod terminal_style;
 mod transmit;
 mod transport;
+mod worker;
 
 mod tui;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
-use std::fs::{self, File, OpenOptions};
-use std::io::{IsTerminal, Read, Write};
+use std::fs::{self, OpenOptions};
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
+#[cfg(test)]
 use std::thread;
 use std::time::{Duration, Instant};
 
 use bluez::{bluetooth_name, device_flag, normalize_address};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use clap_complete::Shell;
-use crossterm::cursor::MoveTo;
-use crossterm::execute;
-use crossterm::terminal::{Clear, ClearType};
-use dashboard::Dashboard;
-use dashboard::RunStatus;
-use groups::{config_path as talk_groups_path, load as load_talk_groups};
+use groups::config_path as talk_groups_path;
 use network::{
-	headset_path as headset_network_path, load as load_headsets, load_for_run as load_run_headsets,
-	remove as remove_headset, runtime_directory as ptt_runtime_directory, save as save_headsets,
+	headset_path as headset_network_path, load as load_headsets, remove as remove_headset,
+	runtime_directory as ptt_runtime_directory,
 };
+#[cfg(test)]
+use network::{load_for_run as load_run_headsets, save as save_headsets};
 use process::{COMMAND_TIMEOUT, command, command_cancellable};
-use router::{Headset, Router, has_active_intercom_connection, has_active_source_route};
+use router::{Headset, Router};
+use routing_status::RoutingStatus;
 use transmit::{Mode, Transmit};
 use transport::Transport;
 
@@ -280,14 +286,14 @@ fn confirm_transmissions(
 	beep: Option<&PttBeep>,
 	stopped: &AtomicBool,
 ) -> Result<bool, String> {
+	let status = RoutingStatus::new(headsets, links);
 	let ready = transmit
 		.pending
 		.iter()
 		.filter_map(|address| {
 			let headset = headsets.get(address)?;
-			(transmit.sources().contains(address)
-				&& has_active_source_route(address, headsets, links))
-			.then(|| (address.clone(), headset.speaker_node()))
+			(transmit.sources().contains(address) && status.has_active_source_route(address))
+				.then(|| (address.clone(), headset.speaker_node()))
 		})
 		.collect::<Vec<_>>();
 	for (address, speaker_node) in ready {
@@ -331,9 +337,10 @@ fn confirm_connections(
 	beep: Option<&PttBeep>,
 	stopped: &AtomicBool,
 ) {
+	let status = RoutingStatus::new(headsets, links);
 	let current: BTreeSet<_> = headsets
 		.keys()
-		.filter(|address| has_active_intercom_connection(address, headsets, links))
+		.filter(|address| status.has_active_intercom_connection(address))
 		.cloned()
 		.collect();
 	for address in current.difference(routed_headsets) {
@@ -463,52 +470,10 @@ fn guard_half_update<T>(
 	Ok(())
 }
 
-/// Reads evdev records, forwarding only play/pause press and release transitions.
-fn ptt_input_from<R: Read>(mut input: R, address: String, sender: mpsc::Sender<PttEvent>) {
-	let mut pressed = false;
-	let mut event = vec![0; std::mem::size_of::<libc::timeval>() + 8];
-	let offset = std::mem::size_of::<libc::timeval>();
-	loop {
-		if let Err(error) = input.read_exact(&mut event) {
-			let _ = sender.send(Err(format!("PTT input for {address} closed: {error}")));
-			break;
-		}
-		let at = Instant::now();
-		let event_type = u16::from_ne_bytes([event[offset], event[offset + 1]]);
-		let event_key = u16::from_ne_bytes([event[offset + 2], event[offset + 3]]);
-		let value = i32::from_ne_bytes(event[offset + 4..offset + 8].try_into().unwrap());
-		if event_type == 0 && event_key == 3 {
-			let _ = sender.send(Err(format!("PTT input for {address} lost button events")));
-			break;
-		}
-		if event_type == 1 && event_key == KEY_PLAYPAUSE && (value == 0 || value == 1) {
-			let next = value == 1;
-			if next != pressed {
-				pressed = next;
-				if sender.send(Ok((address.clone(), pressed, at))).is_err() {
-					break;
-				}
-			}
-		}
-	}
-}
-
-/// Opens each configured PTT device and starts one event-reading worker per device.
-fn ptt_input(buttons: Vec<PttButton>) -> Result<Receiver<PttEvent>, String> {
-	let inputs = buttons
-		.into_iter()
-		.map(|button| {
-			File::open(&button.path)
-				.map(|file| (button, file))
-				.map_err(|error| format!("PTT input: {error}"))
-		})
-		.collect::<Result<Vec<_>, _>>()?;
-	let (sender, receiver) = mpsc::channel();
-	for (button, file) in inputs {
-		let sender = sender.clone();
-		thread::spawn(move || ptt_input_from(file, button.address, sender));
-	}
-	Ok(receiver)
+#[cfg(test)]
+fn ptt_input_from<R: std::io::Read>(input: R, address: String, sender: mpsc::Sender<PttEvent>) {
+	let (_wake, receiver) = mpsc::channel();
+	ptt::read_events(input, address, sender, &AtomicBool::new(false), &receiver);
 }
 
 /// Connects allowlisted devices that are currently disconnected or unavailable.
@@ -650,330 +615,20 @@ fn run(action: CliCommand) -> Result<(), String> {
 			transport,
 			dashboard: show_dashboard,
 		} => {
-			validate_transport(mode, transport)?;
-			let mut allowed = devices.into_iter().collect();
-			validate_mode(mode, &buttons, &allowed)?;
-			let interval = Duration::from_secs_f64(interval);
-			if show_dashboard && !std::io::stderr().is_terminal() {
-				return Err("--dashboard requires an interactive terminal on stderr".into());
-			}
-			let explicit_network = !allowed.is_empty();
-			let network_path = headset_network_path()?;
-			if explicit_network {
-				save_headsets(&network_path, &allowed)?;
-			} else {
-				allowed = load_run_headsets(&network_path, pair_button)?;
-				validate_mode(mode, &buttons, &allowed)?;
-			}
-			let groups_path = talk_groups_path(&network_path)?;
-			let mut groups = load_talk_groups(&groups_path)?;
-			let stopped = Arc::new(AtomicBool::new(false));
-			let signal = Arc::clone(&stopped);
-			ctrlc::set_handler(move || signal.store(true, Ordering::SeqCst))
-				.map_err(|e| e.to_string())?;
-			if connect
-				&& let Ok(controllers) =
-					command_cancellable(&["bluetoothctl", "list"], COMMAND_TIMEOUT, Some(&stopped))
-				&& bluez::controller_addresses(&controllers).len() > 1
-			{
-				log::warn!(
-					"Multiple Bluetooth controllers detected: --connect addresses only BlueZ's default controller. Keep other controllers' headsets connected using an adapter-aware Bluetooth manager, or connect them in a bluetoothctl session after select CONTROLLER_MAC."
-				);
-			}
-			let mut transmit =
-				Transmit::new(mode, buttons.iter().map(|button| button.address.clone()));
-			transmit.set_groups(&groups);
-			// Open all inputs before any background workers start. A startup
-			// failure must not leave a connector or dashboard running.
-			let input = if buttons.is_empty() {
-				None
-			} else {
-				Some(ptt_input(buttons)?)
-			};
-			let pairing_pin = if pair_button {
-				Some(pair_button::PairButton::open()?)
-			} else {
-				None
-			};
-			let mut router = Router::with_executor(allowed, |args: &[&str]| {
-				command_cancellable(args, COMMAND_TIMEOUT, Some(&stopped))
-			});
-			router.set_transport(transport);
-			let reconnect_devices = Arc::new(Mutex::new(router.allowed.clone()));
-			let pairing = pairing_pin.map(|pin| {
-				pair_button::PairButton::start(
-					pin,
-					router.allowed.clone(),
-					Arc::clone(&stopped),
-					network_path.clone(),
-				)
-			});
-			let mut dashboard = show_dashboard
-				.then(|| Dashboard::start(router.allowed.clone(), Arc::clone(&stopped)));
-			let mut headsets = BTreeMap::new();
-			let mut links = BTreeSet::new();
-			let mut last_error = None;
-			let mut redraw = true;
-			let (shutdown, shutdown_rx) = mpsc::channel();
-			let connector = if connect {
-				let devices = Arc::clone(&reconnect_devices);
-				let cancelled = Arc::clone(&stopped);
-				Some(thread::spawn(move || {
-					reconnect_worker(
-						devices,
-						Arc::clone(&cancelled),
-						shutdown_rx,
-						Duration::from_secs(30),
-						|args, timeout| command_cancellable(args, timeout, Some(&cancelled)),
-					);
-				}))
-			} else {
-				None
-			};
-			let beep = match PttBeep::new() {
-				Ok(beep) => Some(beep),
-				Err(error) => {
-					log::warn!("Confirmation beeps unavailable: {error}");
-					None
-				}
-			};
-			let mut connected_headsets = BTreeSet::new();
-			let mut reported_controller_warnings = BTreeSet::new();
-			if input.is_some() {
-				match mode {
-					Mode::HalfDuplex => log::info!(
-						"Half-duplex: Hold play/pause to request the FIFO floor; release to cancel or relinquish. Double beep confirms a ready route."
-					),
-					Mode::FullDuplex => log::info!(
-						"Full-duplex: Hold play/pause to transmit; release to mute. Three presses within 1 second (first to third, inclusive) toggle this headset's PTT/always-open mode."
-					),
-				}
-			}
-			let mut last_update: Option<Instant> = None;
-			let result: Result<(), String> = (|| {
-				while !stopped.load(Ordering::SeqCst) {
-					if let Some(ref pairing) = pairing {
-						while let Ok(event) = pairing.events.try_recv() {
-							match event {
-								Ok(device) => {
-									router.allowed.insert(device.clone());
-									*reconnect_devices.lock().unwrap() = router.allowed.clone();
-									if let Some(ref mut current) = dashboard {
-										current.stop();
-										dashboard = Some(Dashboard::start(
-											router.allowed.clone(),
-											Arc::clone(&stopped),
-										));
-									}
-									log::info!("Paired and saved {device}; added to the intercom");
-									last_update = None;
-									redraw = true;
-								}
-								Err(error) => log::warn!("Button pairing failed: {error}"),
-							}
-						}
-					}
-					if let Some(ref input) = input
-						&& drain_ptt(input, &mut transmit)?
-					{
-						last_update = None;
-						redraw = true;
-					}
-					if last_update.is_none_or(|updated| updated.elapsed() >= interval) {
-						let config_error = match load_talk_groups(&groups_path) {
-							Ok(current) => {
-								transmit.set_groups(&current);
-								groups = current;
-								None
-							}
-							Err(error) => Some(error),
-						};
-						if transport == Transport::ScoA2dp {
-							let devices = router.transport_devices();
-							guard_half_update(mode, &devices, || router.close())?;
-							let devices = devices?;
-							transmit.set_controllers(
-								&devices
-									.iter()
-									.map(|(address, device)| {
-										(address.clone(), device.controller.clone())
-									})
-									.collect(),
-							);
-							transmit.topology(&devices.keys().cloned().collect());
-						} else {
-							if let Ok(devices) = router.transport_devices() {
-								for warning in controller_warnings(&devices) {
-									if reported_controller_warnings.insert(warning.clone()) {
-										log::warn!("{warning}");
-									}
-								}
-							}
-						}
-						// Profile transitions deliberately remove microphone ports.
-						// Only legacy HFP treats missing duplex ports as a disconnect.
-						if transport == Transport::Hfp
-							&& let Some(ref input) = input
-						{
-							let snapshot = router.inspect_owned();
-							drain_ptt(input, &mut transmit)?;
-							if let Ok((current, _)) = snapshot {
-								let available = current
-									.iter()
-									.filter(|(_, headset)| headset.has_duplex_audio())
-									.map(|(address, _)| address.clone())
-									.collect();
-								transmit.topology(&available);
-							}
-						}
-						let sources = if input.is_some() {
-							transmit.sources().clone()
-						} else {
-							router.allowed.clone()
-						};
-						let prepared = router.prepare_transport(&sources);
-						guard_half_update(mode, &prepared, || router.close())?;
-						let transport_ready = prepared?;
-						if let Some(ref input) = input
-							&& drain_ptt(input, &mut transmit)?
-						{
-							router.close();
-							last_update = None;
-							continue;
-						}
-						let update = if !transport_ready {
-							router.inspect().map(|(headsets, _)| headsets)
-						} else if groups.is_empty() && input.is_none() {
-							router.update(true)
-						} else if mode == Mode::HalfDuplex && !groups.is_empty() {
-							router.update_group_sources_in_groups(transmit.group_sources(), &groups)
-						} else {
-							router.update_sources_in_groups(&sources, &groups)
-						};
-						guard_half_update(mode, &update, || router.close())?;
-						let mut inspect_error = None;
-						let mut changed = false;
-						match router.inspect_owned() {
-							Ok((current, active)) => {
-								headsets = current;
-								links = active;
-								if let Some(ref input) = input {
-									changed |= drain_ptt(input, &mut transmit)?;
-									if transport == Transport::ScoA2dp {
-										let devices = router.transport_devices();
-										guard_half_update(mode, &devices, || router.close())?;
-										changed |= refresh_transport_requests(
-											&mut transmit,
-											&devices?,
-											&router.take_transport_disconnects(),
-										);
-									} else {
-										let available = headsets
-											.iter()
-											.filter(|(_, headset)| headset.has_duplex_audio())
-											.map(|(address, _)| address.clone())
-											.collect();
-										changed |= transmit.topology(&available);
-									}
-									if !changed {
-										changed |= confirm_transmissions(
-											mode,
-											&mut transmit,
-											input,
-											&headsets,
-											&links,
-											beep.as_ref(),
-											&stopped,
-										)?;
-									}
-								} else {
-									confirm_connections(
-										&mut connected_headsets,
-										&headsets,
-										&links,
-										beep.as_ref(),
-										&stopped,
-									);
-								}
-							}
-							Err(error) => {
-								headsets.clear();
-								links.clear();
-								inspect_error = Some(error);
-							}
-						}
-						if changed {
-							router.close();
-							links.clear();
-						}
-						if dashboard.is_some() {
-							last_error = config_error.or_else(|| update.err()).or(inspect_error);
-							redraw = true;
-						} else {
-							if let Some(error) = inspect_error {
-								log::warn!("Routing inspection failed: {error}");
-							}
-							if let Some(error) = config_error {
-								log::warn!("Talk-group configuration unavailable: {error}");
-							}
-							match update {
-								Ok(headsets) => {
-									let active = headsets
-										.values()
-										.filter(|headset| headset.has_duplex_audio())
-										.count();
-									log::info!(
-										"{active}/{} headsets with duplex audio",
-										router.allowed.len()
-									);
-								}
-								Err(error) => log::warn!("Routing update failed: {error}"),
-							}
-						}
-						last_update = (!changed).then(Instant::now);
-					}
-					if let Some(ref mut dashboard) = dashboard {
-						redraw |= dashboard.refresh();
-						if redraw {
-							let stderr = std::io::stderr();
-							let interactive = stderr.is_terminal();
-							let mut output = stderr.lock();
-							if interactive {
-								execute!(output, Clear(ClearType::All), MoveTo(0, 0))
-									.map_err(|error| error.to_string())?;
-							}
-							dashboard
-								.draw(
-									&router.allowed,
-									&headsets,
-									&links,
-									RunStatus {
-										mode,
-										transmitting: input.is_none()
-											|| !transmit.sources().is_empty(),
-									},
-									last_error.as_deref(),
-									&mut output,
-								)
-								.map_err(|error| error.to_string())?;
-							redraw = false;
-						}
-					}
-					thread::sleep(Duration::from_millis(100).min(interval));
-				}
-				Ok(())
-			})();
-			stopped.store(true, Ordering::SeqCst);
-			drop(pairing);
-			let _ = shutdown.send(());
-			if let Some(ref mut dashboard) = dashboard {
-				dashboard.stop();
-			}
-			if let Some(connector) = connector {
-				let _ = connector.join();
-			}
-			router.close();
-			result?;
+			let config = runtime_config::RunConfig::resolve(
+				runtime_config::RunOptions {
+					addresses: devices,
+					interval,
+					connect,
+					pair_button,
+					buttons,
+					mode,
+					transport,
+					dashboard: show_dashboard,
+				},
+				std::io::stderr().is_terminal(),
+			)?;
+			session::Session::start(config)?.run()?;
 		}
 		CliCommand::Completions { .. } => unreachable!("completions are handled before run"),
 	}
