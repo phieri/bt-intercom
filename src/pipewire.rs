@@ -16,7 +16,6 @@ pub(crate) type Link = (u64, u64);
 #[derive(Debug)]
 struct DeviceMetadata {
 	address: String,
-	path: Option<String>,
 	transport: Option<Device>,
 }
 
@@ -39,6 +38,7 @@ struct AudioPort {
 #[derive(Debug)]
 pub(crate) struct Snapshot {
 	devices: BTreeMap<u64, DeviceMetadata>,
+	device_observations: Vec<(String, Option<String>)>,
 	nodes: BTreeMap<u64, Node>,
 	ports: Vec<AudioPort>,
 	links: BTreeSet<Link>,
@@ -68,6 +68,7 @@ impl Snapshot {
 		let objects = value.as_array().ok_or("pw-dump output must be an array")?;
 		let mut snapshot = Self {
 			devices: BTreeMap::new(),
+			device_observations: Vec::new(),
 			nodes: BTreeMap::new(),
 			ports: Vec::new(),
 			links: BTreeSet::new(),
@@ -75,10 +76,10 @@ impl Snapshot {
 		};
 		let mut ids = BTreeSet::new();
 		for object in objects {
-			let Some(object_id) = id(&object["id"]) else {
-				continue;
-			};
-			if !ids.insert(object_id) {
+			let object_id = id(&object["id"]);
+			if let Some(object_id) = object_id
+				&& !ids.insert(object_id)
+			{
 				return Err(format!("duplicate PipeWire object ID {object_id}"));
 			}
 			let info = &object["info"];
@@ -87,17 +88,21 @@ impl Snapshot {
 				Some("PipeWire:Interface:Device") => {
 					if let Some(address) = text(props, "api.bluez5.address") {
 						let address = address.to_ascii_uppercase();
+						snapshot
+							.device_observations
+							.push((address.clone(), text(props, "api.bluez5.path")));
+						let Some(object_id) = object_id else { continue };
 						snapshot.devices.insert(
 							object_id,
 							DeviceMetadata {
 								transport: Device::parse(object_id, &address, info),
 								address,
-								path: text(props, "api.bluez5.path"),
 							},
 						);
 					}
 				}
 				Some("PipeWire:Interface:Node") => {
+					let Some(object_id) = object_id else { continue };
 					snapshot.nodes.insert(
 						object_id,
 						Node {
@@ -108,6 +113,7 @@ impl Snapshot {
 					);
 				}
 				Some("PipeWire:Interface:Port") => {
+					let Some(object_id) = object_id else { continue };
 					if let Some(node) = id(&props["node.id"]) {
 						snapshot.ports.push(AudioPort {
 							id: object_id,
@@ -123,7 +129,9 @@ impl Snapshot {
 						(id(&info["output-port-id"]), id(&info["input-port-id"]))
 					{
 						let link = (output, input);
-						snapshot.links.insert(link);
+						if object_id.is_some() {
+							snapshot.links.insert(link);
+						}
 						if let Some(owner) = text(props, OWNER_PROPERTY) {
 							snapshot.owned_links.entry(owner).or_default().insert(link);
 						}
@@ -148,21 +156,22 @@ impl Snapshot {
 	) -> Result<BTreeMap<String, Device>, String> {
 		let mut devices = BTreeMap::new();
 		let mut observed = BTreeMap::new();
+		for (address, path) in &self.device_observations {
+			if !allowed.contains(address) {
+				continue;
+			}
+			let path = path.as_deref().unwrap_or("<missing api.bluez5.path>");
+			if let Some(previous) = observed.insert(address, path) {
+				return Err(format!(
+					"{address}: multiple live PipeWire Device objects ({previous} and {path}); disconnect the duplicate headset device or remove duplicate Bluetooth bonds; controller migration is not automatic"
+				));
+			}
+		}
 		for device in self
 			.devices
 			.values()
 			.filter(|d| allowed.contains(&d.address))
 		{
-			let path = device
-				.path
-				.as_deref()
-				.unwrap_or("<missing api.bluez5.path>");
-			if let Some(previous) = observed.insert(&device.address, path) {
-				return Err(format!(
-					"{}: multiple live PipeWire Device objects ({previous} and {path}); disconnect the duplicate headset device or remove duplicate Bluetooth bonds; controller migration is not automatic",
-					device.address
-				));
-			}
 			if let Some(transport) = &device.transport {
 				devices.insert(device.address.clone(), transport.clone());
 			}
@@ -310,6 +319,15 @@ mod tests {
 	}
 
 	#[test]
+	fn owner_tags_remain_observable_without_a_link_object_id() {
+		let mut value = fixture();
+		value[3].as_object_mut().unwrap().remove("id");
+		let snapshot = Snapshot::parse(&value).unwrap();
+		assert_eq!(snapshot.owned_links("owner"), [(12, 99)].into());
+		assert!(snapshot.links.is_empty());
+	}
+
+	#[test]
 	fn duplicate_object_ids_fail_closed_even_with_different_representations() {
 		let mut value = fixture();
 		value[1]["id"] = json!(10);
@@ -341,6 +359,21 @@ mod tests {
 				.0
 				.len(),
 			1
+		);
+		value
+			.as_array_mut()
+			.unwrap()
+			.last_mut()
+			.unwrap()
+			.as_object_mut()
+			.unwrap()
+			.remove("id");
+		assert!(
+			Snapshot::parse(&value)
+				.unwrap()
+				.transport_devices(&[ADDRESS.into()].into())
+				.unwrap_err()
+				.contains("multiple live PipeWire Device objects")
 		);
 	}
 }
