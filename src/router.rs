@@ -348,16 +348,29 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 	) -> Result<BTreeMap<String, Headset>, String> {
 		let sources = group_sources.values().flatten().cloned().collect();
 		if !self.prepare_transport(&sources)? {
+			log::debug!("Transport not ready for sources {sources:?}; releasing owned links");
 			self.close();
 			return self.inspect().map(|(headsets, _)| headsets);
 		}
 		let snapshot = self.snapshot()?;
 		let (headsets, existing) = snapshot.topology(&self.allowed, self.coordinator.transport);
 		let desired = desired_links_by_group(&headsets, group_sources, groups);
+		log::debug!(
+			"Routing: sources {group_sources:?}, {} headsets, {} desired links, {} observed links, {} owned links",
+			headsets.len(),
+			desired.len(),
+			existing.len(),
+			self.owned.len()
+		);
 		let mut failures = Vec::new();
 		let live = snapshot.owned_links(&self.owner);
 		self.owned.retain(|link, (handle, started)| {
 			if !desired.contains(link) {
+				log::debug!(
+					"Releasing link {} -> {} (no longer desired)",
+					link.0,
+					link.1
+				);
 				return false;
 			}
 			match handle.is_running() {
@@ -398,6 +411,7 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 				&properties,
 			]) {
 				Ok(handle) => {
+					log::debug!("Creating link {output} -> {input}");
 					self.owned.insert((output, input), (handle, Instant::now()));
 				}
 				Err(error) => {

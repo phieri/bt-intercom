@@ -80,6 +80,9 @@ struct PttButton {
 	arg_required_else_help = true
 )]
 struct Cli {
+	/// Enable detailed diagnostics on stderr (unless RUST_LOG is set).
+	#[arg(long, global = true)]
+	verbose: bool,
 	#[command(subcommand)]
 	command: CliCommand,
 }
@@ -637,12 +640,13 @@ fn run(action: CliCommand) -> Result<(), String> {
 
 /// Reports command-line errors and exits unsuccessfully.
 fn main() {
-	env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
-		.format_timestamp_secs()
-		.init();
-
 	let matches = cli_command().get_matches();
 	let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+	env_logger::Builder::from_env(
+		env_logger::Env::default().default_filter_or(if cli.verbose { "debug" } else { "info" }),
+	)
+	.format_timestamp_secs()
+	.init();
 	match cli.command {
 		CliCommand::Completions { shell } => {
 			let mut command = cli_command();
@@ -1092,9 +1096,28 @@ mod tests {
 		] {
 			assert_eq!(Cli::try_parse_from(args).err().unwrap().exit_code(), 2);
 		}
+
 		for shell in ["bash", "zsh", "fish", "elvish"] {
 			assert!(Cli::try_parse_from(["bt-intercom", "completions", shell]).is_ok());
 		}
+	}
+
+	#[test]
+	fn verbose_is_global_and_version_short_alias_is_preserved() {
+		for args in [
+			["bt-intercom", "--verbose", "run"],
+			["bt-intercom", "run", "--verbose"],
+		] {
+			assert!(Cli::try_parse_from(args).unwrap().verbose);
+		}
+		assert!(!Cli::try_parse_from(["bt-intercom", "run"]).unwrap().verbose);
+		assert_eq!(
+			cli_command()
+				.try_get_matches_from(["bt-intercom", "-v"])
+				.unwrap_err()
+				.kind(),
+			clap::error::ErrorKind::DisplayVersion
+		);
 	}
 
 	#[test]
