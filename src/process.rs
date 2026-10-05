@@ -92,6 +92,8 @@ pub(crate) fn command_cancellable(
 	if stopped.is_some_and(|flag| flag.load(Ordering::SeqCst)) {
 		return Err(format!("{name} cancelled"));
 	}
+	log::debug!("Starting {name} ({} arguments, {timeout:?} timeout)", args.len() - 1);
+	let started = Instant::now();
 	let mut child = Command::new(name)
 		.args(&args[1..])
 		.stdin(Stdio::null())
@@ -113,7 +115,8 @@ pub(crate) fn command_cancellable(
 		let mut bytes = Vec::new();
 		stderr.read_to_end(&mut bytes).map(|_| bytes)
 	});
-	let status = wait_child(&mut child, name, timeout, stopped, KillMode::ProcessGroup)?;
+	let status = wait_child(&mut child, name, timeout, stopped, KillMode::ProcessGroup)
+		.inspect_err(|error| log::debug!("{name} stopped after {:?}: {error}", started.elapsed()))?;
 	let stdout = output
 		.join()
 		.map_err(|_| "stdout reader panicked".to_string())?
@@ -122,6 +125,12 @@ pub(crate) fn command_cancellable(
 		.join()
 		.map_err(|_| "stderr reader panicked".to_string())?
 		.map_err(|e| e.to_string())?;
+	log::debug!(
+		"{name} exited with {status} after {:?} ({} stdout bytes, {} stderr bytes)",
+		started.elapsed(),
+		stdout.len(),
+		stderr.len()
+	);
 	if !status.success() {
 		return Err(format!(
 			"{} exited with {status}: {}",
