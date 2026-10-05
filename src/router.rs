@@ -384,6 +384,7 @@ pub struct Router<F = fn(&[&str]) -> Result<String, String>> {
 	transport_sources: Option<BTreeSet<String>>,
 	profile_changes: BTreeMap<String, (transport::Device, u64, Instant)>,
 	transition_started: Option<Instant>,
+	transport_disconnects: BTreeSet<String>,
 }
 
 fn default_command(args: &[&str]) -> Result<String, String> {
@@ -439,6 +440,7 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 			transport_sources: None,
 			profile_changes: BTreeMap::new(),
 			transition_started: None,
+			transport_disconnects: BTreeSet::new(),
 		}
 	}
 
@@ -448,6 +450,7 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 			self.transport_sources = None;
 			self.profile_changes.clear();
 			self.transition_started = None;
+			self.transport_disconnects.clear();
 			self.transport = transport;
 		}
 	}
@@ -455,6 +458,11 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 	pub fn transport_devices(&mut self) -> Result<BTreeMap<String, transport::Device>, String> {
 		let snapshot = self.snapshot()?;
 		transport::devices(&snapshot, &self.allowed)
+	}
+
+	/// Consume observed allowlisted device disappearances, even after reconnect.
+	pub fn take_transport_disconnects(&mut self) -> BTreeSet<String> {
+		std::mem::take(&mut self.transport_disconnects)
 	}
 
 	/// Close old routes, observe all receiver demotions, then enable SCO sources.
@@ -489,6 +497,9 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 		let started = self.transition_started.get_or_insert_with(Instant::now);
 		if started.elapsed() >= Duration::from_secs(30) {
 			return Err("SCO/A2DP transport did not become ready within 30 seconds: expected HFP microphone/speaker ports for requested sources and A2DP speaker ports with no old HFP nodes for receivers; inspect pw-dump, Bluetooth connections and WirePlumber profile policy".into());
+		}
+		if !sources.is_disjoint(&self.transport_disconnects) {
+			return Ok(false);
 		}
 		let snapshot = self.snapshot()?;
 		let devices = transport::devices(&snapshot, &self.allowed)?;
@@ -773,8 +784,21 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 	}
 
 	fn snapshot(&mut self) -> Result<Value, String> {
-		serde_json::from_str(&(self.execute)(&["pw-dump"])?)
-			.map_err(|e| format!("invalid pw-dump JSON: {e}"))
+		let snapshot = serde_json::from_str(&(self.execute)(&["pw-dump"])?)
+			.map_err(|e| format!("invalid pw-dump JSON: {e}"))?;
+		if self.transport == Transport::ScoA2dp {
+			let (observed, _) = topology_for_transport(&snapshot, &self.allowed, self.transport)?;
+			// Device presence, not temporary profile ports, determines absence.
+			// Keep even queued headset disappearances until the input policy
+			// consumes them, regardless of subsequent reconnection.
+			self.transport_disconnects.extend(
+				self.allowed
+					.iter()
+					.filter(|address| !observed.contains_key(*address))
+					.cloned(),
+			);
+		}
+		Ok(snapshot)
 	}
 
 	fn owned_links(&self, snapshot: &Value) -> BTreeSet<Link> {
