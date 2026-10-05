@@ -1097,26 +1097,27 @@ mod tests {
 			assert_eq!(Cli::try_parse_from(args).err().unwrap().exit_code(), 2);
 		}
 
-		#[test]
-		fn verbose_is_global_and_version_short_alias_is_preserved() {
-			for args in [
-				["bt-intercom", "--verbose", "run"],
-				["bt-intercom", "run", "--verbose"],
-			] {
-				assert!(Cli::try_parse_from(args).unwrap().verbose);
-			}
-			assert!(!Cli::try_parse_from(["bt-intercom", "run"]).unwrap().verbose);
-			assert_eq!(
-				cli_command()
-					.try_get_matches_from(["bt-intercom", "-v"])
-					.unwrap_err()
-					.kind(),
-				clap::error::ErrorKind::DisplayVersion
-			);
-		}
 		for shell in ["bash", "zsh", "fish", "elvish"] {
 			assert!(Cli::try_parse_from(["bt-intercom", "completions", shell]).is_ok());
 		}
+	}
+
+	#[test]
+	fn verbose_is_global_and_version_short_alias_is_preserved() {
+		for args in [
+			["bt-intercom", "--verbose", "run"],
+			["bt-intercom", "run", "--verbose"],
+		] {
+			assert!(Cli::try_parse_from(args).unwrap().verbose);
+		}
+		assert!(!Cli::try_parse_from(["bt-intercom", "run"]).unwrap().verbose);
+		assert_eq!(
+			cli_command()
+				.try_get_matches_from(["bt-intercom", "-v"])
+				.unwrap_err()
+				.kind(),
+			clap::error::ErrorKind::DisplayVersion
+		);
 	}
 
 	#[test]

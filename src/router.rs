@@ -366,7 +366,11 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 		let live = snapshot.owned_links(&self.owner);
 		self.owned.retain(|link, (handle, started)| {
 			if !desired.contains(link) {
-				log::debug!("Releasing link {} -> {} (no longer desired)", link.0, link.1);
+				log::debug!(
+					"Releasing link {} -> {} (no longer desired)",
+					link.0,
+					link.1
+				);
 				return false;
 			}
 			match handle.is_running() {
