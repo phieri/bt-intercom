@@ -17,6 +17,7 @@ use serde_json::Value;
 use crate::groups::TalkGroup;
 use crate::pipewire::{Link, MONO_CHANNEL, OWNER_PROPERTY, Snapshot};
 use crate::process::{COMMAND_TIMEOUT, command};
+#[cfg(test)]
 use crate::routing_status::RoutingStatus;
 use crate::transport::{self, Transport};
 
@@ -189,6 +190,7 @@ pub fn desired_links_by_group(
 }
 
 /// Returns whether a headset's microphone has a live route to another headset.
+#[cfg(test)]
 pub fn has_active_source_route(
 	address: &str,
 	headsets: &BTreeMap<String, Headset>,
@@ -198,6 +200,7 @@ pub fn has_active_source_route(
 }
 
 /// Returns whether a headset has live microphone and speaker routes with a peer.
+#[cfg(test)]
 pub fn has_active_intercom_connection(
 	address: &str,
 	headsets: &BTreeMap<String, Headset>,

@@ -50,7 +50,8 @@ use network::{
 #[cfg(test)]
 use network::{load_for_run as load_run_headsets, save as save_headsets};
 use process::{COMMAND_TIMEOUT, command, command_cancellable};
-use router::{Headset, Router, has_active_intercom_connection, has_active_source_route};
+use router::{Headset, Router};
+use routing_status::RoutingStatus;
 use transmit::{Mode, Transmit};
 use transport::Transport;
 
@@ -285,14 +286,14 @@ fn confirm_transmissions(
 	beep: Option<&PttBeep>,
 	stopped: &AtomicBool,
 ) -> Result<bool, String> {
+	let status = RoutingStatus::new(headsets, links);
 	let ready = transmit
 		.pending
 		.iter()
 		.filter_map(|address| {
 			let headset = headsets.get(address)?;
-			(transmit.sources().contains(address)
-				&& has_active_source_route(address, headsets, links))
-			.then(|| (address.clone(), headset.speaker_node()))
+			(transmit.sources().contains(address) && status.has_active_source_route(address))
+				.then(|| (address.clone(), headset.speaker_node()))
 		})
 		.collect::<Vec<_>>();
 	for (address, speaker_node) in ready {
@@ -336,9 +337,10 @@ fn confirm_connections(
 	beep: Option<&PttBeep>,
 	stopped: &AtomicBool,
 ) {
+	let status = RoutingStatus::new(headsets, links);
 	let current: BTreeSet<_> = headsets
 		.keys()
-		.filter(|address| has_active_intercom_connection(address, headsets, links))
+		.filter(|address| status.has_active_intercom_connection(address))
 		.cloned()
 		.collect();
 	for address in current.difference(routed_headsets) {

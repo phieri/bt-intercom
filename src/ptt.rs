@@ -53,6 +53,14 @@ impl PreparedInputs {
 }
 
 impl PttInput {
+	#[cfg(test)]
+	pub(crate) fn from_events(events: Receiver<PttEvent>) -> Self {
+		Self {
+			events,
+			workers: vec![],
+		}
+	}
+
 	pub fn stop(&mut self) {
 		for worker in &mut self.workers {
 			worker.stop();

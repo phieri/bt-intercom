@@ -107,14 +107,11 @@ mod tests {
 	impl Fixture {
 		fn new() -> Self {
 			static NEXT: AtomicUsize = AtomicUsize::new(0);
-			let path = std::env::current_dir()
-				.unwrap()
-				.join("target")
-				.join(format!(
-					"run-config-{}-{}",
-					std::process::id(),
-					NEXT.fetch_add(1, Ordering::Relaxed)
-				));
+			let path = std::env::temp_dir().join(format!(
+				"run-config-{}-{}",
+				std::process::id(),
+				NEXT.fetch_add(1, Ordering::Relaxed)
+			));
 			fs::create_dir_all(&path).unwrap();
 			Self(path)
 		}

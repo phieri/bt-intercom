@@ -192,6 +192,9 @@ two seconds by default; change that with `--interval SECONDS`. Ctrl-C or SIGTERM
 closes links created by this process. Existing PipeWire links are not modified.
 Shutdown also cancels and joins background workers, including idle headset
 button readers.
+Run settings, saved-network mappings and talk groups are validated before workers
+start. Invalid settings or unavailable button inputs do not replace the saved
+network with explicitly supplied addresses.
 Remove a headset from the saved intercom network with `bt-intercom remove ADDRESS`.
 This does not disconnect or unpair it; restart a running intercom or service
 for the change to take effect. Removing the last address clears the saved

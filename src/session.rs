@@ -447,16 +447,17 @@ mod tests {
 	use std::sync::mpsc;
 
 	fn config() -> RunConfig {
-		let network_path = std::env::current_dir()
-			.unwrap()
-			.join("target")
-			.join(format!("session-unused-network-{}", std::process::id()));
+		let network_path =
+			std::env::temp_dir().join(format!("session-unused-network-{}", std::process::id()));
 		RunConfig {
 			allowed: ["AA:BB:CC:DD:EE:01".into()].into(),
 			interval: Duration::from_millis(1),
 			connect: false,
 			pair_button: false,
-			buttons: vec![],
+			buttons: vec![crate::PttButton {
+				address: "AA:BB:CC:DD:EE:01".into(),
+				path: "injected-input".into(),
+			}],
 			mode: Mode::HalfDuplex,
 			transport: Transport::Hfp,
 			dashboard: false,
@@ -495,6 +496,49 @@ mod tests {
 		session.router = Router::with_executor(session.config.allowed.clone(), execute);
 		assert!(session.run().is_ok());
 		assert!(stopped.load(Ordering::SeqCst));
+	}
+
+	#[test]
+	fn released_input_during_routing_invalidates_routes_and_schedules_retry() {
+		let address = "AA:BB:CC:DD:EE:01";
+		let snapshot = serde_json::json!([
+			{"type":"PipeWire:Interface:Device", "id":10,
+				"info":{"props":{"api.bluez5.address":address}}},
+			{"type":"PipeWire:Interface:Node", "id":11,
+				"info":{"props":{"device.id":10, "media.class":"Audio/Source",
+					"api.bluez5.profile":"headset-head-unit"}}},
+			{"type":"PipeWire:Interface:Node", "id":12,
+				"info":{"props":{"device.id":10, "media.class":"Audio/Sink",
+					"api.bluez5.profile":"headset-head-unit"}}},
+			{"type":"PipeWire:Interface:Port", "id":13,
+				"info":{"props":{"node.id":11, "port.direction":"out", "audio.channel":"MONO"}}},
+			{"type":"PipeWire:Interface:Port", "id":14,
+				"info":{"props":{"node.id":12, "port.direction":"in", "audio.channel":"MONO"}}}
+		])
+		.to_string();
+		let (sender, receiver) = mpsc::channel();
+		let mut session = Session::new(config(), Arc::new(AtomicBool::new(false)));
+		session.input = Some(PttInput::from_events(receiver));
+		session.transmit.topology(&[address.into()].into());
+		assert!(session.transmit.event(address, true, Instant::now()));
+		session.last_update = Some(Instant::now());
+		let mut snapshots = 0;
+		let execute: Execute = Box::new(move |args| {
+			assert_eq!(args, ["pw-dump"]);
+			snapshots += 1;
+			if snapshots == 3 {
+				sender
+					.send(Ok((address.into(), false, Instant::now())))
+					.unwrap();
+			}
+			Ok(snapshot.clone())
+		});
+		session.router = Router::with_executor(session.config.allowed.clone(), execute);
+		session.update_routes().unwrap();
+		assert!(session.transmit.sources().is_empty());
+		assert!(session.transmit.pending.is_empty());
+		assert!(session.links.is_empty());
+		assert!(session.last_update.is_none());
 	}
 
 	#[test]
