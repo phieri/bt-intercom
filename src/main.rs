@@ -1229,8 +1229,7 @@ mod tests {
 		assert!(validate_mode(Mode::HalfDuplex, &buttons, &allowed).is_ok());
 		let two = BTreeSet::from(["AA:BB:CC:DD:EE:01".into(), "AA:BB:CC:DD:EE:02".into()]);
 		assert!(validate_mode(Mode::HalfDuplex, &buttons, &two).is_err());
-		let single_controller_error =
-			validate_controller_count(Mode::FullDuplex, 1).unwrap_err();
+		let single_controller_error = validate_controller_count(Mode::FullDuplex, 1).unwrap_err();
 		assert!(single_controller_error.contains("only one was detected"));
 		assert!(single_controller_error.contains("--mode half-duplex"));
 		assert!(validate_controller_count(Mode::FullDuplex, 2).is_ok());
