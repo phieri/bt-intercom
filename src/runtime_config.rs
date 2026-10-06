@@ -67,6 +67,7 @@ impl RunConfig {
 		} else {
 			network::load_for_run(&network_path, options.pair_button)?
 		};
+		crate::ptt_discovery::resolve_pending(&mut options.buttons, &allowed)?;
 		for button in &mut options.buttons {
 			button.address = address(&button.address)?;
 			if button.path.is_empty() {
