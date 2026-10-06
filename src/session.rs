@@ -92,6 +92,30 @@ impl Session {
 	}
 
 	fn setup(&mut self) -> Result<(), String> {
+		let controllers = if self.config.mode == Mode::FullDuplex || self.config.connect {
+			command_cancellable(
+				&["bluetoothctl", "list"],
+				COMMAND_TIMEOUT,
+				Some(&self.stopped),
+			)
+			.ok()
+			.map(|output| bluez::controller_addresses(&output))
+		} else {
+			None
+		};
+		if self.config.mode == Mode::FullDuplex
+			&& let Some(controllers) = &controllers
+		{
+			crate::validate_controller_count(self.config.mode, controllers.len())?;
+		}
+		if self.config.connect
+			&& let Some(controllers) = &controllers
+			&& controllers.len() > 1
+		{
+			log::warn!(
+				"Multiple Bluetooth controllers detected: --connect addresses only BlueZ's default controller. Keep other controllers' headsets connected using an adapter-aware Bluetooth manager, or connect them in a bluetoothctl session after select CONTROLLER_MAC."
+			);
+		}
 		// Validate all device opens before starting any worker or saving the network.
 		let inputs = PreparedInputs::open(&self.config.buttons)?;
 		let pairing_pin = if self.config.pair_button {
@@ -104,17 +128,6 @@ impl Session {
 			.map_err(|error| error.to_string())?;
 		if self.config.explicit_network {
 			network::save(&self.config.network_path, &self.config.allowed)?;
-		}
-		if self.config.connect
-			&& let Ok(controllers) = command_cancellable(
-				&["bluetoothctl", "list"],
-				COMMAND_TIMEOUT,
-				Some(&self.stopped),
-			) && bluez::controller_addresses(&controllers).len() > 1
-		{
-			log::warn!(
-				"Multiple Bluetooth controllers detected: --connect addresses only BlueZ's default controller. Keep other controllers' headsets connected using an adapter-aware Bluetooth manager, or connect them in a bluetoothctl session after select CONTROLLER_MAC."
-			);
 		}
 		self.beep = match PttBeep::new() {
 			Ok(beep) => Some(beep),

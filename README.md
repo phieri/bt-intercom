@@ -44,6 +44,8 @@ existing bonds or distribute audio. For fewer controllers, see
 [SCO/A2DP half-duplex transport](#scoa2dp-half-duplex-transport) below. Additional
 radios still share the 2.4 GHz spectrum; bandwidth, interference, USB power and
 firmware can prevent reliable audio even with one headset per adapter.
+If BlueZ reports only one controller, `run` rejects full-duplex and directs you
+to half-duplex; configure `--ptt` for every headset in that mode.
 
 For example, on Raspberry Pi OS with PipeWire packages:
 

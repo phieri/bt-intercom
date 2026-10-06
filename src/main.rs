@@ -392,6 +392,15 @@ fn validate_mode(
 	Ok(())
 }
 
+fn validate_controller_count(mode: Mode, count: usize) -> Result<(), String> {
+	if mode == Mode::FullDuplex && count == 1 {
+		return Err(
+			"full-duplex requires at least two Bluetooth controllers; only one was detected. Use --mode half-duplex with --ptt for every headset instead".into(),
+		);
+	}
+	Ok(())
+}
+
 fn validate_transport(mode: Mode, transport: Transport) -> Result<(), String> {
 	if transport == Transport::ScoA2dp && mode != Mode::HalfDuplex {
 		return Err("--transport sco-a2dp requires --mode half-duplex and --ptt for every headset; use one controller per headset for full-duplex".into());
@@ -1220,6 +1229,12 @@ mod tests {
 		assert!(validate_mode(Mode::HalfDuplex, &buttons, &allowed).is_ok());
 		let two = BTreeSet::from(["AA:BB:CC:DD:EE:01".into(), "AA:BB:CC:DD:EE:02".into()]);
 		assert!(validate_mode(Mode::HalfDuplex, &buttons, &two).is_err());
+		let single_controller_error =
+			validate_controller_count(Mode::FullDuplex, 1).unwrap_err();
+		assert!(single_controller_error.contains("only one was detected"));
+		assert!(single_controller_error.contains("--mode half-duplex"));
+		assert!(validate_controller_count(Mode::FullDuplex, 2).is_ok());
+		assert!(validate_controller_count(Mode::HalfDuplex, 1).is_ok());
 		let mut command = Cli::command();
 		let help = command
 			.find_subcommand_mut("run")
