@@ -9,17 +9,14 @@
     <title>Headset user briefing · bt-intercom</title>
     <link rel="stylesheet" href="vendor/reveal/reset.css">
     <link rel="stylesheet" href="vendor/reveal/reveal.css">
+    <link rel="stylesheet" href="vendor/reveal/theme/simple.css">
     <link rel="stylesheet" href="slides.css">
     <script src="vendor/reveal/reveal.js" defer></script>
+    <script src="vendor/reveal/plugin/notes/notes.js" defer></script>
     <script src="slides.js" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#briefing">Skip to presentation</a>
-    <header class="deck-header">
-      <a href="./" aria-label="bt-intercom home"><span aria-hidden="true">bt</span> intercom</a>
-      <p>Headset user briefing</p>
-      <a class="home-link" href="./">Website <span aria-hidden="true">↗</span></a>
-    </header>
     <main class="reveal" id="briefing" aria-label="Headset user briefing">
       <div class="slides">
         <section class="title-slide" aria-labelledby="welcome-title">
@@ -39,6 +36,7 @@
             </div>
           </div>
           <p class="deck-hint">Use ← → or the on-screen arrows to move through the guide.</p>
+          <aside class="notes">Welcome the group. Explain that this briefing covers headset use, not host setup or Bluetooth pairing.</aside>
         </section>
 
         <section aria-labelledby="route-title">
@@ -53,6 +51,7 @@
             <div class="route-node"><span class="node-icon">02</span><strong>Other members</strong><small>headset speakers</small></div>
           </div>
           <p class="takeaway"><b>Remember</b> Your group decides who can hear you. Your voice is never sent back to your own headset.</p>
+          <aside class="notes">Point out that the host routes audio locally. Members hear only people in their configured talk group; separate groups stay isolated.</aside>
         </section>
 
         <section aria-labelledby="ready-title">
@@ -66,6 +65,7 @@
             </ol>
             <aside class="callout"><strong>No route yet?</strong><p>A paired headset is not always ready for voice audio. One headset by itself has no intercom route.</p></aside>
           </div>
+          <aside class="notes">A double beep confirms that the microphone route is ready. Pairing alone does not guarantee that duplex audio has connected.</aside>
         </section>
 
         <section aria-labelledby="full-title">
@@ -84,6 +84,7 @@
             </article>
           </div>
           <p class="takeaway"><b>If unsure</b> Ask the host operator which mode is configured before you start.</p>
+          <aside class="notes">In always-open mode, a ready microphone transmits continuously. Push to talk mutes until the headset button is held.</aside>
         </section>
 
         <section aria-labelledby="ptt-title">
@@ -97,6 +98,7 @@
             <div class="press-step"><span class="step-number">3</span><div class="release-mark" aria-hidden="true">↗</div><strong>Release to finish</strong><small>Your microphone mutes when you let go.</small></div>
           </div>
           <p class="takeaway"><b>Use the media button</b> Call, answer, and keyboard buttons do not transmit.</p>
+          <aside class="notes">Demonstrate a press and release if possible. The press-to-talk mapping uses the headset's Play/Pause media key, not call controls.</aside>
         </section>
 
         <section aria-labelledby="half-title">
@@ -115,6 +117,7 @@
             <li>Release to cancel your wait or end your turn.</li>
           </ul>
           <p class="takeaway"><b>One queue per group</b> Separate groups can have different people talking at once.</p>
+          <aside class="notes">Explain that holding the button keeps the request queued. The double beep signals that the floor is theirs; releasing cancels a wait or ends a turn.</aside>
         </section>
 
         <section aria-labelledby="button-title">
@@ -132,6 +135,7 @@
               <p><span class="caution-mark" aria-hidden="true">!</span><span><strong>Three quick presses</strong><small>In full-duplex with PTT configured, this toggles your headset between push to talk and always open. Avoid it unless asked.</small></span></p>
             </div>
           </div>
+          <aside class="notes">Stress the distinction between media Play/Pause and call/answer buttons. Three quick media-button presses can toggle modes when push to talk is configured.</aside>
         </section>
 
         <section aria-labelledby="trouble-title">
@@ -143,6 +147,7 @@
             <article><span>03</span><h3>Reconnect, then try again.</h3><p>After audio reconnects, release the button and press it again to request a turn.</p></article>
           </div>
           <p class="takeaway"><b>Beep check</b> The double beep confirms an active microphone route or your turn—not pairing by itself.</p>
+          <aside class="notes">If problems remain after these checks, ask the host operator to inspect the connection and audio route before trying again.</aside>
         </section>
 
         <section class="closing-slide" aria-labelledby="close-title">
@@ -153,6 +158,7 @@
             <a href="https://github.com/phieri/bt-intercom#duplex-modes-and-push-to-talk">Read the operator guide <span aria-hidden="true">↗</span></a>
           </div>
           <p class="deck-hint">Press <kbd>Esc</kbd> for overview · <kbd>F</kbd> for full screen</p>
+          <aside class="notes">Invite questions and remind everyone to release the media button when they finish speaking.</aside>
         </section>
       </div>
     </main>

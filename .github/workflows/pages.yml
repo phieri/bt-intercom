@@ -38,12 +38,16 @@ jobs:
             dist/reset.css
             dist/reveal.css
             dist/reveal.js
+            dist/theme/simple.css
+            plugin/notes/notes.js
           sparse-checkout-cone-mode: false
       - name: Prepare Reveal.js assets
         run: |
-          mkdir -p docs/vendor/reveal
+          mkdir -p docs/vendor/reveal/theme docs/vendor/reveal/plugin/notes
           cp reveal-source/LICENSE docs/vendor/reveal/LICENSE
           cp reveal-source/dist/reset.css reveal-source/dist/reveal.css reveal-source/dist/reveal.js docs/vendor/reveal/
+          cp reveal-source/dist/theme/simple.css docs/vendor/reveal/theme/
+          cp reveal-source/plugin/notes/notes.js docs/vendor/reveal/plugin/notes/
       - name: Generate accessible demo transcript
         run: python3 .github/scripts/generate-demo-transcript.py
       - name: Download asciinema player
