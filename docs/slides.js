@@ -11,10 +11,11 @@ window.addEventListener("load", () => {
     overview: true,
     center: false,
     transition: "fade",
-    width: "100%",
-    height: "100%",
-    margin: 0.1,
+    width: 1200,
+    height: 700,
+    margin: 0.08,
     minScale: 0.25,
     maxScale: 2,
+    plugins: [RevealNotes],
   });
 });
