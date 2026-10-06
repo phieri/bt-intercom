@@ -7,10 +7,10 @@
     <meta name="theme-color" content="#171923">
     <meta name="description" content="A short guide for wearing and using a bt-intercom headset.">
     <title>Headset user briefing · bt-intercom</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.2.1/dist/reveal.css">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.2.1/dist/theme/black.css">
+    <link rel="stylesheet" href="vendor/reveal/reset.css">
+    <link rel="stylesheet" href="vendor/reveal/reveal.css">
     <link rel="stylesheet" href="slides.css">
-    <script src="https://cdn.jsdelivr.net/npm/reveal.js@5.2.1/dist/reveal.js" defer></script>
+    <script src="vendor/reveal/reveal.js" defer></script>
     <script src="slides.js" defer></script>
   </head>
   <body>
@@ -45,7 +45,7 @@
           <p class="chapter">HOW AUDIO MOVES <span>02 / 09</span></p>
           <h2 id="route-title">Your voice goes through the host.</h2>
           <p class="lead">Headsets do not connect directly to each other. The Linux host routes your microphone to other headsets in your talk group.</p>
-          <div class="route-map" aria-label="Your headset sends audio to the host, which routes it to other members of your talk group">
+          <div class="route-map" role="img" aria-label="Your headset sends audio to the host, which routes it to other members of your talk group">
             <div class="route-node"><span class="node-icon">01</span><strong>Your headset</strong><small>microphone</small></div>
             <span class="route-link" aria-hidden="true">→</span>
             <div class="route-node route-host"><span class="node-icon">bt</span><strong>Intercom host</strong><small>checks group membership</small></div>
