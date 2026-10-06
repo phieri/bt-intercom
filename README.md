@@ -11,6 +11,7 @@ headset microphone per talk group at a time. Friends or coworkers can pair their
 headsets with the same Linux host to join the conversation.
 
 [Watch the illustrative CLI demo](https://phieri.github.io/bt-intercom/).
+For headset wearers, see the [headset user briefing](https://phieri.github.io/bt-intercom/slides.html).
 
 ## Requirements
 
