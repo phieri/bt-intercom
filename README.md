@@ -354,8 +354,14 @@ fixed numbers. Idle/listening headsets use A2DP; the granted talker uses HFP/HSP
 for its microphone. Before granting another SCO link on a controller, the
 program closes its old routes, switches listeners to A2DP, and waits until the
 profile changes are observed before enabling the new talker's HFP profile.
+For A2DP listeners, it prefers the standard SBC codec rather than SBC-XQ or
+another advertised codec, which is the bandwidth-conscious choice for the
+intercom's mono voice. WirePlumber still negotiates the SBC rate, bitrate, and
+channel mode, so this preference alone does not guarantee a fixed bitrate or a
+mono encoded stream.
 Only allowlisted Bluetooth devices are changed. Missing controller identity or
-required profiles produce actionable errors instead of assuming extra capacity.
+required HFP or SBC profiles produce actionable errors instead of assuming extra
+capacity.
 Temporary absence of microphone ports during a switch does not cancel a held
 PTT request. A genuine device disappearance retires the request.
 Status/dashboard duplex availability still describes HFP microphone and speaker

@@ -623,7 +623,7 @@ mod tests {
 			router
 				.prepare_transport(&[A.to_string()].into())
 				.unwrap_err()
-				.contains("no available advertised a2dp-sink")
+				.contains("no available advertised A2DP SBC")
 		);
 		server.objects.borrow_mut()[6]["info"]["params"]["EnumProfile"] = json!([]);
 		assert!(!router.transport_devices().unwrap()[B].hfp_available);
@@ -644,7 +644,7 @@ mod tests {
 			router
 				.prepare_transport(&[A.to_string()].into())
 				.unwrap_err()
-				.contains("no available advertised a2dp-sink")
+				.contains("no available advertised A2DP SBC")
 		);
 	}
 
