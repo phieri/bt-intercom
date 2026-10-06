@@ -316,6 +316,12 @@ bt-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 \
   --ptt AA:BB:CC:DD:EE:02=/dev/input/event5
 ```
 
+Instead of looking up event numbers, use `--ptt auto` to match every listed
+headset, or `--ptt AA:BB:CC:DD:EE:01=auto` for one. The kernel labels each
+headset's button device with its Bluetooth address; the headset must be
+connected when `run` starts. Startup fails if no device, or more than one,
+matches.
+
 In PTT mode, hold a headset's play/pause button to transmit from its microphone;
 release to mute it. A double beep confirms when its microphone route is active.
 

@@ -15,6 +15,7 @@ mod pair_button;
 mod pipewire;
 mod process;
 mod ptt;
+mod ptt_discovery;
 mod router;
 mod routing_status;
 mod runtime_config;
@@ -139,7 +140,8 @@ enum CliCommand {
 		#[arg(long, conflicts_with = "ptt")]
 		pair_button: bool,
 		/// Map a headset address to an evdev input path; repeat once per headset.
-		#[arg(long, value_name = "ADDRESS=/dev/input/eventX", value_parser = parse_ptt_binding)]
+		/// Use ADDRESS=auto, or a lone `auto`, to find connected headsets' buttons.
+		#[arg(long, value_name = "ADDRESS=/dev/input/eventX|auto", value_parser = parse_ptt_binding)]
 		ptt: Vec<PttButton>,
 		/// Transmit policy. Half-duplex requires --ptt for every headset:
 		/// hold play/pause to request the FIFO floor; release to cancel/relinquish.
@@ -207,6 +209,12 @@ fn parse_interval(value: &str) -> Result<f64, String> {
 }
 
 fn parse_ptt_binding(value: &str) -> Result<PttButton, String> {
+	if value == ptt_discovery::AUTO {
+		return Ok(PttButton {
+			address: value.into(),
+			path: value.into(),
+		});
+	}
 	let (device, path) = value
 		.split_once('=')
 		.ok_or("--ptt must be ADDRESS=/dev/input/eventX")?;
