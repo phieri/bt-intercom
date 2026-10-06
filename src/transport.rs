@@ -26,6 +26,8 @@ pub struct Device {
 	pub(crate) serial: String,
 	pub(crate) path: String,
 	pub(crate) profiles: BTreeMap<u64, String>,
+	a2dp_sbc: Option<u64>,
+	a2dp_codec_info: bool,
 	pub(crate) current: Option<u64>,
 }
 
@@ -38,6 +40,17 @@ pub(crate) fn profile_matches(name: &str, family: &str) -> bool {
 
 impl Device {
 	pub(crate) fn index(&self, family: &str) -> Option<u64> {
+		if family == "a2dp-sink" {
+			return self.a2dp_sbc.or_else(|| {
+				(!self.a2dp_codec_info)
+					.then(|| self.generic_index(family))
+					.flatten()
+			});
+		}
+		self.generic_index(family)
+	}
+
+	fn generic_index(&self, family: &str) -> Option<u64> {
 		self.current
 			.filter(|index| {
 				self.profiles
@@ -53,6 +66,9 @@ impl Device {
 	}
 
 	pub(crate) fn is_profile(&self, family: &str) -> bool {
+		if family == "a2dp-sink" && self.a2dp_codec_info {
+			return self.a2dp_sbc.is_some() && self.a2dp_sbc == self.current;
+		}
 		self.current
 			.and_then(|index| self.profiles.get(&index))
 			.is_some_and(|name| profile_matches(name, family))
@@ -285,7 +301,15 @@ impl Coordinator {
 			})?;
 		let index = current
 			.index(family)
-			.ok_or_else(|| format!("{address}: {family} profile is no longer available"))?;
+			.ok_or_else(|| {
+				if family == "a2dp-sink" {
+					format!(
+						"{address}: no advertised A2DP SBC profile; enable standard SBC in WirePlumber's Bluetooth codec settings"
+					)
+				} else {
+					format!("{address}: {family} profile is no longer available")
+				}
+			})?;
 		if current.is_profile(family) {
 			return Ok(());
 		}
@@ -326,9 +350,15 @@ fn validate_mixed_devices(devices: &BTreeMap<String, Device>) -> Result<(), Stri
 	for (address, device) in devices {
 		for family in [HEADSET_PROFILE, "a2dp-sink"] {
 			if device.index(family).is_none() {
-				return Err(format!(
-					"{address}: no available advertised {family} profile; SCO/A2DP requires both HFP and A2DP on every connected headset; check headset support and PipeWire Bluetooth configuration"
-				));
+				return Err(if family == "a2dp-sink" {
+					format!(
+						"{address}: no available advertised A2DP SBC profile; SCO/A2DP requires standard SBC on every connected headset; enable it in WirePlumber's Bluetooth codec settings"
+					)
+				} else {
+					format!(
+						"{address}: no available advertised {family} profile; SCO/A2DP requires both HFP and A2DP on every connected headset; check headset support and PipeWire Bluetooth configuration"
+					)
+				});
 			}
 		}
 	}
@@ -349,7 +379,7 @@ impl Device {
 		}
 		let serial = identifier(&props["object.serial"])?;
 		let params = &info["params"];
-		let profiles: BTreeMap<_, _> = params["EnumProfile"]
+		let profile_entries = params["EnumProfile"]
 			.as_array()
 			.into_iter()
 			.flatten()
@@ -358,6 +388,9 @@ impl Device {
 					&& profile["available"].as_u64() != Some(1)
 					&& profile["available"].as_bool() != Some(false)
 			})
+			.collect::<Vec<_>>();
+		let profiles: BTreeMap<_, _> = profile_entries
+			.iter()
 			.filter_map(|profile| {
 				Some((
 					profile["index"].as_u64()?,
@@ -365,6 +398,25 @@ impl Device {
 				))
 			})
 			.collect();
+		let a2dp_sbc = profile_entries.iter().find_map(|profile| {
+			let name = profile["name"].as_str()?;
+			let is_sbc = name == "a2dp-sink-sbc"
+				|| (name == "a2dp-sink"
+					&& profile["description"].as_str().is_some_and(|description| {
+						description.to_ascii_lowercase().contains("codec sbc)")
+					}));
+			is_sbc.then(|| profile["index"].as_u64()).flatten()
+		});
+		let a2dp_codec_info = profile_entries.iter().any(|profile| {
+			let Some(name) = profile["name"].as_str() else {
+				return false;
+			};
+			profile_matches(name, "a2dp-sink")
+				&& (name != "a2dp-sink"
+					|| profile["description"].as_str().is_some_and(|description| {
+						description.to_ascii_lowercase().contains("codec ")
+					}))
+		});
 		let hfp_available = profiles
 			.values()
 			.any(|name| profile_matches(name, "headset-head-unit"));
@@ -383,7 +435,82 @@ impl Device {
 			serial,
 			path: path.into(),
 			profiles,
+			a2dp_sbc,
+			a2dp_codec_info,
 			current,
 		})
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use serde_json::json;
+
+	const ADDRESS: &str = "AA:BB:CC:DD:EE:01";
+
+	fn device(profiles: Value, current: u64) -> Device {
+		Device::parse(
+			10,
+			ADDRESS,
+			&json!({
+				"props": {
+					"api.bluez5.path": "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_01",
+					"object.serial": 1000
+				},
+				"params": {
+					"EnumProfile": profiles,
+					"Profile": [{"index": current}]
+				}
+			}),
+		)
+		.unwrap()
+	}
+
+	#[test]
+	fn a2dp_prefers_standard_sbc_over_other_codecs() {
+		let device = device(
+			json!([
+				{"index": 20, "name": "a2dp-sink-aac", "description": "codec AAC", "available": "yes"},
+				{"index": 21, "name": "a2dp-sink-sbc_xq", "description": "codec SBC XQ", "available": "yes"},
+				{"index": 22, "name": "a2dp-sink-sbc", "description": "codec SBC", "available": "yes"}
+			]),
+			20,
+		);
+
+		assert_eq!(device.index("a2dp-sink"), Some(22));
+		assert!(!device.is_profile("a2dp-sink"));
+	}
+
+	#[test]
+	fn a2dp_recognizes_sbc_on_pipewire_base_profile() {
+		let device = device(
+			json!([{
+				"index": 41,
+				"name": "a2dp-sink",
+				"description": "High Fidelity Playback (A2DP Sink, codec SBC)",
+				"available": "yes"
+			}]),
+			41,
+		);
+
+		assert_eq!(device.index("a2dp-sink"), Some(41));
+		assert!(device.is_profile("a2dp-sink"));
+	}
+
+	#[test]
+	fn a2dp_does_not_choose_a_known_non_sbc_codec() {
+		let device = device(
+			json!([{
+				"index": 40,
+				"name": "a2dp-sink",
+				"description": "High Fidelity Playback (A2DP Sink, codec AAC)",
+				"available": "yes"
+			}]),
+			40,
+		);
+
+		assert_eq!(device.index("a2dp-sink"), None);
+		assert!(!device.is_profile("a2dp-sink"));
 	}
 }
