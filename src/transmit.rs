@@ -32,6 +32,7 @@ pub struct Transmit {
 	group_sources: BTreeMap<Option<String>, BTreeSet<String>>,
 	active: BTreeSet<String>,
 	controllers: Option<BTreeMap<String, String>>,
+	sco_limit: usize,
 	request_order: VecDeque<String>,
 	pub pending: BTreeSet<String>,
 }
@@ -46,15 +47,21 @@ impl Transmit {
 			group_sources: BTreeMap::new(),
 			active: BTreeSet::new(),
 			controllers: None,
+			sco_limit: 1,
 			request_order: VecDeque::new(),
 			pending: BTreeSet::new(),
 		}
 	}
 
-	/// Opt into one SCO source per controller, independently of talk groups.
+	/// Apply a per-controller SCO source limit, independently of talk groups.
 	/// Missing mappings cannot receive a grant, but held requests remain queued.
 	pub fn set_controllers(&mut self, controllers: &BTreeMap<String, String>) {
 		self.controllers = Some(controllers.clone());
+		self.refresh();
+	}
+
+	pub fn set_sco_limit(&mut self, limit: usize) {
+		self.sco_limit = limit;
 		self.refresh();
 	}
 
@@ -157,26 +164,37 @@ impl Transmit {
 				if let Some(controllers) = &self.controllers {
 					let candidates = group_sources;
 					group_sources = BTreeMap::new();
-					let mut reserved: BTreeMap<&String, &String> = BTreeMap::new();
+					let mut reserved: BTreeMap<&String, BTreeSet<&String>> = BTreeMap::new();
 					// Keep existing resource reservations before considering new
 					// floors; lexical group names must not preempt a held source.
 					for address in &self.request_order {
 						let Some(controller) = controllers.get(address) else {
 							continue;
 						};
-						if reserved
-							.get(controller)
-							.is_some_and(|owner| *owner != address)
+						let was_active = candidates.iter().any(|(group, addresses)| {
+							addresses.contains(address)
+								&& self
+									.group_sources
+									.get(group)
+									.is_some_and(|sources| sources.contains(address))
+						});
+						if !was_active {
+							continue;
+						}
+						let controller_sources = reserved.entry(controller).or_default();
+						if !controller_sources.contains(address)
+							&& controller_sources.len() >= self.sco_limit
 						{
 							continue;
 						}
-						for (group, addresses) in &self.group_sources {
+						controller_sources.insert(address);
+						for (group, addresses) in &candidates {
 							if addresses.contains(address)
-								&& candidates
+								&& self
+									.group_sources
 									.get(group)
 									.is_some_and(|sources| sources.contains(address))
 							{
-								reserved.insert(controller, address);
 								group_sources
 									.entry(group.clone())
 									.or_default()
@@ -188,20 +206,24 @@ impl Transmit {
 						let Some(controller) = controllers.get(address) else {
 							continue;
 						};
-						if reserved
-							.get(controller)
-							.is_some_and(|owner| *owner != address)
+						let controller_sources = reserved.entry(controller).or_default();
+						if !controller_sources.contains(address)
+							&& controller_sources.len() >= self.sco_limit
 						{
 							continue;
 						}
+						let mut selected = false;
 						for (group, addresses) in &candidates {
 							if addresses.contains(address) {
-								reserved.insert(controller, address);
+								selected = true;
 								group_sources
 									.entry(group.clone())
 									.or_default()
 									.insert(address.clone());
 							}
+						}
+						if selected {
+							controller_sources.insert(address);
 						}
 					}
 				}
@@ -346,6 +368,28 @@ mod tests {
 		assert_eq!(t.sources(), &set(&["c"]));
 		release(&mut t, "c", now, 4);
 		assert_eq!(t.sources(), &set(&["b"]));
+	}
+
+	#[test]
+	fn configured_controller_capacity_grants_multiple_queued_floors() {
+		let (mut t, now) = setup(Mode::HalfDuplex);
+		t.set_groups(&[
+			group("Zulu", &["a"]),
+			group("Alpha", &["b"]),
+			group("Middle", &["c"]),
+		]);
+		t.set_sco_limit(2);
+		t.set_controllers(&BTreeMap::from([
+			("a".into(), "hci0".into()),
+			("b".into(), "hci0".into()),
+			("c".into(), "hci0".into()),
+		]));
+		press(&mut t, "a", now, 0);
+		press(&mut t, "c", now, 1);
+		press(&mut t, "b", now, 2);
+		assert_eq!(t.sources(), &set(&["a", "c"]));
+		release(&mut t, "a", now, 3);
+		assert_eq!(t.sources(), &set(&["b", "c"]));
 	}
 
 	#[test]

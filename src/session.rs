@@ -64,10 +64,12 @@ impl Session {
 			Box::new(move |args| command_cancellable(args, COMMAND_TIMEOUT, Some(&cancellation)));
 		let mut router = Router::with_executor(config.allowed.clone(), execute);
 		router.set_transport(config.transport);
+		router.set_sco_limit(config.sco_limit);
 		let mut transmit = Transmit::new(
 			config.mode,
 			config.buttons.iter().map(|button| button.address.clone()),
 		);
+		transmit.set_sco_limit(config.sco_limit);
 		transmit.set_groups(&config.groups);
 		let reconnect_devices = Arc::new(Mutex::new(config.allowed.clone()));
 		Self {
@@ -106,7 +108,17 @@ impl Session {
 		if self.config.mode == Mode::FullDuplex
 			&& let Some(controllers) = &controllers
 		{
-			crate::validate_controller_count(self.config.mode, controllers.len())?;
+			crate::validate_controller_count(
+				self.config.mode,
+				controllers.len(),
+				self.config.sco_limit,
+			)?;
+		}
+		if self.config.sco_limit > 1 {
+			log::warn!(
+				"Assuming up to {} simultaneous SCO/eSCO links per Bluetooth controller; verify the capacity of your hardware",
+				self.config.sco_limit
+			);
 		}
 		if self.config.connect
 			&& let Some(controllers) = &controllers
@@ -248,7 +260,7 @@ impl Session {
 			self.transmit.topology(&devices.keys().cloned().collect());
 		} else {
 			if let Ok(devices) = self.router.transport_devices() {
-				for warning in controller_warnings(&devices) {
+				for warning in controller_warnings(&devices, self.config.sco_limit) {
 					if self.reported_controller_warnings.insert(warning.clone()) {
 						log::warn!("{warning}");
 					}
@@ -473,6 +485,7 @@ mod tests {
 			}],
 			mode: Mode::HalfDuplex,
 			transport: Transport::Hfp,
+			sco_limit: 1,
 			dashboard: false,
 			explicit_network: true,
 			groups_path: network_path.with_extension("groups"),

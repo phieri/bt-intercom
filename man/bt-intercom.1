@@ -52,6 +52,13 @@ Set the scan duration from 1 through 300 seconds (default: 15).
 .BI run " --interval SECONDS"
 Set the routing update interval (default: 2 seconds).
 .TP
+.BI run " --sco-limit N"
+Set the maximum simultaneous SCO/eSCO links per Bluetooth controller (default:
+1). In SCO/A2DP transport, this limits simultaneous talkers per controller.
+The default HFP transport leaves profiles unchanged and warns if observed
+headset usage exceeds the budget. Increase N only after verifying the adapter,
+firmware, and headset capacity.
+.TP
 .B run --connect
 Retry disconnected headsets every 30 seconds.
 Uses BlueZ's default controller; multi-controller deployments need an
@@ -91,14 +98,17 @@ half-duplex mode alone does not reduce listeners' SCO/eSCO usage.
 SCO/A2DP requires --mode half-duplex, a --ptt mapping for every headset, and both
 HFP/HSP and A2DP playback profiles. Listeners switch to A2DP before a talker
 switches to HFP; profile indices and controller identities are discovered from
-PipeWire. One SCO talker is granted per controller, shared across talk groups.
+PipeWire. Up to --sco-limit talkers are granted per controller, shared across
+talk groups.
 Profile transitions are asynchronous and may interrupt audio. Profiles remain
 in their last selected state on exit; owned links are released.
 .PP
-For full-duplex on controllers with one SCO/eSCO slot, pair one headset per
-independent controller using bluetoothctl select before pairing. Extra adapters
-do not redistribute existing bonds. Auracast requires separate LE Audio
-broadcast hardware and software support and is not implemented.
+For full-duplex, provide at least two SCO/eSCO slots across the detected
+controllers. By default this means one headset per independent controller;
+--sco-limit can raise the per-controller budget after hardware verification.
+Pair headsets to their intended controllers using bluetoothctl select before
+pairing. Extra adapters do not redistribute existing bonds. Auracast requires
+separate LE Audio broadcast hardware and software support and is not implemented.
 .TP
 .BI run " --ptt ADDRESS=/dev/input/eventX"
 Map a headset to its Linux evdev push-to-talk input. Repeat once for every

@@ -32,21 +32,23 @@ adapter. The supported Linux artifact targets for these models are listed below.
 
 **A paired/connected device is not necessarily an available voice channel.**
 HFP/HSP duplex audio uses a synchronous SCO/eSCO link; A2DP playback uses an
-asynchronous ACL link. Treat each consumer controller, including a Pi's onboard
-radio, as having **one usable simultaneous SCO/eSCO audio link** unless you have
-verified otherwise on that exact controller/firmware. Bluetooth Classic permits
-more than one synchronous link in some configurations, so this is a conservative
-deployment policy, not a universal Bluetooth limit. Neither the number of paired
-devices nor the number of PipeWire microphone ports proves SCO capacity.
+asynchronous ACL link. By default, bt-intercom budgets **one simultaneous
+SCO/eSCO audio link per Bluetooth controller**, including a Pi's onboard radio.
+Override this with `run --sco-limit N` only after verifying that exact
+controller, firmware, and headset combination. Bluetooth Classic permits more
+than one synchronous link in some configurations, but neither the number of
+paired devices nor the number of PipeWire microphone ports proves SCO capacity.
 
-For full-duplex with N headsets, use N independent Bluetooth controllers and
-pair one headset to each; merely plugging in extra USB adapters does not move
-existing bonds or distribute audio. For fewer controllers, see
+For full-duplex with N headsets, use N independent Bluetooth controllers by
+default and pair one headset to each; a verified higher `--sco-limit` can
+increase the capacity budget per controller. Merely plugging in extra USB
+adapters does not move existing bonds or distribute audio. For fewer controllers, see
 [SCO/A2DP half-duplex transport](#scoa2dp-half-duplex-transport) below. Additional
 radios still share the 2.4 GHz spectrum; bandwidth, interference, USB power and
 firmware can prevent reliable audio even with one headset per adapter.
-If BlueZ reports only one controller, `run` rejects full-duplex and directs you
-to half-duplex; configure `--ptt` for every headset in that mode.
+If BlueZ reports too few controllers to provide two SCO/eSCO slots under the
+configured limit, `run` rejects full-duplex; use a verified higher limit or
+half-duplex with `--ptt` for every headset.
 
 For example, on Raspberry Pi OS with PipeWire packages:
 
@@ -197,7 +199,11 @@ it if another Bluetooth manager keeps them connected. Routing is polled every
 two seconds by default; change that with `--interval SECONDS`. Ctrl-C or SIGTERM
 closes links created by this process. Existing PipeWire links are not modified.
 Shutdown also cancels and joins background workers, including idle headset
-button readers.
+button readers. `--sco-limit N` sets the maximum SCO/eSCO capacity budget per
+controller (default: 1). In `sco-a2dp` transport, it limits simultaneous talkers
+sharing a controller. The default HFP transport leaves headset profiles
+unchanged; it warns when observed headset usage exceeds the selected budget but
+cannot redistribute or disconnect Bluetooth devices.
 Run settings, saved-network mappings and talk groups are validated before workers
 start. Invalid settings or unavailable button inputs do not replace the saved
 network with explicitly supplied addresses.
@@ -359,10 +365,11 @@ bt-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 --connect \
 ```
 
 This transport selects advertised PipeWire profile indices rather than assuming
-fixed numbers. Idle/listening headsets use A2DP; the granted talker uses HFP/HSP
-for its microphone. Before granting another SCO link on a controller, the
-program closes its old routes, switches listeners to A2DP, and waits until the
-profile changes are observed before enabling the new talker's HFP profile.
+fixed numbers. Idle/listening headsets use A2DP; granted talkers use HFP/HSP for
+their microphones, up to `--sco-limit` per controller. Before granting another
+SCO link on a controller, the program closes its old routes, switches listeners
+to A2DP, and waits until the profile changes are observed before enabling the
+new talker's HFP profile.
 For A2DP listeners, it prefers the standard SBC codec rather than SBC-XQ or
 another advertised codec, which is the bandwidth-conscious choice for the
 intercom's mono voice. WirePlumber still negotiates the SBC rate, bitrate, and
@@ -377,7 +384,7 @@ Status/dashboard duplex availability still describes HFP microphone and speaker
 ports: an idle A2DP listener is intentionally playback-only, not duplex-ready.
 
 Talk-group routing remains isolated. Each group keeps its FIFO queue, but groups
-sharing a radio also share its single SCO slot. Different radios can grant
+sharing a radio also share its configured SCO slots. Different radios can grant
 independent talkers. A headset cannot listen through A2DP while its own HFP
 profile is active, so overlapping groups may have listeners temporarily unable
 to receive; no simultaneous HFP+A2DP capability is assumed. Profiles are left
@@ -453,8 +460,8 @@ one-SCO hardware specification:
   connected LE Audio and broadcast LE Audio use different ISO transports.
 
 Check the documentation matching your installed versions. On real hardware,
-verify one simultaneous SCO/eSCO stream per assigned radio, microphone audio
-reaching every intended listener (and no other groups), profile handoff timing,
+verify the configured number of simultaneous SCO/eSCO streams per assigned
+radio, microphone audio reaching every intended listener (and no other groups), profile handoff timing,
 and ACL/A2DP stability under the maximum listener load. A linked PipeWire graph
 and a confirmation beep establish routing state, not measured voice quality or
 certified controller capacity.

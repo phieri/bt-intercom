@@ -87,13 +87,26 @@ fn identifier(value: &Value) -> Option<String> {
 }
 
 /// Profile-transition state, independent of the clients owning audio links.
-#[derive(Default)]
 pub(crate) struct Coordinator {
 	pub(crate) transport: Transport,
+	sco_limit: usize,
 	sources: Option<BTreeSet<String>>,
 	pub(crate) profile_changes: BTreeMap<String, (Device, u64, Instant)>,
 	pub(crate) transition_started: Option<Instant>,
 	disconnects: BTreeSet<String>,
+}
+
+impl Default for Coordinator {
+	fn default() -> Self {
+		Self {
+			transport: Transport::default(),
+			sco_limit: 1,
+			sources: None,
+			profile_changes: BTreeMap::new(),
+			transition_started: None,
+			disconnects: BTreeSet::new(),
+		}
+	}
 }
 
 struct TransitionIo<'a, F, C> {
@@ -108,6 +121,10 @@ impl Coordinator {
 			transport,
 			..Self::default()
 		}
+	}
+
+	pub(crate) fn set_sco_limit(&mut self, limit: usize) {
+		self.sco_limit = limit;
 	}
 
 	pub(crate) fn take_disconnects(&mut self) -> BTreeSet<String> {
@@ -200,16 +217,7 @@ impl Coordinator {
 		if sources.iter().any(|address| !devices.contains_key(address)) {
 			return Ok(false);
 		}
-		let mut controllers = BTreeMap::new();
-		for address in sources {
-			let device = &devices[address];
-			if let Some(previous) = controllers.insert(&device.controller, address) {
-				return Err(format!(
-					"SCO capacity conflict on {}: {previous} and {address}; select at most one source per controller",
-					device.controller
-				));
-			}
-		}
+		validate_source_capacity(sources, &devices, self.sco_limit)?;
 		validate_mixed_devices(&devices)?;
 		// An accepted promotion can arrive after a floor change. Observe it
 		// before issuing its demotion or another promotion.
@@ -287,12 +295,7 @@ impl Coordinator {
 			return Ok(());
 		}
 		validate_mixed_devices(&devices)?;
-		let mut controllers = BTreeSet::new();
-		for address in sources {
-			if !controllers.insert(&devices[address].controller) {
-				return Err("SCO controller assignment changed before profile selection; retry discovery with one source per controller".into());
-			}
-		}
+		validate_source_capacity(sources, &devices, self.sco_limit)?;
 		let current = devices
 			.get(address)
 			.filter(|device| device.same_identity(expected))
@@ -344,6 +347,33 @@ impl Coordinator {
 			.insert(address.into(), (current.clone(), index, Instant::now()));
 		Ok(())
 	}
+}
+
+fn validate_source_capacity(
+	sources: &BTreeSet<String>,
+	devices: &BTreeMap<String, Device>,
+	sco_limit: usize,
+) -> Result<(), String> {
+	let mut controllers: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+	for address in sources {
+		let Some(device) = devices.get(address) else {
+			continue;
+		};
+		controllers
+			.entry(&device.controller)
+			.or_default()
+			.push(address);
+	}
+	for (controller, addresses) in controllers {
+		if addresses.len() > sco_limit {
+			return Err(format!(
+				"SCO capacity conflict on {controller}: {} sources ({}) exceed configured --sco-limit {sco_limit}",
+				addresses.len(),
+				addresses.join(", ")
+			));
+		}
+	}
+	Ok(())
 }
 
 fn validate_mixed_devices(devices: &BTreeMap<String, Device>) -> Result<(), String> {
@@ -465,6 +495,59 @@ mod tests {
 			}),
 		)
 		.unwrap()
+	}
+
+	fn device_on_controller(id: u64, address: &str, controller: &str) -> Device {
+		Device::parse(
+			id,
+			address,
+			&json!({
+				"props": {
+					"api.bluez5.path": format!(
+						"/org/bluez/{controller}/dev_{}",
+						address.replace(':', "_")
+					),
+					"object.serial": id + 1000
+				},
+				"params": { "EnumProfile": [], "Profile": [] }
+			}),
+		)
+		.unwrap()
+	}
+
+	#[test]
+	fn source_capacity_obeys_per_controller_limit() {
+		let addresses = [
+			"AA:BB:CC:DD:EE:01",
+			"AA:BB:CC:DD:EE:02",
+			"AA:BB:CC:DD:EE:03",
+		];
+		let devices = addresses
+			.iter()
+			.enumerate()
+			.map(|(index, address)| {
+				(
+					(*address).to_owned(),
+					device_on_controller(index as u64, address, "hci0"),
+				)
+			})
+			.collect::<BTreeMap<_, _>>();
+		let two = addresses[..2]
+			.iter()
+			.map(|address| (*address).to_owned())
+			.collect();
+		let three = addresses
+			.iter()
+			.map(|address| (*address).to_owned())
+			.collect();
+
+		assert!(
+			validate_source_capacity(&two, &devices, 1)
+				.unwrap_err()
+				.contains("--sco-limit 1")
+		);
+		assert!(validate_source_capacity(&two, &devices, 2).is_ok());
+		assert!(validate_source_capacity(&three, &devices, 2).is_err());
 	}
 
 	#[test]
