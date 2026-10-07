@@ -135,6 +135,10 @@ enum CliCommand {
 		/// Reconnect disconnected headsets every 30 seconds.
 		#[arg(long)]
 		connect: bool,
+		/// Maximum simultaneous SCO/eSCO links per Bluetooth controller (default: 1).
+		/// Increase only after verifying the controller, firmware, and headset capacity.
+		#[arg(long, default_value_t = 1, value_parser = parse_sco_limit)]
+		sco_limit: usize,
 		/// Pair one nearby Just Works headset on a Raspberry Pi GPIO17 button press.
 		/// Requires full-duplex without --ptt; wire physical pin 11 to ground.
 		#[arg(long, conflicts_with = "ptt")]
@@ -206,6 +210,16 @@ fn parse_interval(value: &str) -> Result<f64, String> {
 		return Err("--interval must be at least one nanosecond".into());
 	}
 	Ok(interval)
+}
+
+fn parse_sco_limit(value: &str) -> Result<usize, String> {
+	let limit = value
+		.parse::<usize>()
+		.map_err(|_| "--sco-limit must be a positive integer")?;
+	if limit == 0 {
+		return Err("--sco-limit must be at least 1".into());
+	}
+	Ok(limit)
 }
 
 fn parse_ptt_binding(value: &str) -> Result<PttButton, String> {
@@ -400,11 +414,11 @@ fn validate_mode(
 	Ok(())
 }
 
-fn validate_controller_count(mode: Mode, count: usize) -> Result<(), String> {
-	if mode == Mode::FullDuplex && count == 1 {
-		return Err(
-			"full-duplex requires at least two Bluetooth controllers; only one was detected. Use --mode half-duplex with --ptt for every headset instead".into(),
-		);
+fn validate_controller_count(mode: Mode, count: usize, sco_limit: usize) -> Result<(), String> {
+	if mode == Mode::FullDuplex && count > 0 && count.saturating_mul(sco_limit) < 2 {
+		return Err(format!(
+			"full-duplex requires at least two SCO/eSCO slots; detected {count} Bluetooth controller(s) with --sco-limit {sco_limit}. Use a higher verified --sco-limit or --mode half-duplex with --ptt for every headset"
+		));
 	}
 	Ok(())
 }
@@ -416,7 +430,10 @@ fn validate_transport(mode: Mode, transport: Transport) -> Result<(), String> {
 	Ok(())
 }
 
-fn controller_warnings(devices: &BTreeMap<String, transport::Device>) -> Vec<String> {
+fn controller_warnings(
+	devices: &BTreeMap<String, transport::Device>,
+	sco_limit: usize,
+) -> Vec<String> {
 	let mut controllers: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
 	for (address, device) in devices {
 		controllers
@@ -426,10 +443,10 @@ fn controller_warnings(devices: &BTreeMap<String, transport::Device>) -> Vec<Str
 	}
 	controllers
 		.into_iter()
-		.filter(|(_, addresses)| addresses.len() > 1)
+		.filter(|(_, addresses)| addresses.len() > sco_limit)
 		.map(|(controller, addresses)| {
 			format!(
-				"{} headsets share {controller} ({}). HFP listeners also need SCO/eSCO; full-duplex requires verified synchronous-link capacity, normally one headset per controller. Use --mode half-duplex --transport sco-a2dp with PTT when sharing a radio.",
+				"{} headsets share {controller} ({}), exceeding --sco-limit {sco_limit}. HFP listeners also need SCO/eSCO; verify controller capacity or use --mode half-duplex --transport sco-a2dp with PTT when sharing a radio.",
 				addresses.len(),
 				addresses.join(", ")
 			)
@@ -621,7 +638,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 					);
 				}
 			}
-			for warning in controller_warnings(&transport_devices) {
+			for warning in controller_warnings(&transport_devices, 1) {
 				log::warn!("{warning}");
 			}
 		}
@@ -629,6 +646,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 			addresses: devices,
 			interval,
 			connect,
+			sco_limit,
 			pair_button,
 			ptt: buttons,
 			mode,
@@ -640,6 +658,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 					addresses: devices,
 					interval,
 					connect,
+					sco_limit,
 					pair_button,
 					buttons,
 					mode,
@@ -861,6 +880,29 @@ mod tests {
 		assert!(validate_transport(Mode::FullDuplex, transport).is_err());
 		assert!(validate_transport(Mode::HalfDuplex, Transport::Hfp).is_ok());
 		assert!(Cli::try_parse_from(["bt-intercom", "run", "--transport", "auracast"]).is_err());
+	}
+
+	#[test]
+	fn sco_limit_defaults_to_one_and_accepts_positive_overrides() {
+		let CliCommand::Run { sco_limit, .. } =
+			Cli::try_parse_from(["bt-intercom", "run"]).unwrap().command
+		else {
+			panic!("expected run");
+		};
+		assert_eq!(sco_limit, 1);
+		let CliCommand::Run { sco_limit, .. } =
+			Cli::try_parse_from(["bt-intercom", "run", "--sco-limit", "3"])
+				.unwrap()
+				.command
+		else {
+			panic!("expected run");
+		};
+		assert_eq!(sco_limit, 3);
+		assert!(Cli::try_parse_from(["bt-intercom", "run", "--sco-limit", "0"]).is_err());
+		assert!(validate_controller_count(Mode::FullDuplex, 1, 1).is_err());
+		assert!(validate_controller_count(Mode::FullDuplex, 1, 2).is_ok());
+		assert!(validate_controller_count(Mode::FullDuplex, 2, 1).is_ok());
+		assert!(validate_controller_count(Mode::HalfDuplex, 1, 1).is_ok());
 	}
 
 	#[test]
@@ -1103,6 +1145,7 @@ mod tests {
 			vec!["bt-intercom", "run", "invalid"],
 			vec!["bt-intercom", "run", "--interval", "NaN"],
 			vec!["bt-intercom", "run", "--interval", "0.00000000001"],
+			vec!["bt-intercom", "run", "--sco-limit", "0"],
 			vec!["bt-intercom", "scan", "--seconds", "301"],
 			vec!["bt-intercom", "status"],
 			vec!["bt-intercom", "run", "--unknown"],
@@ -1237,11 +1280,12 @@ mod tests {
 		assert!(validate_mode(Mode::HalfDuplex, &buttons, &allowed).is_ok());
 		let two = BTreeSet::from(["AA:BB:CC:DD:EE:01".into(), "AA:BB:CC:DD:EE:02".into()]);
 		assert!(validate_mode(Mode::HalfDuplex, &buttons, &two).is_err());
-		let single_controller_error = validate_controller_count(Mode::FullDuplex, 1).unwrap_err();
-		assert!(single_controller_error.contains("only one was detected"));
+		let single_controller_error =
+			validate_controller_count(Mode::FullDuplex, 1, 1).unwrap_err();
+		assert!(single_controller_error.contains("at least two SCO/eSCO slots"));
 		assert!(single_controller_error.contains("--mode half-duplex"));
-		assert!(validate_controller_count(Mode::FullDuplex, 2).is_ok());
-		assert!(validate_controller_count(Mode::HalfDuplex, 1).is_ok());
+		assert!(validate_controller_count(Mode::FullDuplex, 2, 1).is_ok());
+		assert!(validate_controller_count(Mode::HalfDuplex, 1, 1).is_ok());
 		let mut command = Cli::command();
 		let help = command
 			.find_subcommand_mut("run")

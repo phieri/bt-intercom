@@ -280,6 +280,10 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 		}
 	}
 
+	pub fn set_sco_limit(&mut self, limit: usize) {
+		self.coordinator.set_sco_limit(limit);
+	}
+
 	pub fn transport_devices(&mut self) -> Result<BTreeMap<String, transport::Device>, String> {
 		let snapshot = self.snapshot()?;
 		snapshot.transport_devices(&self.allowed)
@@ -617,6 +621,9 @@ mod tests {
 				.unwrap_err()
 				.contains("capacity conflict")
 		);
+		router.set_sco_limit(2);
+		assert!(router.prepare_transport(&allowed()).unwrap());
+		router.set_sco_limit(1);
 		server.objects.borrow_mut()[6]["info"]["params"]["EnumProfile"][1]["available"] =
 			json!("no");
 		assert!(

@@ -16,6 +16,7 @@ pub(crate) struct RunOptions {
 	pub addresses: Vec<String>,
 	pub interval: f64,
 	pub connect: bool,
+	pub sco_limit: usize,
 	pub pair_button: bool,
 	pub buttons: Vec<PttButton>,
 	pub mode: Mode,
@@ -27,6 +28,7 @@ pub(crate) struct RunConfig {
 	pub allowed: BTreeSet<String>,
 	pub interval: Duration,
 	pub connect: bool,
+	pub sco_limit: usize,
 	pub pair_button: bool,
 	pub buttons: Vec<PttButton>,
 	pub mode: Mode,
@@ -49,6 +51,9 @@ impl RunConfig {
 		network_path: PathBuf,
 	) -> Result<Self, String> {
 		validate_transport(options.mode, options.transport)?;
+		if options.sco_limit == 0 {
+			return Err("--sco-limit must be at least 1".into());
+		}
 		let interval = Duration::from_secs_f64(parse_interval(&options.interval.to_string())?);
 		if options.dashboard && !interactive {
 			return Err("--dashboard requires an interactive terminal on stderr".into());
@@ -81,6 +86,7 @@ impl RunConfig {
 			allowed,
 			interval,
 			connect: options.connect,
+			sco_limit: options.sco_limit,
 			pair_button: options.pair_button,
 			buttons: options.buttons,
 			mode: options.mode,
@@ -133,6 +139,7 @@ mod tests {
 			addresses: vec![A.into()],
 			interval: 2.0,
 			connect: false,
+			sco_limit: 1,
 			pair_button: false,
 			buttons: vec![],
 			mode: Mode::FullDuplex,
@@ -146,7 +153,7 @@ mod tests {
 		let fixture = Fixture::new();
 		let path = fixture.network();
 		network::save(&path, &[B.into()].into()).unwrap();
-		for invalid in 0..8 {
+		for invalid in 0..9 {
 			let mut options = options();
 			match invalid {
 				0 => options.transport = Transport::ScoA2dp,
@@ -173,6 +180,7 @@ mod tests {
 						path: "input".into(),
 					}];
 				}
+				8 => options.sco_limit = 0,
 				_ => unreachable!(),
 			}
 			assert!(RunConfig::resolve_at(options, false, path.clone()).is_err());
