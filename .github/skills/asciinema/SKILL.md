@@ -1,12 +1,12 @@
 ---
 name: asciinema
-description: Create and edit asciicast v3 recordings, especially the bt-intercom terminal tour in docs/demo.cast.
+description: Create and edit asciicast v3 recordings.
 ---
 
 # Creating and editing asciinema recordings
 
 Use this skill when creating or updating `.cast` recordings. Preserve the
-recording's existing asciicast v3 JSONL format and follow the target file's event
+recording's existing asciicast v3 JSON format and follow the target file's event
 style rather than replacing it with a different recording pattern.
 
 ## Event format and typing
@@ -14,14 +14,15 @@ style rather than replacing it with a different recording pattern.
 - Keep the first line as the v3 header with the intended terminal dimensions.
 - Each following line is one JSON event: elapsed time, event type (`i` for input
   or `o` for output), and text.
-- Simulate typing with short input chunks, usually around 3–5 characters each.
+- Simulate typing with short input chunks, usually around 2–4 characters each.
   Put each `i` event immediately before its matching `o` terminal echo event.
   Do not group all input chunks together and put one full-command echo afterward.
+- Input adresses like IP or MAC in one chunk to simulate copy-and-paste.
 - Echo exactly what the terminal would display for each chunk. In this repository,
   an entered carriage return (`\r`) is echoed as a newline (`\r\n`). Preserve
   backslash continuations and their following spaces in multi-line commands.
 - Keep a visible pause between input chunks so the player presents deliberate
-  typing, not a command pasted at speed. For `docs/demo.cast`, use about `0.12`
+  typing, not a command pasted at speed. For `docs/demo.cast`, use about `0.15`
   seconds per short input chunk; do not reduce existing pauses or shorten
   non-input events unless specifically requested.
 - Make command output and dashboard states plausible and consistent with the
