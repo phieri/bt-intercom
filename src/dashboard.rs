@@ -415,6 +415,6 @@ mod tests {
 			)
 			.unwrap();
 		let text = String::from_utf8(output).unwrap();
-		assert!(text.contains("Alex's headset    AA:BB:CC:DD:EE:01"));
+		assert!(text.contains("Alex's headset     AA:BB:CC:DD:EE:01"));
 	}
 }
