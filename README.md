@@ -285,10 +285,10 @@ WirePlumber start in that user's session. Inspect pairing logs with
 
 ### Terminal control panel and talk groups
 
-Start the Ratatui control panel after saving a headset network:
+Start the terminal control panel after saving a headset network:
 
 ```sh
-bt-intercom tui
+bt-intercom panel
 ```
 
 The panel shows Bluetooth connection and signal status plus PipeWire duplex

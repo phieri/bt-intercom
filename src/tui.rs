@@ -426,7 +426,7 @@ impl Drop for TerminalRestore {
 
 pub fn run(allowed: BTreeSet<String>, groups_path: PathBuf) -> Result<(), String> {
 	if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-		return Err("the TUI requires an interactive terminal".into());
+		return Err("the control panel requires an interactive terminal".into());
 	}
 	let mut app = ControlPanel::new(allowed, groups_path)?;
 	let mut terminal = ratatui::try_init().map_err(|error| error.to_string())?;

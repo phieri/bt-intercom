@@ -169,8 +169,8 @@ enum CliCommand {
 		#[arg(value_enum)]
 		shell: Shell,
 	},
-	/// Open the terminal headset and talk-group control panel.
-	Tui,
+	/// Open the interactive terminal control panel.
+	Panel,
 }
 
 /// Opens an interactive BlueZ agent session to pair the specified device.
@@ -562,7 +562,7 @@ fn reconnect_worker(
 /// Executes one CLI action, including the main polling and routing loop.
 fn run(action: CliCommand) -> Result<(), String> {
 	match action {
-		CliCommand::Tui => {
+		CliCommand::Panel => {
 			let network_path = headset_network_path()?;
 			let allowed = load_headsets(&network_path)?;
 			tui::run(allowed, talk_groups_path(&network_path)?)?;
@@ -1160,6 +1160,17 @@ mod tests {
 		for shell in ["bash", "zsh", "fish", "elvish"] {
 			assert!(Cli::try_parse_from(["bt-intercom", "completions", shell]).is_ok());
 		}
+	}
+
+	#[test]
+	fn terminal_control_panel_uses_panel_subcommand() {
+		assert!(matches!(
+			Cli::try_parse_from(["bt-intercom", "panel"])
+				.unwrap()
+				.command,
+			CliCommand::Panel
+		));
+		assert!(Cli::try_parse_from(["bt-intercom", "tui"]).is_err());
 	}
 
 	#[test]
