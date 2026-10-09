@@ -14,10 +14,11 @@ style rather than replacing it with a different recording pattern.
 - Keep the first line as the v3 header with the intended terminal dimensions.
 - Each following line is one JSON event: elapsed time, event type (`i` for input
   or `o` for output), and text.
-- Simulate typing with short input chunks, usually around 2–4 characters each.
+- Simulate typing with short input chunks, usually 3 characters each.
   Put each `i` event immediately before its matching `o` terminal echo event.
   Do not group all input chunks together and put one full-command echo afterward.
-- Input adresses like IP or MAC in one chunk to simulate copy-and-paste.
+- Print adresses like IP or MAC in one chunk to simulate copy-and-paste.
+  Add a bit of extra pause around these.
 - Echo exactly what the terminal would display for each chunk. In this repository,
   an entered carriage return (`\r`) is echoed as a newline (`\r\n`). Preserve
   backslash continuations and their following spaces in multi-line commands.
@@ -27,7 +28,7 @@ style rather than replacing it with a different recording pattern.
   non-input events unless specifically requested.
 - Make command output and dashboard states plausible and consistent with the
   current CLI and README. When recording CLI help, verify it against the current
-  binary rather than relying on an older recording.
+  program source code rather than relying on an older recording.
 
 ## Editing and validation
 
