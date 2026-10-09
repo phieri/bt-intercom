@@ -81,7 +81,7 @@ impl Dashboard {
 		)?;
 		writeln!(
 			output,
-			"HEADSET NAME             ADDRESS             CONNECTED  DUPLEX  TX/RX LINKS  SIGNAL"
+			"HEADSET NAME       ADDRESS             CONNECTED  DUPLEX  TX/RX LINKS  SIGNAL"
 		)?;
 		for address in allowed {
 			let bluetooth = self.state.get(address);
@@ -112,12 +112,12 @@ impl Dashboard {
 				);
 			writeln!(
 				output,
-				"{:<24} {address}  {:<9}  {:<6}  {tx:>2}/{rx:<2}         {signal}",
+				"{:<18} {address}  {:<9}  {:<6}  {tx:>2}/{rx:<2}         {signal}",
 				bluetooth
 					.and_then(|info| info.name.as_deref())
 					.unwrap_or("—")
 					.chars()
-					.take(24)
+					.take(18)
 					.collect::<String>(),
 				status(bluetooth.and_then(|info| info.connected)),
 				status(headset.map(Headset::has_duplex_audio))
@@ -242,7 +242,7 @@ mod tests {
 		let text = String::from_utf8(output).unwrap();
 		assert!(!text.contains('\u{1b}'));
 		assert!(text.contains("half-duplex | muted | 0 owned active links"));
-		assert!(text.contains("HEADSET NAME             ADDRESS             CONNECTED"));
+		assert!(text.contains("HEADSET NAME       ADDRESS             CONNECTED"));
 		assert!(!text.contains("PAIRED"));
 		assert!(text.contains("AA:BB:CC:DD:EE:01  ?"));
 		assert!(text.contains("no"));
@@ -415,6 +415,6 @@ mod tests {
 			)
 			.unwrap();
 		let text = String::from_utf8(output).unwrap();
-		assert!(text.contains("Alex's headset           AA:BB:CC:DD:EE:01"));
+		assert!(text.contains("Alex's headset    AA:BB:CC:DD:EE:01"));
 	}
 }
