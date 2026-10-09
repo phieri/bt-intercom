@@ -22,6 +22,6 @@ document.addEventListener("DOMContentLoaded", () => {
   if (window.AsciinemaPlayer) {
     const container = document.getElementById("player");
     container.replaceChildren();
-    AsciinemaPlayer.create("demo.cast", container, { fit: "width", cols: 86, rows: 18, loop: 3, poster: 'npt:0:16'});
+    AsciinemaPlayer.create("demo.cast", container, { fit: "width", cols: 86, rows: 18, loop: 3, poster: 'npt:0:9.5'});
   }
 });
