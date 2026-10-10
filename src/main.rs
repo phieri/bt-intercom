@@ -125,7 +125,7 @@ enum CliCommand {
 		#[arg(required = true, value_parser = address)]
 		addresses: Vec<String>,
 	},
-	/// Route configured headset microphones to one another.
+	/// Route configured headset microphones to one another, optionally showing the live dashboard.
 	Run {
 		#[arg(value_parser = address)]
 		addresses: Vec<String>,
@@ -1219,6 +1219,13 @@ mod tests {
 		assert_eq!(short, legacy_short);
 		assert!(short.contains(env!("CARGO_PKG_VERSION")));
 		assert!(short.contains(env!("BT_INTERCOM_BUILD_DATETIME")));
+	}
+
+	#[test]
+	fn top_level_help_mentions_dashboard_and_control_panel() {
+		let help = cli_command().render_help().to_string();
+		assert!(help.contains("dashboard"));
+		assert!(help.contains("control panel"));
 	}
 
 	#[test]
