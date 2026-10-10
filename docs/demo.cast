@@ -12,7 +12,7 @@
 [0.0,"o","--h"]
 [0.15,"i","elp\r"]
 [0.0,"o","elp\r\n"]
-[0.25,"o","A Bluetooth headset intercom for Linux\r\n\r\nUsage: bt-intercom [OPTIONS] <COMMAND>\r\n\r\nCommands:\r\n  scan         Scan for nearby Bluetooth devices\r\n  pair         Pair, trust, and connect a headset\r\n  remove       Remove a headset from the saved intercom network\r\n  status       Show Bluetooth headset audio status\r\n  run          Route configured headset microphones to one another\r\n  completions  Generate shell completion definitions\r\n  panel        Open the interactive terminal control panel\r\n  help         Print this message or the help of the given subcommand(s)\r\n\r\nOptions:\r\n      --verbose  Enable detailed diagnostics on stderr (unless RUST_LOG is set)\r\n  -V, --version  \r\n  -h, --help     Print help\r\n"]
+[0.25,"o","A Bluetooth headset intercom for Linux\r\n\r\nUsage: bt-intercom [OPTIONS] <COMMAND>\r\n\r\nCommands:\r\n  scan         Scan for nearby Bluetooth devices\r\n  pair         Pair, trust, and connect a headset\r\n  remove       Remove a headset from the saved intercom network\r\n  status       Show Bluetooth headset audio status\r\n  run          Route configured headset microphones to one another, optionally showing the live dashboard\r\n  completions  Generate shell completion definitions\r\n  panel        Open the interactive terminal control panel\r\n  help         Print this message or the help of the given subcommand(s)\r\n\r\nOptions:\r\n      --verbose  Enable detailed diagnostics on stderr (unless RUST_LOG is set)\r\n  -V, --version  \r\n  -h, --help     Print help\r\n"]
 [0.5,"o","$ "]
 [0.15,"i","bt-"]
 [0.0,"o","bt-"]
