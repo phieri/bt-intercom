@@ -17,9 +17,10 @@ Use this skill when creating, editing, or validating `.cast` recordings. Preserv
 ## Terminal Simulation & Typing Rhythm
 
 - **Simulate realistic typing:** Use short input chunks (usually around 3 characters each). Put each `i` event immediately before its matching `o` terminal echo event. Do not group all input chunks together and put one full-command echo afterward.
-- **Copy-and-paste handling:** Print addresses like IP or MAC in a single chunk to simulate copy-and-paste, and add a bit of extra pause around these events.
+- **Copy-and-paste handling:** Print addresses like IP or MAC in a single chunk to simulate copy-and-paste, and add a bit of extra pause around these events to represent the copying.
 - **Carriage returns & continuations:** Echo exactly what the terminal would display for each chunk. An entered carriage return (`\r`) is echoed as a newline (`\r\n`). Preserve backslash continuations and their following spaces in multi-line commands.
 - **Pacing:** Keep a visible pause between input chunks so the player presents deliberate typing, not a command pasted at speed. For `docs/demo.cast`, use about `0.15` seconds per short input chunk; do not reduce existing pauses or shorten non-input events unless specifically requested.
+- **Pauses:** Linger for 0.85 second on the empty shell to give the viewer some air.
 - **Content Accuracy:** Make command output and dashboard states plausible and consistent with the current CLI and README. When recording CLI help, verify it against the current program source code rather than relying on an older recording.
 
 ## Editing & Validation Workflow
