@@ -46,9 +46,18 @@ impl RunConfig {
 	}
 
 	fn resolve_at(
+		options: RunOptions,
+		interactive: bool,
+		network_path: PathBuf,
+	) -> Result<Self, String> {
+		Self::resolve_at_with_ptt(options, interactive, network_path, crate::ptt_discovery::resolve_pending)
+	}
+
+	fn resolve_at_with_ptt(
 		mut options: RunOptions,
 		interactive: bool,
 		network_path: PathBuf,
+		resolve_ptt: impl FnOnce(&mut Vec<PttButton>, &BTreeSet<String>) -> Result<(), String>,
 	) -> Result<Self, String> {
 		validate_transport(options.mode, options.transport)?;
 		if options.sco_limit == 0 {
@@ -72,7 +81,13 @@ impl RunConfig {
 		} else {
 			network::load_for_run(&network_path, options.pair_button)?
 		};
-		crate::ptt_discovery::resolve_pending(&mut options.buttons, &allowed)?;
+		if !options.pair_button && options.buttons.is_empty() {
+			options.buttons.push(PttButton {
+				address: crate::ptt_discovery::AUTO.into(),
+				path: crate::ptt_discovery::AUTO.into(),
+			});
+		}
+		resolve_ptt(&mut options.buttons, &allowed)?;
 		for button in &mut options.buttons {
 			button.address = address(&button.address)?;
 			if button.path.is_empty() {
@@ -141,7 +156,10 @@ mod tests {
 			connect: false,
 			sco_limit: 1,
 			pair_button: false,
-			buttons: vec![],
+			buttons: vec![PttButton {
+				address: A.into(),
+				path: "input".into(),
+			}],
 			mode: Mode::FullDuplex,
 			transport: Transport::Hfp,
 			dashboard: false,
@@ -232,7 +250,17 @@ mod tests {
 		let mut enrollment = options();
 		enrollment.addresses.clear();
 		enrollment.pair_button = true;
-		let config = RunConfig::resolve_at(enrollment, true, path.clone()).unwrap();
+		enrollment.buttons.clear();
+		let config = RunConfig::resolve_at_with_ptt(
+			enrollment,
+			true,
+			path.clone(),
+			|buttons, _| {
+				assert!(buttons.is_empty());
+				Ok(())
+			},
+		)
+		.unwrap();
 		assert!(config.allowed.is_empty());
 		assert!(!path.exists());
 		network::save(&path, &[A.into(), B.into()].into()).unwrap();
@@ -244,5 +272,36 @@ mod tests {
 		}];
 		assert!(RunConfig::resolve_at(saved, true, path.clone()).is_err());
 		assert_eq!(network::load(&path).unwrap().len(), 2);
+	}
+
+	#[test]
+	fn missing_ptt_mappings_default_to_automatic_discovery() {
+		let fixture = Fixture::new();
+		let mut options = options();
+		options.addresses = vec![A.into(), B.into()];
+		options.buttons.clear();
+		let config = RunConfig::resolve_at_with_ptt(
+			options,
+			true,
+			fixture.network(),
+			|buttons, allowed| {
+				assert_eq!(
+					buttons,
+					&[PttButton {
+						address: crate::ptt_discovery::AUTO.into(),
+						path: crate::ptt_discovery::AUTO.into(),
+					}]
+				);
+				buttons.clear();
+				buttons.extend(allowed.iter().map(|address| PttButton {
+					address: address.clone(),
+					path: "input".into(),
+				}));
+				Ok(())
+			},
+		)
+		.unwrap();
+		assert_eq!(config.buttons.len(), 2);
+		assert!(config.buttons.iter().all(|button| button.path == "input"));
 	}
 }

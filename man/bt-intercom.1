@@ -69,8 +69,9 @@ bluetoothctl session.
 Enable a Raspberry Pi headless pairing button on BCM GPIO17 (physical pin 11).
 With power off, wire a normally-open momentary button between pin 11 and GND
 (physical pin 9). The input uses the internal 3.3 V pull-up; never connect 5 V.
-Requires full-duplex without --ptt, GPIO device permissions for the PipeWire
-user, and a powered Bluetooth controller. Do not run with sudo.
+Skips automatic PTT discovery and requires full-duplex without --ptt, GPIO
+device permissions for the PipeWire user, and a powered Bluetooth controller.
+Do not run with sudo.
 .PP
 Put only the intended headset in pairing mode, then press and release the button.
 A debounced press scans Bluetooth Classic for 15 seconds and pairs exactly one
@@ -111,9 +112,11 @@ pairing. Extra adapters do not redistribute existing bonds. Auracast requires
 separate LE Audio broadcast hardware and software support and is not implemented.
 .TP
 .BI run " --ptt ADDRESS=/dev/input/eventX"
-Map a headset to its Linux evdev push-to-talk input. Repeat once for every
-configured headset. Only the headset's play/pause key press and release events
-are used.
+Override the default automatic matching of play/pause input devices by mapping
+a headset to its Linux evdev push-to-talk input. Repeat once for every configured
+headset. Only the headset's play/pause key press and release events are used.
+The headset must be connected when run starts; startup fails if its input device
+cannot be matched uniquely.
 .PP
 Hold play/pause to talk in PTT mode; release to mute. In half-duplex, requests
 wait in first-in, first-out order while another headset transmits. Keep holding
@@ -124,10 +127,11 @@ floor in each; with no groups configured, all headsets share one queue.
 Half-duplex routing failures stop the run and release owned links. External
 links remain untouched; exclusivity applies only to this process's routes.
 .PP
-In full-duplex, mapped headsets start in PTT mode. Press play/pause three times
-within one second to toggle that headset independently between PTT and
-always-open. Choices reset when the process exits or that headset loses duplex
-audio. Without mappings, full-duplex starts with all microphones open.
+In full-duplex, automatically matched or explicitly mapped headsets start in
+PTT mode. Press play/pause three times within one second to toggle that headset
+independently between PTT and always-open. Choices reset when the process exits
+or that headset loses duplex audio. With --pair-button, automatic matching is
+skipped and full-duplex starts with all microphones open.
 Losing duplex audio resets a mapped headset's request and always-open choice;
 release and press again after reconnecting.
 .TP
