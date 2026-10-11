@@ -144,7 +144,8 @@ enum CliCommand {
 		#[arg(long, conflicts_with = "ptt")]
 		pair_button: bool,
 		/// Map a headset address to an evdev input path; repeat once per headset.
-		/// Use ADDRESS=auto, or a lone `auto`, to find connected headsets' buttons.
+		/// Defaults to matching every headset automatically. Use ADDRESS=auto, or a
+		/// lone `auto`, to request automatic discovery explicitly.
 		#[arg(long, value_name = "ADDRESS=/dev/input/eventX|auto", value_parser = parse_ptt_binding)]
 		ptt: Vec<PttButton>,
 		/// Transmit policy. Half-duplex requires --ptt for every headset:
@@ -152,7 +153,7 @@ enum CliCommand {
 		/// Full-duplex mappings start in PTT; three play/pause presses within
 		/// 1 second (first to third, inclusive; release between presses) toggle
 		/// that headset independently between PTT and always open.
-		/// Without mappings full-duplex is always open. Disconnected mapped
+		/// Without active mappings full-duplex is always open. Disconnected mapped
 		/// headsets reset to PTT and require a fresh press after reconnection.
 		#[arg(long, value_enum, default_value_t = Mode::FullDuplex)]
 		mode: Mode,

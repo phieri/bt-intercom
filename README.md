@@ -4,11 +4,11 @@ A local Bluetooth Classic intercom with selectable half-duplex and full-duplex
 modes for two or more headsets on Linux. BlueZ manages Bluetooth; PipeWire and
 WirePlumber provide headset audio. Each headset microphone routes to other
 configured headsets in its talk groups, never back to itself. With no talk groups
-configured, all headsets share the original all-to-all intercom. By default all
-microphones are live; optional push-to-talk (PTT) keeps them muted until a
-headset button is held. Half-duplex queues talk requests and allows only one
-headset microphone per talk group at a time. Friends or coworkers can pair their
-headsets with the same Linux host to join the conversation.
+configured, all headsets share the original all-to-all intercom. By default, bt-intercom automatically matches each headset's play/pause button
+and keeps its microphone muted until the button is held. Half-duplex queues talk
+requests and allows only one headset microphone per talk group at a time. Friends
+or coworkers can pair their headsets with the same Linux host to join the
+conversation.
 
 [Watch the illustrative CLI demo](https://phieri.github.io/bt-intercom/).
 For headset wearers, see the [headset user briefing](https://phieri.github.io/bt-intercom/slides.html).
@@ -218,7 +218,8 @@ back to the system temporary directory otherwise; it is removed during shutdown.
 ### Raspberry Pi headless pairing button
 
 On a supported Raspberry Pi, `run --pair-button` enables a normally-open
-momentary button on **BCM GPIO17, physical header pin 11**. With the Pi powered
+momentary button on **BCM GPIO17, physical header pin 11**. It skips automatic
+PTT matching and leaves full-duplex microphones open. With the Pi powered
 off, wire the button between pin 11 and **GND, physical pin 9**. The input uses
 the internal 3.3 V pull-up, so pressing the button pulls it low; no external
 pull-up is needed. Never connect it to 5 V. Reserve GPIO17 for this button;
@@ -306,12 +307,14 @@ standard CLI and cross-compiled packages.
 ### Duplex modes and push-to-talk
 
 Select `--mode full-duplex` (the default) or `--mode half-duplex` on `run`.
-Full-duplex without button mappings starts with every microphone always open.
-With mappings, each headset starts in PTT mode; its user can independently switch
-between PTT and always-open by pressing the play/pause button three times within
-one second. Switching back to PTT mutes the microphone when the button is
+Unless `--pair-button` is enabled, `run` automatically matches a play/pause input
+device for each configured headset and starts each microphone in PTT mode. The
+headsets must be connected when `run` starts; startup fails if an input device
+cannot be matched uniquely. In full-duplex, each headset can independently
+switch between PTT and always-open by pressing the play/pause button three times
+within one second. Switching back to PTT mutes the microphone when the button is
 released. These choices reset when the process exits or that headset loses
-duplex audio.
+duplex audio. `--pair-button` skips automatic PTT matching.
 
 Map each headset to its own Linux input event device. PTT listens only for
 `KEY_PLAYPAUSE` press/release events (code 164), not call/answer buttons or
@@ -323,11 +326,10 @@ bt-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 \
   --ptt AA:BB:CC:DD:EE:02=/dev/input/event5
 ```
 
-Instead of looking up event numbers, use `--ptt auto` to match every listed
-headset, or `--ptt AA:BB:CC:DD:EE:01=auto` for one. The kernel labels each
-headset's button device with its Bluetooth address; the headset must be
-connected when `run` starts. Startup fails if no device, or more than one,
-matches.
+Automatic matching is the default. To override it, provide an event path for
+each headset as shown above. You can also use `--ptt auto` to request matching
+explicitly for every listed headset, or `--ptt AA:BB:CC:DD:EE:01=auto` for one.
+The kernel labels each headset's button device with its Bluetooth address.
 
 In PTT mode, hold a headset's play/pause button to transmit from its microphone;
 release to mute it. A double beep confirms when its microphone route is active.
