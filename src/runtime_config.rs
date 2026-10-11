@@ -50,7 +50,12 @@ impl RunConfig {
 		interactive: bool,
 		network_path: PathBuf,
 	) -> Result<Self, String> {
-		Self::resolve_at_with_ptt(options, interactive, network_path, crate::ptt_discovery::resolve_pending)
+		Self::resolve_at_with_ptt(
+			options,
+			interactive,
+			network_path,
+			crate::ptt_discovery::resolve_pending,
+		)
 	}
 
 	fn resolve_at_with_ptt(
@@ -251,16 +256,12 @@ mod tests {
 		enrollment.addresses.clear();
 		enrollment.pair_button = true;
 		enrollment.buttons.clear();
-		let config = RunConfig::resolve_at_with_ptt(
-			enrollment,
-			true,
-			path.clone(),
-			|buttons, _| {
+		let config =
+			RunConfig::resolve_at_with_ptt(enrollment, true, path.clone(), |buttons, _| {
 				assert!(buttons.is_empty());
 				Ok(())
-			},
-		)
-		.unwrap();
+			})
+			.unwrap();
 		assert!(config.allowed.is_empty());
 		assert!(!path.exists());
 		network::save(&path, &[A.into(), B.into()].into()).unwrap();
@@ -280,11 +281,8 @@ mod tests {
 		let mut options = options();
 		options.addresses = vec![A.into(), B.into()];
 		options.buttons.clear();
-		let config = RunConfig::resolve_at_with_ptt(
-			options,
-			true,
-			fixture.network(),
-			|buttons, allowed| {
+		let config =
+			RunConfig::resolve_at_with_ptt(options, true, fixture.network(), |buttons, allowed| {
 				assert_eq!(
 					buttons,
 					&[PttButton {
@@ -298,9 +296,8 @@ mod tests {
 					path: "input".into(),
 				}));
 				Ok(())
-			},
-		)
-		.unwrap();
+			})
+			.unwrap();
 		assert_eq!(config.buttons.len(), 2);
 		assert!(config.buttons.iter().all(|button| button.path == "input"));
 	}
