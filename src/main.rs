@@ -27,7 +27,7 @@ mod worker;
 
 mod tui;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 #[cfg(test)]
 use std::env;
 #[cfg(test)]
@@ -48,11 +48,13 @@ use std::time::Duration;
 #[cfg(test)]
 use std::time::Instant;
 
-use bluez::{bluetooth_name, device_flag, normalize_address};
+use bluez::{bluetooth_name, device_flag, parse_address};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use clap_complete::Shell;
 use groups::config_path as talk_groups_path;
-use network::{headset_path as headset_network_path, load as load_headsets, remove as remove_headset};
+use network::{
+	headset_path as headset_network_path, load as load_headsets, remove as remove_headset,
+};
 #[cfg(test)]
 use network::{load_for_run as load_run_headsets, save as save_headsets};
 use process::{COMMAND_TIMEOUT, command};
@@ -60,14 +62,11 @@ use process::{COMMAND_TIMEOUT, command};
 use ptt::KEY_PLAYPAUSE;
 use ptt::PttButton;
 use router::Router;
-#[cfg(test)]
-use router::Headset;
-#[cfg(test)]
-use routing_status::RoutingStatus;
+use runtime_config::parse_interval;
+use transmit::Mode;
 #[cfg(test)]
 use transmit::Transmit;
-use runtime_config::parse_interval;
-use transport::{Mode, Transport};
+use transport::Transport;
 
 #[derive(Parser)]
 #[command(
@@ -117,22 +116,22 @@ enum CliCommand {
 	},
 	/// Pair, trust, and connect a headset.
 	Pair {
-		#[arg(value_parser = address)]
+		#[arg(value_parser = parse_address)]
 		address: String,
 	},
 	/// Remove a headset from the saved intercom network.
 	Remove {
-		#[arg(value_parser = address)]
+		#[arg(value_parser = parse_address)]
 		address: String,
 	},
 	/// Show Bluetooth headset audio status.
 	Status {
-		#[arg(required = true, value_parser = address)]
+		#[arg(required = true, value_parser = parse_address)]
 		addresses: Vec<String>,
 	},
 	/// Route configured headset microphones to one another, optionally showing the live dashboard.
 	Run {
-		#[arg(value_parser = address)]
+		#[arg(value_parser = parse_address)]
 		addresses: Vec<String>,
 		/// Routing update interval in seconds.
 		#[arg(long, default_value_t = 2.0, value_parser = parse_interval)]
@@ -199,12 +198,6 @@ fn pair_command(device: &str) -> Result<(), String> {
 	}
 }
 
-/// Validates and normalizes a Bluetooth MAC address.
-fn address(value: &str) -> Result<String, String> {
-	normalize_address(value)
-		.ok_or_else(|| format!("expected a Bluetooth MAC address (XX:XX:XX:XX:XX:XX): {value}"))
-}
-
 fn parse_sco_limit(value: &str) -> Result<usize, String> {
 	let limit = value
 		.parse::<usize>()
@@ -229,7 +222,7 @@ fn parse_ptt_binding(value: &str) -> Result<PttButton, String> {
 		return Err("--ptt requires an input device path".into());
 	}
 	Ok(PttButton {
-		address: address(device)?,
+		address: parse_address(device)?,
 		path: path.into(),
 	})
 }
@@ -239,7 +232,7 @@ fn addresses(args: &[String]) -> Result<BTreeSet<String>, String> {
 	if args.is_empty() {
 		return Err("at least one Bluetooth address is required".into());
 	}
-	args.iter().map(|value| address(value)).collect()
+	args.iter().map(|value| parse_address(value)).collect()
 }
 
 /// Executes one CLI action, including the main polling and routing loop.
@@ -539,8 +532,11 @@ mod tests {
 
 	#[test]
 	fn validates_address_before_invoking_commands() {
-		assert!(address("invalid; rm -rf /").is_err());
-		assert_eq!(address("aa:bb:cc:dd:ee:ff").unwrap(), "AA:BB:CC:DD:EE:FF");
+		assert!(parse_address("invalid; rm -rf /").is_err());
+		assert_eq!(
+			parse_address("aa:bb:cc:dd:ee:ff").unwrap(),
+			"AA:BB:CC:DD:EE:FF"
+		);
 	}
 
 	#[test]
@@ -1134,7 +1130,10 @@ mod tests {
 		assert!(transmit.pending.is_empty());
 		assert!(!drain_events(&input, &mut transmit).unwrap());
 		sender.send(Err("lost input".into())).unwrap();
-		assert_eq!(drain_events(&input, &mut transmit), Err("lost input".into()));
+		assert_eq!(
+			drain_events(&input, &mut transmit),
+			Err("lost input".into())
+		);
 	}
 
 	#[test]

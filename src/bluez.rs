@@ -32,6 +32,11 @@ pub(crate) fn normalize_address(value: &str) -> Option<String> {
 	Some(value.to_ascii_uppercase())
 }
 
+pub(crate) fn parse_address(value: &str) -> Result<String, String> {
+	normalize_address(value)
+		.ok_or_else(|| format!("expected a Bluetooth MAC address (XX:XX:XX:XX:XX:XX): {value}"))
+}
+
 pub(crate) fn controller_addresses(info: &str) -> std::collections::BTreeSet<String> {
 	info.lines()
 		.filter_map(|line| {

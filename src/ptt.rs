@@ -177,11 +177,7 @@ pub(crate) fn drain_events(
 }
 
 #[cfg(test)]
-pub(crate) fn read_input_events<R: Read>(
-	input: R,
-	address: String,
-	sender: Sender<PttEvent>,
-) {
+pub(crate) fn read_input_events<R: Read>(input: R, address: String, sender: Sender<PttEvent>) {
 	let (_wake, receiver) = mpsc::channel();
 	read_events(input, address, sender, &AtomicBool::new(false), &receiver);
 }

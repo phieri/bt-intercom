@@ -72,9 +72,7 @@ fn allocate_floors(
 		}
 
 		let controller_sources = reserved.entry(controller).or_default();
-		if !controller_sources.contains(address.as_str())
-			&& controller_sources.len() >= sco_limit
-		{
+		if !controller_sources.contains(address.as_str()) && controller_sources.len() >= sco_limit {
 			continue;
 		}
 		controller_sources.insert(address);
@@ -99,9 +97,7 @@ fn allocate_floors(
 		}
 
 		let controller_sources = reserved.entry(controller).or_default();
-		if !controller_sources.contains(address.as_str())
-			&& controller_sources.len() >= sco_limit
-		{
+		if !controller_sources.contains(address.as_str()) && controller_sources.len() >= sco_limit {
 			continue;
 		}
 		for group in candidate_groups {
@@ -332,14 +328,26 @@ mod tests {
 		]);
 
 		assert_eq!(
-			allocate_floors(&candidates, &previous, &request_order, Some(&controllers), 2),
+			allocate_floors(
+				&candidates,
+				&previous,
+				&request_order,
+				Some(&controllers),
+				2
+			),
 			BTreeMap::from([
 				(Some("Alpha".into()), set(&["a"])),
 				(Some("Zulu".into()), set(&["c"])),
 			])
 		);
 		assert_eq!(
-			allocate_floors(&candidates, &GroupSources::new(), &request_order, Some(&controllers), 1),
+			allocate_floors(
+				&candidates,
+				&GroupSources::new(),
+				&request_order,
+				Some(&controllers),
+				1
+			),
 			BTreeMap::from([(Some("Alpha".into()), set(&["a"]))])
 		);
 	}

@@ -14,21 +14,20 @@ use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
 
+use crate::bluez;
 use crate::dashboard::{Dashboard, RunStatus};
 use crate::groups;
 use crate::network;
 use crate::pair_button::PairButton;
 use crate::process::{COMMAND_TIMEOUT, command_cancellable};
 use crate::ptt::{
-	PttBeep, PttButton, PreparedInputs, PttInput, confirm_connections, confirm_transmissions,
-	drain_events,
+	PreparedInputs, PttBeep, PttInput, confirm_connections, confirm_transmissions, drain_events,
 };
 use crate::router::{Headset, Router};
 use crate::runtime_config::RunConfig;
 use crate::transmit::{Mode, Transmit};
 use crate::transport::{self, Transport};
 use crate::worker::Worker;
-use crate::bluez;
 
 type Execute = Box<dyn FnMut(&[&str]) -> Result<String, String>>;
 
@@ -532,6 +531,7 @@ impl Drop for Session {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::ptt::PttButton;
 	use std::sync::mpsc;
 
 	fn config() -> RunConfig {

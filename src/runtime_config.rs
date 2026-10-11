@@ -128,11 +128,7 @@ impl RunConfig {
 			options
 				.addresses
 				.iter()
-				.map(|value| {
-					crate::bluez::normalize_address(value).ok_or_else(|| {
-						format!("expected a Bluetooth MAC address (XX:XX:XX:XX:XX:XX): {value}")
-					})
-				})
+				.map(|value| crate::bluez::parse_address(value))
 				.collect::<Result<_, _>>()?
 		} else {
 			network::load_for_run(&network_path, options.pair_button)?
@@ -145,7 +141,7 @@ impl RunConfig {
 		}
 		resolve_ptt(&mut options.buttons, &allowed)?;
 		for button in &mut options.buttons {
-			button.address = address(&button.address)?;
+			button.address = crate::bluez::parse_address(&button.address)?;
 			if button.path.is_empty() {
 				return Err("--ptt requires an input device path".into());
 			}
