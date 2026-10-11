@@ -283,13 +283,9 @@ mod tests {
 		options.buttons.clear();
 		let config =
 			RunConfig::resolve_at_with_ptt(options, true, fixture.network(), |buttons, allowed| {
-				assert_eq!(
-					buttons,
-					&[PttButton {
-						address: crate::ptt_discovery::AUTO.into(),
-						path: crate::ptt_discovery::AUTO.into(),
-					}]
-				);
+				assert_eq!(buttons.len(), 1);
+				assert_eq!(buttons[0].address, crate::ptt_discovery::AUTO);
+				assert_eq!(buttons[0].path, crate::ptt_discovery::AUTO);
 				buttons.clear();
 				buttons.extend(allowed.iter().map(|address| PttButton {
 					address: address.clone(),
