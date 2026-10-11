@@ -37,6 +37,85 @@ pub struct Transmit {
 	pub pending: BTreeSet<String>,
 }
 
+type GroupSources = BTreeMap<Option<String>, BTreeSet<String>>;
+
+fn allocate_floors(
+	candidates: &GroupSources,
+	previous: &GroupSources,
+	request_order: &VecDeque<String>,
+	controllers: Option<&BTreeMap<String, String>>,
+	sco_limit: usize,
+) -> GroupSources {
+	let Some(controllers) = controllers else {
+		return candidates.clone();
+	};
+
+	let mut group_sources = GroupSources::new();
+	let mut reserved: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+
+	for address in request_order {
+		let Some(controller) = controllers.get(address).map(String::as_str) else {
+			continue;
+		};
+		let active_groups = candidates
+			.iter()
+			.filter_map(|(group, addresses)| {
+				(addresses.contains(address)
+					&& previous
+						.get(group)
+						.is_some_and(|sources| sources.contains(address)))
+				.then_some(group)
+			})
+			.collect::<Vec<_>>();
+		if active_groups.is_empty() {
+			continue;
+		}
+
+		let controller_sources = reserved.entry(controller).or_default();
+		if !controller_sources.contains(address.as_str())
+			&& controller_sources.len() >= sco_limit
+		{
+			continue;
+		}
+		controller_sources.insert(address);
+		for group in active_groups {
+			group_sources
+				.entry(group.clone())
+				.or_default()
+				.insert(address.clone());
+		}
+	}
+
+	for address in request_order {
+		let Some(controller) = controllers.get(address).map(String::as_str) else {
+			continue;
+		};
+		let candidate_groups = candidates
+			.iter()
+			.filter_map(|(group, addresses)| addresses.contains(address).then_some(group))
+			.collect::<Vec<_>>();
+		if candidate_groups.is_empty() {
+			continue;
+		}
+
+		let controller_sources = reserved.entry(controller).or_default();
+		if !controller_sources.contains(address.as_str())
+			&& controller_sources.len() >= sco_limit
+		{
+			continue;
+		}
+		for group in candidate_groups {
+			group_sources
+				.entry(group.clone())
+				.or_default()
+				.insert(address.clone());
+		}
+		controller_sources.insert(address);
+	}
+
+	group_sources
+}
+
 impl Transmit {
 	pub fn new(mode: Mode, mapped: impl IntoIterator<Item = String>) -> Self {
 		Self {
@@ -152,7 +231,7 @@ impl Transmit {
 	fn refresh(&mut self) {
 		let (next, group_sources) = match self.mode {
 			Mode::HalfDuplex => {
-				let mut group_sources = self
+				let candidates = self
 					.queues
 					.iter()
 					.filter_map(|(group, queue)| {
@@ -161,72 +240,13 @@ impl Transmit {
 							.map(|address| (group.clone(), BTreeSet::from([address.clone()])))
 					})
 					.collect::<BTreeMap<_, _>>();
-				if let Some(controllers) = &self.controllers {
-					let candidates = group_sources;
-					group_sources = BTreeMap::new();
-					let mut reserved: BTreeMap<&String, BTreeSet<&String>> = BTreeMap::new();
-					// Keep existing resource reservations before considering new
-					// floors; lexical group names must not preempt a held source.
-					for address in &self.request_order {
-						let Some(controller) = controllers.get(address) else {
-							continue;
-						};
-						let was_active = candidates.iter().any(|(group, addresses)| {
-							addresses.contains(address)
-								&& self
-									.group_sources
-									.get(group)
-									.is_some_and(|sources| sources.contains(address))
-						});
-						if !was_active {
-							continue;
-						}
-						let controller_sources = reserved.entry(controller).or_default();
-						if !controller_sources.contains(address)
-							&& controller_sources.len() >= self.sco_limit
-						{
-							continue;
-						}
-						controller_sources.insert(address);
-						for (group, addresses) in &candidates {
-							if addresses.contains(address)
-								&& self
-									.group_sources
-									.get(group)
-									.is_some_and(|sources| sources.contains(address))
-							{
-								group_sources
-									.entry(group.clone())
-									.or_default()
-									.insert(address.clone());
-							}
-						}
-					}
-					for address in &self.request_order {
-						let Some(controller) = controllers.get(address) else {
-							continue;
-						};
-						let controller_sources = reserved.entry(controller).or_default();
-						if !controller_sources.contains(address)
-							&& controller_sources.len() >= self.sco_limit
-						{
-							continue;
-						}
-						let mut selected = false;
-						for (group, addresses) in &candidates {
-							if addresses.contains(address) {
-								selected = true;
-								group_sources
-									.entry(group.clone())
-									.or_default()
-									.insert(address.clone());
-							}
-						}
-						if selected {
-							controller_sources.insert(address);
-						}
-					}
-				}
+				let group_sources = allocate_floors(
+					&candidates,
+					&self.group_sources,
+					&self.request_order,
+					self.controllers.as_ref(),
+					self.sco_limit,
+				);
 				let active = group_sources.values().flatten().cloned().collect();
 				(active, group_sources)
 			}
@@ -294,6 +314,55 @@ mod tests {
 
 	fn release(t: &mut Transmit, a: &str, base: Instant, ms: u64) {
 		t.event(a, false, base + Duration::from_millis(ms));
+	}
+
+	#[test]
+	fn floor_allocator_preserves_reservations_before_fifo_candidates() {
+		let candidates = BTreeMap::from([
+			(Some("Zulu".into()), set(&["c"])),
+			(Some("Alpha".into()), set(&["a"])),
+			(Some("Middle".into()), set(&["b"])),
+		]);
+		let previous = BTreeMap::from([(Some("Zulu".into()), set(&["c"]))]);
+		let request_order = VecDeque::from(["a".into(), "b".into(), "c".into()]);
+		let controllers = BTreeMap::from([
+			("a".into(), "hci0".into()),
+			("b".into(), "hci0".into()),
+			("c".into(), "hci0".into()),
+		]);
+
+		assert_eq!(
+			allocate_floors(&candidates, &previous, &request_order, Some(&controllers), 2),
+			BTreeMap::from([
+				(Some("Alpha".into()), set(&["a"])),
+				(Some("Zulu".into()), set(&["c"])),
+			])
+		);
+		assert_eq!(
+			allocate_floors(&candidates, &GroupSources::new(), &request_order, Some(&controllers), 1),
+			BTreeMap::from([(Some("Alpha".into()), set(&["a"]))])
+		);
+	}
+
+	#[test]
+	fn floor_allocator_skips_unmapped_requests_without_using_capacity() {
+		let candidates = BTreeMap::from([
+			(Some("Missing".into()), set(&["m"])),
+			(Some("Mapped".into()), set(&["a"])),
+		]);
+		let request_order = VecDeque::from(["m".into(), "a".into()]);
+		let controllers = BTreeMap::from([("a".into(), "hci0".into())]);
+
+		assert_eq!(
+			allocate_floors(
+				&candidates,
+				&GroupSources::new(),
+				&request_order,
+				Some(&controllers),
+				1
+			),
+			BTreeMap::from([(Some("Mapped".into()), set(&["a"]))])
+		);
 	}
 
 	#[test]

@@ -9,12 +9,75 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::pipewire::{HEADSET_PROFILE, Snapshot};
+use crate::transmit::{Mode, Transmit};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum Transport {
 	#[default]
 	Hfp,
 	ScoA2dp,
+}
+
+pub(crate) fn validate_controller_count(
+	mode: Mode,
+	count: usize,
+	sco_limit: usize,
+) -> Result<(), String> {
+	if mode == Mode::FullDuplex && count > 0 && count.saturating_mul(sco_limit) < 2 {
+		return Err(format!(
+			"full-duplex requires at least two SCO/eSCO slots; detected {count} Bluetooth controller(s) with --sco-limit {sco_limit}. Use a higher verified --sco-limit or --mode half-duplex with --ptt for every headset"
+		));
+	}
+	Ok(())
+}
+
+pub(crate) fn validate_transport(mode: Mode, transport: Transport) -> Result<(), String> {
+	if transport == Transport::ScoA2dp && mode != Mode::HalfDuplex {
+		return Err("--transport sco-a2dp requires --mode half-duplex and --ptt for every headset; use one controller per headset for full-duplex".into());
+	}
+	Ok(())
+}
+
+pub(crate) fn controller_warnings(
+	devices: &BTreeMap<String, Device>,
+	sco_limit: usize,
+) -> Vec<String> {
+	let mut controllers: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+	for (address, device) in devices {
+		controllers
+			.entry(&device.controller)
+			.or_default()
+			.push(address);
+	}
+	controllers
+		.into_iter()
+		.filter(|(_, addresses)| addresses.len() > sco_limit)
+		.map(|(controller, addresses)| {
+			format!(
+				"{} headsets share {controller} ({}), exceeding --sco-limit {sco_limit}. HFP listeners also need SCO/eSCO; verify controller capacity or use --mode half-duplex --transport sco-a2dp with PTT when sharing a radio.",
+				addresses.len(),
+				addresses.join(", ")
+			)
+		})
+		.collect()
+}
+
+pub(crate) fn refresh_transmit_requests(
+	transmit: &mut Transmit,
+	devices: &BTreeMap<String, Device>,
+	disconnected: &BTreeSet<String>,
+) -> bool {
+	let before = transmit.sources().clone();
+	let available: BTreeSet<_> = devices.keys().cloned().collect();
+	transmit.topology(&available.difference(disconnected).cloned().collect());
+	transmit.set_controllers(
+		&devices
+			.iter()
+			.map(|(address, device)| (address.clone(), device.controller.clone()))
+			.collect(),
+	);
+	transmit.topology(&available);
+	before != *transmit.sources()
 }
 
 #[derive(Clone, Debug)]

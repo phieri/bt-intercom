@@ -8,7 +8,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::{KEY_PLAYPAUSE, PttButton};
+use crate::ptt::{KEY_PLAYPAUSE, PttButton};
 
 /// Value accepted in place of an input device path to request discovery.
 pub(crate) const AUTO: &str = "auto";

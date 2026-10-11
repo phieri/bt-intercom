@@ -144,7 +144,7 @@ fn discovered_devices(output: &str) -> BTreeSet<String> {
 		.filter_map(|line| {
 			let mut words = line.split_whitespace();
 			words.find(|word| *word == "Device")?;
-			crate::address(words.next()?).ok()
+			crate::bluez::normalize_address(words.next()?)
 		})
 		.collect()
 }
