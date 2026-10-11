@@ -8,9 +8,56 @@ use std::time::Duration;
 
 use crate::groups::{self, TalkGroup};
 use crate::network;
+use crate::ptt::PttButton;
 use crate::transmit::Mode;
-use crate::transport::Transport;
-use crate::{PttButton, address, parse_interval, validate_mode, validate_transport};
+use crate::transport::{self, Transport};
+
+pub(crate) fn parse_interval(value: &str) -> Result<f64, String> {
+	let interval = value
+		.parse::<f64>()
+		.map_err(|_| "--interval must be a positive finite number")?;
+	if !interval.is_finite() || interval <= 0.0 || interval >= u64::MAX as f64 {
+		return Err("--interval must be a positive finite number".into());
+	}
+	if Duration::from_secs_f64(interval).is_zero() {
+		return Err("--interval must be at least one nanosecond".into());
+	}
+	Ok(interval)
+}
+
+pub(crate) fn validate_ptt(
+	buttons: &[PttButton],
+	allowed: &BTreeSet<String>,
+) -> Result<(), String> {
+	let mut configured = BTreeSet::new();
+	let mut paths = BTreeSet::new();
+	for button in buttons {
+		if (!allowed.is_empty() && !allowed.contains(&button.address))
+			|| !configured.insert(button.address.clone())
+		{
+			return Err("--ptt requires one unique button mapping per listed headset".into());
+		}
+		if !paths.insert(&button.path) {
+			return Err("--ptt requires a separate input device for each headset".into());
+		}
+	}
+	if !buttons.is_empty() && !allowed.is_empty() && configured != *allowed {
+		return Err("--ptt requires a button mapping for every listed headset".into());
+	}
+	Ok(())
+}
+
+pub(crate) fn validate_mode(
+	mode: Mode,
+	buttons: &[PttButton],
+	allowed: &BTreeSet<String>,
+) -> Result<(), String> {
+	validate_ptt(buttons, allowed)?;
+	if mode == Mode::HalfDuplex && buttons.is_empty() {
+		return Err("--mode half-duplex requires --ptt for every headset".into());
+	}
+	Ok(())
+}
 
 pub(crate) struct RunOptions {
 	pub addresses: Vec<String>,
@@ -64,7 +111,7 @@ impl RunConfig {
 		network_path: PathBuf,
 		resolve_ptt: impl FnOnce(&mut Vec<PttButton>, &BTreeSet<String>) -> Result<(), String>,
 	) -> Result<Self, String> {
-		validate_transport(options.mode, options.transport)?;
+		transport::validate_transport(options.mode, options.transport)?;
 		if options.sco_limit == 0 {
 			return Err("--sco-limit must be at least 1".into());
 		}
@@ -81,7 +128,7 @@ impl RunConfig {
 			options
 				.addresses
 				.iter()
-				.map(|value| address(value))
+				.map(|value| crate::bluez::parse_address(value))
 				.collect::<Result<_, _>>()?
 		} else {
 			network::load_for_run(&network_path, options.pair_button)?
@@ -94,7 +141,7 @@ impl RunConfig {
 		}
 		resolve_ptt(&mut options.buttons, &allowed)?;
 		for button in &mut options.buttons {
-			button.address = address(&button.address)?;
+			button.address = crate::bluez::parse_address(&button.address)?;
 			if button.path.is_empty() {
 				return Err("--ptt requires an input device path".into());
 			}

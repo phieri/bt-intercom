@@ -2,16 +2,185 @@
 
 //! Supervised, cancellable readers for mapped evdev play/pause buttons.
 
-use std::fs::{File, OpenOptions};
-use std::io::{ErrorKind, Read};
+use std::collections::{BTreeMap, BTreeSet};
+use std::env;
+use std::fs::{self, File, OpenOptions};
+use std::io::{ErrorKind, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
+use crate::network::runtime_directory;
+use crate::process::command_cancellable;
+use crate::router::Headset;
+use crate::routing_status::RoutingStatus;
+use crate::transmit::{Mode, Transmit};
 use crate::worker::Worker;
-use crate::{KEY_PLAYPAUSE, PttButton, PttEvent};
+
+pub(crate) const BEEP_WAV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ptt-beep.wav"));
+
+pub(crate) const KEY_PLAYPAUSE: u16 = 164;
+
+#[derive(Clone, Debug)]
+pub(crate) struct PttButton {
+	pub address: String,
+	pub path: String,
+}
+
+pub(crate) type PttEvent = Result<(String, bool, Instant), String>;
+
+pub(crate) struct PttBeep {
+	path: PathBuf,
+}
+
+impl PttBeep {
+	pub(crate) fn new() -> Result<Self, String> {
+		let runtime_dir = runtime_directory(env::var_os("XDG_RUNTIME_DIR").as_deref());
+		let nonce = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.unwrap_or_default()
+			.as_nanos();
+		let path = runtime_dir.join(format!(
+			"bt-intercom-ptt-{}-{nonce}.wav",
+			std::process::id()
+		));
+		let mut file = OpenOptions::new()
+			.write(true)
+			.create_new(true)
+			.open(&path)
+			.map_err(|error| format!("could not create PTT beep: {error}"))?;
+		if let Err(error) = file.write_all(BEEP_WAV) {
+			drop(file);
+			let _ = fs::remove_file(&path);
+			return Err(format!("could not write PTT beep: {error}"));
+		}
+		Ok(Self { path })
+	}
+
+	pub(crate) fn play(&self, speaker_node: u64, stopped: &AtomicBool) -> Result<(), String> {
+		let target = format!("--target={speaker_node}");
+		let path = self.path.to_string_lossy().into_owned();
+		command_cancellable(
+			&["pw-play", &target, &path],
+			Duration::from_secs(2),
+			Some(stopped),
+		)
+		.map(|_| ())
+	}
+}
+
+impl Drop for PttBeep {
+	fn drop(&mut self) {
+		let _ = fs::remove_file(&self.path);
+	}
+}
+
+pub(crate) fn confirm_transmissions(
+	mode: Mode,
+	transmit: &mut Transmit,
+	input: &Receiver<PttEvent>,
+	headsets: &BTreeMap<String, Headset>,
+	links: &BTreeSet<(u64, u64)>,
+	beep: Option<&PttBeep>,
+	stopped: &AtomicBool,
+) -> Result<bool, String> {
+	let status = RoutingStatus::new(headsets, links);
+	let ready = transmit
+		.pending
+		.iter()
+		.filter_map(|address| {
+			let headset = headsets.get(address)?;
+			(transmit.sources().contains(address) && status.has_active_source_route(address))
+				.then(|| (address.clone(), headset.speaker_node()))
+		})
+		.collect::<Vec<_>>();
+	for (address, speaker_node) in ready {
+		if drain_events(input, transmit)? || stopped.load(Ordering::SeqCst) {
+			return Ok(true);
+		}
+		let Some(speaker_node) = speaker_node else {
+			let error = format!("could not play PTT confirmation for {address}: no speaker node");
+			if mode == Mode::HalfDuplex {
+				return Err(error);
+			}
+			log::warn!("{error}");
+			continue;
+		};
+		let result = beep
+			.ok_or_else(|| "confirmation beep is unavailable".to_string())
+			.and_then(|beep| beep.play(speaker_node, stopped));
+		match result {
+			Ok(()) => {
+				transmit.pending.remove(&address);
+			}
+			Err(_error) if stopped.load(Ordering::SeqCst) => return Ok(true),
+			Err(error) if mode == Mode::HalfDuplex => {
+				return Err(format!(
+					"could not play PTT confirmation for {address}: {error}"
+				));
+			}
+			Err(error) => {
+				log::warn!("Could not play PTT confirmation for {address}: {error}");
+			}
+		}
+	}
+	Ok(false)
+}
+
+pub(crate) fn confirm_connections(
+	routed_headsets: &mut BTreeSet<String>,
+	headsets: &BTreeMap<String, Headset>,
+	links: &BTreeSet<(u64, u64)>,
+	beep: Option<&PttBeep>,
+	stopped: &AtomicBool,
+) {
+	let status = RoutingStatus::new(headsets, links);
+	let current: BTreeSet<_> = headsets
+		.keys()
+		.filter(|address| status.has_active_intercom_connection(address))
+		.cloned()
+		.collect();
+	for address in current.difference(routed_headsets) {
+		let Some(speaker_node) = headsets[address].speaker_node() else {
+			log::warn!("Could not play intercom connection beep for {address}: no speaker node");
+			continue;
+		};
+		if let Some(beep) = beep
+			&& let Err(error) = beep.play(speaker_node, stopped)
+		{
+			log::warn!("Could not play intercom connection beep for {address}: {error}");
+		}
+	}
+	*routed_headsets = current;
+}
+
+/// Drain timestamped transitions before selecting sources and again after slow
+/// routing work, so a released/cancelled request never earns a stale beep.
+pub(crate) fn drain_events(
+	input: &Receiver<PttEvent>,
+	transmit: &mut Transmit,
+) -> Result<bool, String> {
+	let mut changed = false;
+	loop {
+		match input.try_recv() {
+			Ok(Ok((address, pressed, at))) => {
+				changed |= transmit.event(&address, pressed, at);
+			}
+			Ok(Err(error)) => return Err(error),
+			Err(TryRecvError::Empty) => return Ok(changed),
+			Err(TryRecvError::Disconnected) => return Err("PTT input closed".into()),
+		}
+	}
+}
+
+#[cfg(test)]
+pub(crate) fn read_input_events<R: Read>(input: R, address: String, sender: Sender<PttEvent>) {
+	let (_wake, receiver) = mpsc::channel();
+	read_events(input, address, sender, &AtomicBool::new(false), &receiver);
+}
 
 pub(crate) struct PreparedInputs(Vec<(PttButton, File)>);
 

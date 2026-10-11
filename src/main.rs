@@ -27,42 +27,46 @@ mod worker;
 
 mod tui;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
+#[cfg(test)]
 use std::env;
-use std::fs::{self, OpenOptions};
-use std::io::{IsTerminal, Write};
+#[cfg(test)]
+use std::fs;
+use std::io::IsTerminal;
+#[cfg(test)]
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+#[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+#[cfg(test)]
+use std::sync::mpsc::{self, TryRecvError};
+#[cfg(test)]
 use std::sync::{Arc, Mutex};
 #[cfg(test)]
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::Instant;
 
-use bluez::{bluetooth_name, device_flag, normalize_address};
+use bluez::{bluetooth_name, device_flag, parse_address};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use clap_complete::Shell;
 use groups::config_path as talk_groups_path;
 use network::{
 	headset_path as headset_network_path, load as load_headsets, remove as remove_headset,
-	runtime_directory as ptt_runtime_directory,
 };
 #[cfg(test)]
 use network::{load_for_run as load_run_headsets, save as save_headsets};
-use process::{COMMAND_TIMEOUT, command, command_cancellable};
-use router::{Headset, Router};
-use routing_status::RoutingStatus;
-use transmit::{Mode, Transmit};
+use process::{COMMAND_TIMEOUT, command};
+#[cfg(test)]
+use ptt::KEY_PLAYPAUSE;
+use ptt::PttButton;
+use router::Router;
+use runtime_config::parse_interval;
+use transmit::Mode;
+#[cfg(test)]
+use transmit::Transmit;
 use transport::Transport;
-
-const PTT_BEEP_WAV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ptt-beep.wav"));
-
-#[derive(Clone, Debug)]
-struct PttButton {
-	address: String,
-	path: String,
-}
 
 #[derive(Parser)]
 #[command(
@@ -112,22 +116,22 @@ enum CliCommand {
 	},
 	/// Pair, trust, and connect a headset.
 	Pair {
-		#[arg(value_parser = address)]
+		#[arg(value_parser = parse_address)]
 		address: String,
 	},
 	/// Remove a headset from the saved intercom network.
 	Remove {
-		#[arg(value_parser = address)]
+		#[arg(value_parser = parse_address)]
 		address: String,
 	},
 	/// Show Bluetooth headset audio status.
 	Status {
-		#[arg(required = true, value_parser = address)]
+		#[arg(required = true, value_parser = parse_address)]
 		addresses: Vec<String>,
 	},
 	/// Route configured headset microphones to one another, optionally showing the live dashboard.
 	Run {
-		#[arg(value_parser = address)]
+		#[arg(value_parser = parse_address)]
 		addresses: Vec<String>,
 		/// Routing update interval in seconds.
 		#[arg(long, default_value_t = 2.0, value_parser = parse_interval)]
@@ -194,25 +198,6 @@ fn pair_command(device: &str) -> Result<(), String> {
 	}
 }
 
-/// Validates and normalizes a Bluetooth MAC address.
-fn address(value: &str) -> Result<String, String> {
-	normalize_address(value)
-		.ok_or_else(|| format!("expected a Bluetooth MAC address (XX:XX:XX:XX:XX:XX): {value}"))
-}
-
-fn parse_interval(value: &str) -> Result<f64, String> {
-	let interval = value
-		.parse::<f64>()
-		.map_err(|_| "--interval must be a positive finite number")?;
-	if !interval.is_finite() || interval <= 0.0 || interval >= u64::MAX as f64 {
-		return Err("--interval must be a positive finite number".into());
-	}
-	if Duration::from_secs_f64(interval).is_zero() {
-		return Err("--interval must be at least one nanosecond".into());
-	}
-	Ok(interval)
-}
-
 fn parse_sco_limit(value: &str) -> Result<usize, String> {
 	let limit = value
 		.parse::<usize>()
@@ -237,7 +222,7 @@ fn parse_ptt_binding(value: &str) -> Result<PttButton, String> {
 		return Err("--ptt requires an input device path".into());
 	}
 	Ok(PttButton {
-		address: address(device)?,
+		address: parse_address(device)?,
 		path: path.into(),
 	})
 }
@@ -247,317 +232,7 @@ fn addresses(args: &[String]) -> Result<BTreeSet<String>, String> {
 	if args.is_empty() {
 		return Err("at least one Bluetooth address is required".into());
 	}
-	args.iter().map(|value| address(value)).collect()
-}
-
-/// Linux evdev key code emitted by supported headset play/pause buttons.
-const KEY_PLAYPAUSE: u16 = 164;
-
-/// A button state update or an input-device failure.
-type PttEvent = Result<(String, bool, Instant), String>;
-
-/// WAV feedback played to the headset whose microphone became active.
-struct PttBeep {
-	path: PathBuf,
-}
-
-impl PttBeep {
-	fn new() -> Result<Self, String> {
-		let runtime_dir = ptt_runtime_directory(env::var_os("XDG_RUNTIME_DIR").as_deref());
-		let nonce = std::time::SystemTime::now()
-			.duration_since(std::time::UNIX_EPOCH)
-			.unwrap_or_default()
-			.as_nanos();
-		let path = runtime_dir.join(format!(
-			"bt-intercom-ptt-{}-{nonce}.wav",
-			std::process::id()
-		));
-		let mut file = OpenOptions::new()
-			.write(true)
-			.create_new(true)
-			.open(&path)
-			.map_err(|error| format!("could not create PTT beep: {error}"))?;
-		if let Err(error) = file.write_all(PTT_BEEP_WAV) {
-			drop(file);
-			let _ = fs::remove_file(&path);
-			return Err(format!("could not write PTT beep: {error}"));
-		}
-		Ok(Self { path })
-	}
-
-	fn play(&self, speaker_node: u64, stopped: &AtomicBool) -> Result<(), String> {
-		let target = format!("--target={speaker_node}");
-		let path = self.path.to_string_lossy().into_owned();
-		command_cancellable(
-			&["pw-play", &target, &path],
-			Duration::from_secs(2),
-			Some(stopped),
-		)
-		.map(|_| ())
-	}
-}
-
-impl Drop for PttBeep {
-	fn drop(&mut self) {
-		let _ = fs::remove_file(&self.path);
-	}
-}
-
-fn confirm_transmissions(
-	mode: Mode,
-	transmit: &mut Transmit,
-	input: &Receiver<PttEvent>,
-	headsets: &BTreeMap<String, Headset>,
-	links: &BTreeSet<(u64, u64)>,
-	beep: Option<&PttBeep>,
-	stopped: &AtomicBool,
-) -> Result<bool, String> {
-	let status = RoutingStatus::new(headsets, links);
-	let ready = transmit
-		.pending
-		.iter()
-		.filter_map(|address| {
-			let headset = headsets.get(address)?;
-			(transmit.sources().contains(address) && status.has_active_source_route(address))
-				.then(|| (address.clone(), headset.speaker_node()))
-		})
-		.collect::<Vec<_>>();
-	for (address, speaker_node) in ready {
-		// Playback itself can block, so re-check input before *each* beep.
-		if drain_ptt(input, transmit)? || stopped.load(Ordering::SeqCst) {
-			return Ok(true);
-		}
-		let Some(speaker_node) = speaker_node else {
-			let error = format!("could not play PTT confirmation for {address}: no speaker node");
-			if mode == Mode::HalfDuplex {
-				return Err(error);
-			}
-			log::warn!("{error}");
-			continue;
-		};
-		let result = beep
-			.ok_or_else(|| "confirmation beep is unavailable".to_string())
-			.and_then(|beep| beep.play(speaker_node, stopped));
-		match result {
-			Ok(()) => {
-				transmit.pending.remove(&address);
-			}
-			Err(_error) if stopped.load(Ordering::SeqCst) => return Ok(true),
-			Err(error) if mode == Mode::HalfDuplex => {
-				return Err(format!(
-					"could not play PTT confirmation for {address}: {error}"
-				));
-			}
-			Err(error) => {
-				log::warn!("Could not play PTT confirmation for {address}: {error}");
-			}
-		}
-	}
-	Ok(false)
-}
-
-fn confirm_connections(
-	routed_headsets: &mut BTreeSet<String>,
-	headsets: &BTreeMap<String, Headset>,
-	links: &BTreeSet<(u64, u64)>,
-	beep: Option<&PttBeep>,
-	stopped: &AtomicBool,
-) {
-	let status = RoutingStatus::new(headsets, links);
-	let current: BTreeSet<_> = headsets
-		.keys()
-		.filter(|address| status.has_active_intercom_connection(address))
-		.cloned()
-		.collect();
-	for address in current.difference(routed_headsets) {
-		let Some(speaker_node) = headsets[address].speaker_node() else {
-			log::warn!("Could not play intercom connection beep for {address}: no speaker node");
-			continue;
-		};
-		if let Some(beep) = beep
-			&& let Err(error) = beep.play(speaker_node, stopped)
-		{
-			log::warn!("Could not play intercom connection beep for {address}: {error}");
-		}
-	}
-	*routed_headsets = current;
-}
-
-/// Validates that PTT bindings uniquely cover the configured headset network.
-fn validate_ptt(buttons: &[PttButton], allowed: &BTreeSet<String>) -> Result<(), String> {
-	let mut configured = BTreeSet::new();
-	let mut paths = BTreeSet::new();
-	for button in buttons {
-		if (!allowed.is_empty() && !allowed.contains(&button.address))
-			|| !configured.insert(button.address.clone())
-		{
-			return Err("--ptt requires one unique button mapping per listed headset".into());
-		}
-		if !paths.insert(&button.path) {
-			return Err("--ptt requires a separate input device for each headset".into());
-		}
-	}
-	if !buttons.is_empty() && !allowed.is_empty() && configured != *allowed {
-		return Err("--ptt requires a button mapping for every listed headset".into());
-	}
-	Ok(())
-}
-
-fn validate_mode(
-	mode: Mode,
-	buttons: &[PttButton],
-	allowed: &BTreeSet<String>,
-) -> Result<(), String> {
-	validate_ptt(buttons, allowed)?;
-	if mode == Mode::HalfDuplex && buttons.is_empty() {
-		return Err("--mode half-duplex requires --ptt for every headset".into());
-	}
-	Ok(())
-}
-
-fn validate_controller_count(mode: Mode, count: usize, sco_limit: usize) -> Result<(), String> {
-	if mode == Mode::FullDuplex && count > 0 && count.saturating_mul(sco_limit) < 2 {
-		return Err(format!(
-			"full-duplex requires at least two SCO/eSCO slots; detected {count} Bluetooth controller(s) with --sco-limit {sco_limit}. Use a higher verified --sco-limit or --mode half-duplex with --ptt for every headset"
-		));
-	}
-	Ok(())
-}
-
-fn validate_transport(mode: Mode, transport: Transport) -> Result<(), String> {
-	if transport == Transport::ScoA2dp && mode != Mode::HalfDuplex {
-		return Err("--transport sco-a2dp requires --mode half-duplex and --ptt for every headset; use one controller per headset for full-duplex".into());
-	}
-	Ok(())
-}
-
-fn controller_warnings(
-	devices: &BTreeMap<String, transport::Device>,
-	sco_limit: usize,
-) -> Vec<String> {
-	let mut controllers: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-	for (address, device) in devices {
-		controllers
-			.entry(&device.controller)
-			.or_default()
-			.push(address);
-	}
-	controllers
-		.into_iter()
-		.filter(|(_, addresses)| addresses.len() > sco_limit)
-		.map(|(controller, addresses)| {
-			format!(
-				"{} headsets share {controller} ({}), exceeding --sco-limit {sco_limit}. HFP listeners also need SCO/eSCO; verify controller capacity or use --mode half-duplex --transport sco-a2dp with PTT when sharing a radio.",
-				addresses.len(),
-				addresses.join(", ")
-			)
-		})
-		.collect()
-}
-
-fn refresh_transport_requests(
-	transmit: &mut Transmit,
-	devices: &BTreeMap<String, transport::Device>,
-	disconnected: &BTreeSet<String>,
-) -> bool {
-	let before = transmit.sources().clone();
-	let available: BTreeSet<_> = devices.keys().cloned().collect();
-	transmit.topology(&available.difference(disconnected).cloned().collect());
-	transmit.set_controllers(
-		&devices
-			.iter()
-			.map(|(address, device)| (address.clone(), device.controller.clone()))
-			.collect(),
-	);
-	transmit.topology(&available);
-	before != *transmit.sources()
-}
-
-/// Drain timestamped transitions before selecting sources and again after slow
-/// routing work, so a released/cancelled request never earns a stale beep.
-fn drain_ptt(input: &Receiver<PttEvent>, transmit: &mut Transmit) -> Result<bool, String> {
-	let mut changed = false;
-	loop {
-		match input.try_recv() {
-			Ok(Ok((address, pressed, at))) => {
-				changed |= transmit.event(&address, pressed, at);
-			}
-			Ok(Err(error)) => return Err(error),
-			Err(TryRecvError::Empty) => return Ok(changed),
-			Err(TryRecvError::Disconnected) => return Err("PTT input closed".into()),
-		}
-	}
-}
-
-/// A failed snapshot can leave the previous floor's owned routes untouched.
-/// Fail closed before inspection/confirmation in half-duplex; preserve the
-/// existing non-fatal update warnings in full-duplex.
-fn guard_half_update<T>(
-	mode: Mode,
-	update: &Result<T, String>,
-	close_owned: impl FnOnce(),
-) -> Result<(), String> {
-	if mode == Mode::HalfDuplex
-		&& let Err(error) = update
-	{
-		close_owned();
-		return Err(format!(
-			"Half-duplex routing failed; released owned links and stopped to prevent an unsafe floor handoff: {error}"
-		));
-	}
-	Ok(())
-}
-
-#[cfg(test)]
-fn ptt_input_from<R: std::io::Read>(input: R, address: String, sender: mpsc::Sender<PttEvent>) {
-	let (_wake, receiver) = mpsc::channel();
-	ptt::read_events(input, address, sender, &AtomicBool::new(false), &receiver);
-}
-
-/// Connects allowlisted devices that are currently disconnected or unavailable.
-fn connect_disconnected(
-	allowed: &BTreeSet<String>,
-	stopped: &AtomicBool,
-	mut execute: impl FnMut(&[&str], Duration) -> Result<String, String>,
-) {
-	for device in allowed {
-		if stopped.load(Ordering::SeqCst) {
-			break;
-		}
-		let connected = execute(&["bluetoothctl", "info", device], COMMAND_TIMEOUT)
-			.is_ok_and(|info| device_flag(&info, "Connected"));
-		if !connected
-			&& !stopped.load(Ordering::SeqCst)
-			&& let Err(error) = execute(
-				&["bluetoothctl", "--timeout", "30", "connect", device],
-				Duration::from_secs(35),
-			) {
-			log::warn!("Could not connect {device}: {error}");
-		}
-	}
-}
-
-/// Repeats connection checks until cancelled or explicitly woken for shutdown.
-fn reconnect_worker(
-	allowed: Arc<Mutex<BTreeSet<String>>>,
-	stopped: Arc<AtomicBool>,
-	shutdown: Receiver<()>,
-	retry: Duration,
-	mut execute: impl FnMut(&[&str], Duration) -> Result<String, String>,
-) {
-	loop {
-		let devices = allowed.lock().unwrap().clone();
-		connect_disconnected(&devices, &stopped, &mut execute);
-		if stopped.load(Ordering::SeqCst) {
-			break;
-		}
-		if !matches!(
-			shutdown.recv_timeout(retry),
-			Err(mpsc::RecvTimeoutError::Timeout)
-		) {
-			break;
-		}
-	}
+	args.iter().map(|value| parse_address(value)).collect()
 }
 
 /// Executes one CLI action, including the main polling and routing loop.
@@ -639,7 +314,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 					);
 				}
 			}
-			for warning in controller_warnings(&transport_devices, 1) {
+			for warning in transport::controller_warnings(&transport_devices, 1) {
 				log::warn!("{warning}");
 			}
 		}
@@ -706,6 +381,13 @@ fn main() {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::ptt::{BEEP_WAV, confirm_transmissions, drain_events, read_input_events};
+	use crate::runtime_config::{validate_mode, validate_ptt};
+	use crate::session::{connect_disconnected, guard_half_update, reconnect_worker};
+	use crate::transport::{
+		refresh_transmit_requests as refresh_transport_requests, validate_controller_count,
+		validate_transport,
+	};
 	use std::ffi::OsStr;
 
 	#[test]
@@ -850,8 +532,11 @@ mod tests {
 
 	#[test]
 	fn validates_address_before_invoking_commands() {
-		assert!(address("invalid; rm -rf /").is_err());
-		assert_eq!(address("aa:bb:cc:dd:ee:ff").unwrap(), "AA:BB:CC:DD:EE:FF");
+		assert!(parse_address("invalid; rm -rf /").is_err());
+		assert_eq!(
+			parse_address("aa:bb:cc:dd:ee:ff").unwrap(),
+			"AA:BB:CC:DD:EE:FF"
+		);
 	}
 
 	#[test]
@@ -938,14 +623,14 @@ mod tests {
 	#[test]
 	fn uses_absolute_xdg_runtime_dir_for_ptt_beeps() {
 		assert_eq!(
-			ptt_runtime_directory(Some(OsStr::new("/run/user/1000"))),
+			network::runtime_directory(Some(OsStr::new("/run/user/1000"))),
 			PathBuf::from("/run/user/1000")
 		);
 		assert_eq!(
-			ptt_runtime_directory(Some(OsStr::new("relative"))),
+			network::runtime_directory(Some(OsStr::new("relative"))),
 			env::temp_dir()
 		);
-		assert_eq!(ptt_runtime_directory(None), env::temp_dir());
+		assert_eq!(network::runtime_directory(None), env::temp_dir());
 	}
 
 	#[test]
@@ -1440,12 +1125,15 @@ mod tests {
 				.send(Ok(("a".into(), false, now + Duration::from_millis(ms + 1))))
 				.unwrap();
 		}
-		assert!(drain_ptt(&input, &mut transmit).unwrap());
+		assert!(drain_events(&input, &mut transmit).unwrap());
 		assert!(transmit.sources().is_empty());
 		assert!(transmit.pending.is_empty());
-		assert!(!drain_ptt(&input, &mut transmit).unwrap());
+		assert!(!drain_events(&input, &mut transmit).unwrap());
 		sender.send(Err("lost input".into())).unwrap();
-		assert_eq!(drain_ptt(&input, &mut transmit), Err("lost input".into()));
+		assert_eq!(
+			drain_events(&input, &mut transmit),
+			Err("lost input".into())
+		);
 	}
 
 	#[test]
@@ -1486,7 +1174,7 @@ mod tests {
 
 	#[test]
 	fn creates_a_short_double_beep_waveform() {
-		let wav = PTT_BEEP_WAV;
+		let wav = BEEP_WAV;
 		assert_eq!(&wav[..4], b"RIFF");
 		assert_eq!(
 			u32::from_le_bytes(wav[4..8].try_into().unwrap()),
@@ -1526,7 +1214,7 @@ mod tests {
 			events.extend(event(kind, key, value));
 		}
 		let (sender, receiver) = mpsc::channel();
-		ptt_input_from(std::io::Cursor::new(events), "headset".into(), sender);
+		read_input_events(std::io::Cursor::new(events), "headset".into(), sender);
 
 		let (address, pressed, press_at) = receiver.recv().unwrap().unwrap();
 		assert_eq!((address, pressed), ("headset".into(), true));
@@ -1540,7 +1228,7 @@ mod tests {
 		));
 
 		let (sender, receiver) = mpsc::channel();
-		ptt_input_from(
+		read_input_events(
 			std::io::Cursor::new(event(0, 3, 0)),
 			"headset".into(),
 			sender,

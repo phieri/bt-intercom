@@ -5,6 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -13,23 +14,84 @@ use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
 
+use crate::bluez;
 use crate::dashboard::{Dashboard, RunStatus};
 use crate::groups;
 use crate::network;
 use crate::pair_button::PairButton;
 use crate::process::{COMMAND_TIMEOUT, command_cancellable};
-use crate::ptt::{PreparedInputs, PttInput};
+use crate::ptt::{
+	PreparedInputs, PttBeep, PttInput, confirm_connections, confirm_transmissions, drain_events,
+};
 use crate::router::{Headset, Router};
 use crate::runtime_config::RunConfig;
 use crate::transmit::{Mode, Transmit};
-use crate::transport::Transport;
+use crate::transport::{self, Transport};
 use crate::worker::Worker;
-use crate::{
-	PttBeep, bluez, confirm_connections, confirm_transmissions, controller_warnings, drain_ptt,
-	guard_half_update, reconnect_worker, refresh_transport_requests,
-};
 
 type Execute = Box<dyn FnMut(&[&str]) -> Result<String, String>>;
+
+pub(crate) fn guard_half_update<T>(
+	mode: Mode,
+	update: &Result<T, String>,
+	close_owned: impl FnOnce(),
+) -> Result<(), String> {
+	if mode == Mode::HalfDuplex
+		&& let Err(error) = update
+	{
+		close_owned();
+		return Err(format!(
+			"Half-duplex routing failed; released owned links and stopped to prevent an unsafe floor handoff: {error}"
+		));
+	}
+	Ok(())
+}
+
+/// Connects allowlisted devices that are currently disconnected or unavailable.
+pub(crate) fn connect_disconnected(
+	allowed: &BTreeSet<String>,
+	stopped: &AtomicBool,
+	mut execute: impl FnMut(&[&str], Duration) -> Result<String, String>,
+) {
+	for device in allowed {
+		if stopped.load(Ordering::SeqCst) {
+			break;
+		}
+		let connected = execute(&["bluetoothctl", "info", device], COMMAND_TIMEOUT)
+			.is_ok_and(|info| bluez::device_flag(&info, "Connected"));
+		if !connected
+			&& !stopped.load(Ordering::SeqCst)
+			&& let Err(error) = execute(
+				&["bluetoothctl", "--timeout", "30", "connect", device],
+				Duration::from_secs(35),
+			) {
+			log::warn!("Could not connect {device}: {error}");
+		}
+	}
+}
+
+/// Repeats connection checks until cancelled or explicitly woken for shutdown.
+pub(crate) fn reconnect_worker(
+	allowed: Arc<Mutex<BTreeSet<String>>>,
+	stopped: Arc<AtomicBool>,
+	shutdown: Receiver<()>,
+	retry: Duration,
+	mut execute: impl FnMut(&[&str], Duration) -> Result<String, String>,
+) {
+	loop {
+		let devices = allowed.lock().unwrap().clone();
+		connect_disconnected(&devices, &stopped, &mut execute);
+		if stopped.load(Ordering::SeqCst) {
+			break;
+		}
+		if !matches!(
+			shutdown.recv_timeout(retry),
+			Err(mpsc::RecvTimeoutError::Timeout)
+		) {
+			break;
+		}
+	}
+}
 
 pub(crate) struct Session {
 	config: RunConfig,
@@ -108,7 +170,7 @@ impl Session {
 		if self.config.mode == Mode::FullDuplex
 			&& let Some(controllers) = &controllers
 		{
-			crate::validate_controller_count(
+			transport::validate_controller_count(
 				self.config.mode,
 				controllers.len(),
 				self.config.sco_limit,
@@ -238,7 +300,7 @@ impl Session {
 			}
 		}
 		if let Some(input) = &self.input
-			&& drain_ptt(&input.events, &mut self.transmit)?
+			&& drain_events(&input.events, &mut self.transmit)?
 		{
 			self.last_update = None;
 			self.redraw = true;
@@ -260,7 +322,7 @@ impl Session {
 			self.transmit.topology(&devices.keys().cloned().collect());
 		} else {
 			if let Ok(devices) = self.router.transport_devices() {
-				for warning in controller_warnings(&devices, self.config.sco_limit) {
+				for warning in transport::controller_warnings(&devices, self.config.sco_limit) {
 					if self.reported_controller_warnings.insert(warning.clone()) {
 						log::warn!("{warning}");
 					}
@@ -269,7 +331,7 @@ impl Session {
 			// Profile transitions remove microphones; only HFP treats this as a disconnect.
 			if let Some(input) = &self.input {
 				let snapshot = self.router.inspect_owned();
-				drain_ptt(&input.events, &mut self.transmit)?;
+				drain_events(&input.events, &mut self.transmit)?;
 				if let Ok((current, _)) = snapshot {
 					let available = current
 						.iter()
@@ -302,7 +364,7 @@ impl Session {
 		guard_half_update(self.config.mode, &prepared, || self.router.close())?;
 		let transport_ready = prepared?;
 		if let Some(input) = &self.input
-			&& drain_ptt(&input.events, &mut self.transmit)?
+			&& drain_events(&input.events, &mut self.transmit)?
 		{
 			self.router.close();
 			self.links.clear();
@@ -344,11 +406,11 @@ impl Session {
 		self.links = active;
 		let mut changed = false;
 		if let Some(input) = &self.input {
-			changed |= drain_ptt(&input.events, &mut self.transmit)?;
+			changed |= drain_events(&input.events, &mut self.transmit)?;
 			if self.config.transport == Transport::ScoA2dp {
 				let devices = self.router.transport_devices();
 				guard_half_update(self.config.mode, &devices, || self.router.close())?;
-				changed |= refresh_transport_requests(
+				changed |= transport::refresh_transmit_requests(
 					&mut self.transmit,
 					&devices?,
 					&self.router.take_transport_disconnects(),
@@ -469,6 +531,7 @@ impl Drop for Session {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::ptt::PttButton;
 	use std::sync::mpsc;
 
 	fn config() -> RunConfig {
@@ -479,7 +542,7 @@ mod tests {
 			interval: Duration::from_millis(1),
 			connect: false,
 			pair_button: false,
-			buttons: vec![crate::PttButton {
+			buttons: vec![PttButton {
 				address: "AA:BB:CC:DD:EE:01".into(),
 				path: "injected-input".into(),
 			}],
@@ -570,7 +633,7 @@ mod tests {
 	#[test]
 	fn input_open_failure_does_not_save_network_or_start_workers() {
 		let mut config = config();
-		config.buttons = vec![crate::PttButton {
+		config.buttons = vec![PttButton {
 			address: "AA:BB:CC:DD:EE:01".into(),
 			path: config
 				.network_path
