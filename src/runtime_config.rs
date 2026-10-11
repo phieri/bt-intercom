@@ -180,7 +180,11 @@ mod tests {
 			let mut options = options();
 			match invalid {
 				0 => options.transport = Transport::ScoA2dp,
-				1 => options.mode = Mode::HalfDuplex,
+				1 => {
+					options.mode = Mode::HalfDuplex;
+					options.pair_button = true;
+					options.buttons.clear();
+				}
 				2 => {
 					options.dashboard = true;
 				}
@@ -206,7 +210,10 @@ mod tests {
 				8 => options.sco_limit = 0,
 				_ => unreachable!(),
 			}
-			assert!(RunConfig::resolve_at(options, false, path.clone()).is_err());
+			assert!(
+				RunConfig::resolve_at(options, false, path.clone()).is_err(),
+				"invalid combination {invalid} should fail"
+			);
 			assert_eq!(network::load(&path).unwrap(), [B.into()].into());
 		}
 	}
@@ -287,14 +294,24 @@ mod tests {
 				assert_eq!(buttons[0].address, crate::ptt_discovery::AUTO);
 				assert_eq!(buttons[0].path, crate::ptt_discovery::AUTO);
 				buttons.clear();
-				buttons.extend(allowed.iter().map(|address| PttButton {
-					address: address.clone(),
-					path: "input".into(),
-				}));
+				buttons.extend(
+					allowed
+						.iter()
+						.enumerate()
+						.map(|(index, address)| PttButton {
+							address: address.clone(),
+							path: format!("input{index}"),
+						}),
+				);
 				Ok(())
 			})
 			.unwrap();
 		assert_eq!(config.buttons.len(), 2);
-		assert!(config.buttons.iter().all(|button| button.path == "input"));
+		assert!(
+			config
+				.buttons
+				.iter()
+				.all(|button| button.path.starts_with("input"))
+		);
 	}
 }
