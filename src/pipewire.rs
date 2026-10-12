@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
-use crate::router::{Headset, Port};
 use crate::transport::{Device, Transport, profile_matches};
 
 pub(crate) const OWNER_PROPERTY: &str = "bt-intercom.owner";
@@ -12,6 +11,35 @@ pub(crate) const HEADSET_PROFILE: &str = "headset-head-unit";
 pub(crate) const MONO_CHANNEL: &str = "MONO";
 /// A directed link, represented as `(output_port_id, input_port_id)`.
 pub(crate) type Link = (u64, u64);
+
+#[derive(Debug, PartialEq, Eq)]
+/// A PipeWire audio port and the channel it carries.
+pub struct Port {
+	pub(crate) id: u64,
+	pub(crate) node_id: Option<u64>,
+	pub(crate) channel: String,
+}
+
+#[derive(Debug, Default)]
+/// Audio ports belonging to one allowlisted Bluetooth headset.
+pub struct Headset {
+	/// Microphone output ports exposed by the headset.
+	pub sources: Vec<Port>,
+	/// Speaker input ports exposed by the headset.
+	pub sinks: Vec<Port>,
+}
+
+impl Headset {
+	/// Returns whether PipeWire exposes both microphone and speaker ports.
+	pub fn has_duplex_audio(&self) -> bool {
+		!self.sources.is_empty() && !self.sinks.is_empty()
+	}
+
+	/// Returns the PipeWire node ID for playback to this headset.
+	pub fn speaker_node(&self) -> Option<u64> {
+		self.sinks.iter().find_map(|port| port.node_id)
+	}
+}
 
 #[derive(Debug)]
 struct DeviceMetadata {
