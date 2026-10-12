@@ -262,6 +262,19 @@ impl Coordinator {
 			return Ok(false);
 		}
 		let snapshot = self.snapshot(io.allowed, io.execute)?;
+		self.prepare_snapshot(sources, io, snapshot)
+	}
+
+	fn prepare_snapshot<F, C>(
+		&mut self,
+		sources: &BTreeSet<String>,
+		io: &mut TransitionIo<'_, F, C>,
+		snapshot: Snapshot,
+	) -> Result<bool, String>
+	where
+		F: FnMut(&[&str]) -> Result<String, String>,
+		C: FnMut(),
+	{
 		let devices = snapshot.transport_devices(io.allowed)?;
 		self.profile_changes
 			.retain(|address, (expected, index, _)| {
@@ -294,8 +307,27 @@ impl Coordinator {
 		if !self.profile_changes.is_empty() {
 			return Ok(false);
 		}
+
+		if self.demote_receivers(sources, io, &snapshot, &devices)? {
+			return Ok(false);
+		}
+		self.promote_sources(sources, io, &devices)?;
+		Ok(self.sources_ready(sources, &headsets, &devices))
+	}
+
+	fn demote_receivers<F, C>(
+		&mut self,
+		sources: &BTreeSet<String>,
+		io: &mut TransitionIo<'_, F, C>,
+		snapshot: &Snapshot,
+		devices: &BTreeMap<String, Device>,
+	) -> Result<bool, String>
+	where
+		F: FnMut(&[&str]) -> Result<String, String>,
+		C: FnMut(),
+	{
 		let mut demoting = false;
-		for (address, device) in &devices {
+		for (address, device) in devices {
 			if !sources.contains(address) {
 				if !device.is_profile("a2dp-sink") {
 					self.change_profile(address, device, "a2dp-sink", sources, io)?;
@@ -305,27 +337,43 @@ impl Coordinator {
 				}
 			}
 		}
-		if demoting {
-			return Ok(false);
-		}
-		let mut ready = true;
+		Ok(demoting)
+	}
+
+	fn promote_sources<F, C>(
+		&mut self,
+		sources: &BTreeSet<String>,
+		io: &mut TransitionIo<'_, F, C>,
+		devices: &BTreeMap<String, Device>,
+	) -> Result<(), String>
+	where
+		F: FnMut(&[&str]) -> Result<String, String>,
+		C: FnMut(),
+	{
 		for address in sources {
 			let device = &devices[address];
 			if !device.is_profile(HEADSET_PROFILE) {
 				self.change_profile(address, device, HEADSET_PROFILE, sources, io)?;
-				ready = false;
 			}
 		}
-		Ok(ready
-			&& devices.iter().all(|(address, device)| {
-				headsets.get(address).is_some_and(|headset| {
-					if sources.contains(address) {
-						device.is_profile(HEADSET_PROFILE) && headset.has_duplex_audio()
-					} else {
-						device.is_profile("a2dp-sink") && !headset.sinks.is_empty()
-					}
-				})
-			}))
+		Ok(())
+	}
+
+	fn sources_ready(
+		&self,
+		sources: &BTreeSet<String>,
+		headsets: &BTreeMap<String, crate::pipewire::Headset>,
+		devices: &BTreeMap<String, Device>,
+	) -> bool {
+		devices.iter().all(|(address, device)| {
+			headsets.get(address).is_some_and(|headset| {
+				if sources.contains(address) {
+					device.is_profile(HEADSET_PROFILE) && headset.has_duplex_audio()
+				} else {
+					device.is_profile("a2dp-sink") && !headset.sinks.is_empty()
+				}
+			})
+		})
 	}
 
 	fn change_profile<F, C>(
