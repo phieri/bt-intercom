@@ -15,7 +15,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 use crate::groups::TalkGroup;
-pub use crate::pipewire::{Headset, Port};
+pub use crate::pipewire::Headset;
 use crate::pipewire::{Link, OWNER_PROPERTY, Snapshot};
 use crate::process::{COMMAND_TIMEOUT, command};
 use crate::route_policy::desired_links_by_group;
