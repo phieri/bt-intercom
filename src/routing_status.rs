@@ -2,7 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::router::{Headset, channels_compatible};
+use crate::pipewire::Headset;
+use crate::route_policy::channels_compatible;
 
 pub struct RoutingStatus {
 	counts: BTreeMap<String, (usize, usize)>,
@@ -68,7 +69,7 @@ impl RoutingStatus {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::router::Port;
+	use crate::pipewire::Port;
 
 	fn port(id: u64, channel: &str) -> Port {
 		Port {

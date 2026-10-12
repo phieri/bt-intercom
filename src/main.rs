@@ -16,6 +16,7 @@ mod pipewire;
 mod process;
 mod ptt;
 mod ptt_discovery;
+mod route_policy;
 mod router;
 mod routing_status;
 mod runtime_config;

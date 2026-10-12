@@ -15,8 +15,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 use crate::groups::TalkGroup;
-use crate::pipewire::{Link, MONO_CHANNEL, OWNER_PROPERTY, Snapshot};
+pub use crate::pipewire::{Headset, Port};
+use crate::pipewire::{Link, OWNER_PROPERTY, Snapshot};
 use crate::process::{COMMAND_TIMEOUT, command};
+use crate::route_policy::desired_links_by_group;
+#[cfg(test)]
+use crate::route_policy::{desired_links, desired_links_in_groups};
 #[cfg(test)]
 use crate::routing_status::RoutingStatus;
 use crate::transport::{self, Transport};
@@ -49,35 +53,6 @@ impl Drop for LinkProcess {
 
 type StartLink = Box<dyn FnMut(&[&str]) -> Result<Box<dyn LinkHandle>, String>>;
 
-#[derive(Debug, PartialEq, Eq)]
-/// A PipeWire audio port and the channel it carries.
-pub struct Port {
-	pub(crate) id: u64,
-	pub(crate) node_id: Option<u64>,
-	pub(crate) channel: String,
-}
-
-#[derive(Debug, Default)]
-/// Audio ports belonging to one allowlisted Bluetooth headset.
-pub struct Headset {
-	/// Microphone output ports exposed by the headset.
-	pub sources: Vec<Port>,
-	/// Speaker input ports exposed by the headset.
-	pub sinks: Vec<Port>,
-}
-
-impl Headset {
-	/// Returns whether PipeWire exposes both microphone and speaker ports.
-	pub fn has_duplex_audio(&self) -> bool {
-		!self.sources.is_empty() && !self.sinks.is_empty()
-	}
-
-	/// Returns the PipeWire node ID for playback to this headset.
-	pub fn speaker_node(&self) -> Option<u64> {
-		self.sinks.iter().find_map(|port| port.node_id)
-	}
-}
-
 /// Extract allowlisted headset ports and existing links from a `pw-dump` snapshot.
 ///
 /// Nodes are included only when they belong to a listed Bluetooth device and
@@ -88,105 +63,6 @@ pub fn topology(
 	allowed: &BTreeSet<String>,
 ) -> Result<(BTreeMap<String, Headset>, BTreeSet<Link>), String> {
 	Ok(Snapshot::parse(objects)?.topology(allowed, Transport::Hfp))
-}
-
-/// Build cross-headset source-to-sink links whose channels are compatible.
-///
-/// A headset is never linked to itself; mono ports are compatible with every
-/// channel on the opposite endpoint.
-#[cfg(test)]
-pub fn desired_links(headsets: &BTreeMap<String, Headset>) -> BTreeSet<Link> {
-	desired_links_with_policy(headsets, None, None)
-}
-
-pub(crate) fn channels_compatible(output: &Port, input: &Port) -> bool {
-	output.channel == input.channel
-		|| output.channel == MONO_CHANNEL
-		|| input.channel == MONO_CHANNEL
-}
-
-fn desired_links_with_policy(
-	headsets: &BTreeMap<String, Headset>,
-	allowed_pairs: Option<&BTreeMap<String, BTreeSet<String>>>,
-	active_sources: Option<&BTreeSet<String>>,
-) -> BTreeSet<Link> {
-	let mut desired = BTreeSet::new();
-	for (source_address, source) in headsets {
-		if active_sources.is_some_and(|sources| !sources.contains(source_address)) {
-			continue;
-		}
-		for (sink_address, sink) in headsets {
-			if source_address == sink_address
-				|| allowed_pairs.is_some_and(|pairs| {
-					!pairs
-						.get(source_address)
-						.is_some_and(|sinks| sinks.contains(sink_address))
-				}) {
-				continue;
-			}
-			for output in &source.sources {
-				for input in &sink.sinks {
-					if channels_compatible(output, input) {
-						desired.insert((output.id, input.id));
-					}
-				}
-			}
-		}
-	}
-	desired
-}
-
-fn group_pairs(groups: &[TalkGroup]) -> BTreeMap<String, BTreeSet<String>> {
-	let mut pairs = BTreeMap::new();
-	for group in groups {
-		for source in &group.members {
-			pairs
-				.entry(source.clone())
-				.or_insert_with(BTreeSet::new)
-				.extend(group.members.iter().filter(|sink| *sink != source).cloned());
-		}
-	}
-	pairs
-}
-
-/// Build routes only between headset pairs that share a talk group.
-///
-/// An empty group list retains the original all-to-all behavior.
-#[cfg(test)]
-pub fn desired_links_in_groups(
-	headsets: &BTreeMap<String, Headset>,
-	groups: &[TalkGroup],
-) -> BTreeSet<Link> {
-	if groups.is_empty() {
-		return desired_links(headsets);
-	}
-	let allowed_pairs = group_pairs(groups);
-	desired_links_with_policy(headsets, Some(&allowed_pairs), None)
-}
-
-/// Build routes only for sources granted a floor in the corresponding group.
-///
-/// With no configured groups, the `None` entry represents the shared floor.
-pub fn desired_links_by_group(
-	headsets: &BTreeMap<String, Headset>,
-	group_sources: &BTreeMap<Option<String>, BTreeSet<String>>,
-	groups: &[TalkGroup],
-) -> BTreeSet<Link> {
-	if groups.is_empty() {
-		let sources = group_sources.get(&None).cloned().unwrap_or_default();
-		return desired_links_with_policy(headsets, None, Some(&sources));
-	}
-
-	groups
-		.iter()
-		.flat_map(|group| {
-			let Some(sources) = group_sources.get(&Some(group.name.clone())) else {
-				return BTreeSet::new();
-			};
-			let allowed_pairs = group_pairs(std::slice::from_ref(group));
-			desired_links_with_policy(headsets, Some(&allowed_pairs), Some(sources))
-		})
-		.collect()
 }
 
 /// Returns whether a headset's microphone has a live route to another headset.
