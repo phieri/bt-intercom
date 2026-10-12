@@ -2,7 +2,7 @@
 
 //! Bounded subprocess execution and process-group cleanup.
 
-use std::io::Read;
+use std::io::{self, Read};
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -11,6 +11,30 @@ use std::time::{Duration, Instant};
 
 pub(crate) const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
 const CHILD_POLL_INTERVAL: Duration = Duration::from_millis(20);
+const MAX_CAPTURED_OUTPUT: usize = 1024 * 1024;
+
+fn read_bounded(mut reader: impl Read, limit: usize) -> io::Result<Vec<u8>> {
+	let mut captured = Vec::with_capacity(limit.min(8192));
+	let mut buffer = [0; 8192];
+	let mut exceeded_limit = false;
+	loop {
+		let count = reader.read(&mut buffer)?;
+		if count == 0 {
+			break;
+		}
+		let remaining = limit.saturating_sub(captured.len());
+		captured.extend_from_slice(&buffer[..count.min(remaining)]);
+		exceeded_limit |= count > remaining;
+	}
+	if exceeded_limit {
+		Err(io::Error::new(
+			io::ErrorKind::InvalidData,
+			format!("captured output exceeded the {limit}-byte limit"),
+		))
+	} else {
+		Ok(captured)
+	}
+}
 
 /// Runs a command with captured output and a deadline.
 pub(crate) fn command(args: &[&str], timeout: Duration) -> Result<String, String> {
@@ -110,14 +134,8 @@ pub(crate) fn command_cancellable(
 		let _ = child.wait();
 		return Err(format!("{name}: failed to capture command output"));
 	};
-	let output = thread::spawn(move || {
-		let mut bytes = Vec::new();
-		stdout.read_to_end(&mut bytes).map(|_| bytes)
-	});
-	let error = thread::spawn(move || {
-		let mut bytes = Vec::new();
-		stderr.read_to_end(&mut bytes).map(|_| bytes)
-	});
+	let output = thread::spawn(move || read_bounded(&mut stdout, MAX_CAPTURED_OUTPUT));
+	let error = thread::spawn(move || read_bounded(&mut stderr, MAX_CAPTURED_OUTPUT));
 	let status = wait_child(&mut child, name, timeout, stopped, KillMode::ProcessGroup)
 		.inspect_err(|error| {
 			log::debug!("{name} stopped after {:?}: {error}", started.elapsed())
@@ -125,11 +143,11 @@ pub(crate) fn command_cancellable(
 	let stdout = output
 		.join()
 		.map_err(|_| "stdout reader panicked".to_string())?
-		.map_err(|e| e.to_string())?;
+		.map_err(|e| format!("stdout: {e}"))?;
 	let stderr = error
 		.join()
 		.map_err(|_| "stderr reader panicked".to_string())?
-		.map_err(|e| e.to_string())?;
+		.map_err(|e| format!("stderr: {e}"))?;
 	log::debug!(
 		"{name} exited with {status} after {:?} ({} stdout bytes, {} stderr bytes)",
 		started.elapsed(),
@@ -178,6 +196,29 @@ mod tests {
 				.len(),
 			131072
 		);
+	}
+
+	#[test]
+	fn output_readers_drain_beyond_the_capture_limit() {
+		let bytes = vec![0; 1025];
+		let mut reader = std::io::Cursor::new(bytes);
+		assert!(read_bounded(&mut reader, 1024).is_err());
+		assert_eq!(reader.position(), 1025);
+	}
+
+	#[test]
+	fn commands_reject_stdout_and_stderr_over_the_capture_limit() {
+		let size = (MAX_CAPTURED_OUTPUT + 1).to_string();
+		let stdout_error =
+			command(&["head", "-c", &size, "/dev/zero"], Duration::from_secs(5)).unwrap_err();
+		assert!(stdout_error.contains("stdout: captured output exceeded"));
+
+		let stderr_error = command(
+			&["sh", "-c", &format!("head -c {size} /dev/zero >&2")],
+			Duration::from_secs(5),
+		)
+		.unwrap_err();
+		assert!(stderr_error.contains("stderr: captured output exceeded"));
 	}
 
 	#[test]

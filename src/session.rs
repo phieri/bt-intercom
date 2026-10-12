@@ -346,20 +346,9 @@ impl Session {
 	}
 
 	fn update_routes(&mut self) -> Result<(), String> {
-		let config_error = match groups::load(&self.config.groups_path) {
-			Ok(groups) => {
-				self.transmit.set_groups(&groups);
-				self.config.groups = groups;
-				None
-			}
-			Err(error) => Some(error),
-		};
+		let config_error = self.reload_groups();
 		self.refresh_topology()?;
-		let sources = if self.input.is_some() {
-			self.transmit.sources().clone()
-		} else {
-			self.router.allowed.clone()
-		};
+		let sources = self.routing_sources();
 		let prepared = self.router.prepare_transport(&sources);
 		guard_half_update(self.config.mode, &prepared, || self.router.close())?;
 		let transport_ready = prepared?;
@@ -371,17 +360,7 @@ impl Session {
 			self.last_update = None;
 			return Ok(());
 		}
-		let update = if !transport_ready {
-			self.router.inspect().map(|(headsets, _)| headsets)
-		} else if self.config.groups.is_empty() && self.input.is_none() {
-			self.router.update(true)
-		} else if self.config.mode == Mode::HalfDuplex && !self.config.groups.is_empty() {
-			self.router
-				.update_group_sources_in_groups(self.transmit.group_sources(), &self.config.groups)
-		} else {
-			self.router
-				.update_sources_in_groups(&sources, &self.config.groups)
-		};
+		let update = self.update_route_set(&sources, transport_ready);
 		guard_half_update(self.config.mode, &update, || self.router.close())?;
 		let (changed, inspect_error) = self.inspect_and_confirm()?;
 		if changed {
@@ -391,6 +370,43 @@ impl Session {
 		self.report_update(update, config_error, inspect_error);
 		self.last_update = (!changed).then(Instant::now);
 		Ok(())
+	}
+
+	fn reload_groups(&mut self) -> Option<String> {
+		match groups::load(&self.config.groups_path) {
+			Ok(groups) => {
+				self.transmit.set_groups(&groups);
+				self.config.groups = groups;
+				None
+			}
+			Err(error) => Some(error),
+		}
+	}
+
+	fn routing_sources(&self) -> BTreeSet<String> {
+		if self.input.is_some() {
+			self.transmit.sources().clone()
+		} else {
+			self.router.allowed.clone()
+		}
+	}
+
+	fn update_route_set(
+		&mut self,
+		sources: &BTreeSet<String>,
+		transport_ready: bool,
+	) -> Result<BTreeMap<String, Headset>, String> {
+		if !transport_ready {
+			self.router.inspect().map(|(headsets, _)| headsets)
+		} else if self.config.groups.is_empty() && self.input.is_none() {
+			self.router.update(true)
+		} else if self.config.mode == Mode::HalfDuplex && !self.config.groups.is_empty() {
+			self.router
+				.update_group_sources_in_groups(self.transmit.group_sources(), &self.config.groups)
+		} else {
+			self.router
+				.update_sources_in_groups(sources, &self.config.groups)
+		}
 	}
 
 	fn inspect_and_confirm(&mut self) -> Result<(bool, Option<String>), String> {
