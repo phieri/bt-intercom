@@ -50,7 +50,7 @@ use std::time::Duration;
 #[cfg(test)]
 use std::time::Instant;
 
-use bluez::{bluetooth_name, device_flag, parse_address};
+use bluez::{Address, bluetooth_name, device_flag, parse_address};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use clap_complete::Shell;
 use groups::config_path as talk_groups_path;
@@ -119,22 +119,22 @@ enum CliCommand {
 	/// Pair, trust, and connect a headset.
 	Pair {
 		#[arg(value_parser = parse_address)]
-		address: String,
+		address: Address,
 	},
 	/// Remove a headset from the saved intercom network.
 	Remove {
 		#[arg(value_parser = parse_address)]
-		address: String,
+		address: Address,
 	},
 	/// Show Bluetooth headset audio status.
 	Status {
 		#[arg(required = true, value_parser = parse_address)]
-		addresses: Vec<String>,
+		addresses: Vec<Address>,
 	},
 	/// Route configured headset microphones to one another, optionally showing the live dashboard.
 	Run {
 		#[arg(value_parser = parse_address)]
-		addresses: Vec<String>,
+		addresses: Vec<Address>,
 		/// Routing update interval in seconds.
 		#[arg(long, default_value_t = 2.0, value_parser = parse_interval)]
 		interval: f64,
@@ -213,7 +213,7 @@ fn parse_sco_limit(value: &str) -> Result<usize, String> {
 fn parse_ptt_binding(value: &str) -> Result<PttButton, String> {
 	if value == ptt_discovery::AUTO {
 		return Ok(PttButton {
-			address: value.into(),
+			address: None,
 			path: value.into(),
 		});
 	}
@@ -224,17 +224,17 @@ fn parse_ptt_binding(value: &str) -> Result<PttButton, String> {
 		return Err("--ptt requires an input device path".into());
 	}
 	Ok(PttButton {
-		address: parse_address(device)?,
+		address: Some(parse_address(device).map_err(|error| error.to_string())?),
 		path: path.into(),
 	})
 }
 
 /// Parses and validates one or more Bluetooth addresses.
-fn addresses(args: &[String]) -> Result<BTreeSet<String>, String> {
+fn addresses(args: &[Address]) -> Result<BTreeSet<Address>, String> {
 	if args.is_empty() {
 		return Err("at least one Bluetooth address is required".into());
 	}
-	args.iter().map(|value| parse_address(value)).collect()
+	Ok(args.iter().cloned().collect())
 }
 
 /// Executes one CLI action, including the main polling and routing loop.
@@ -295,7 +295,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 					.ok()
 					.and_then(|info| bluetooth_name(&info));
 				let identity =
-					name.map_or_else(|| address.clone(), |name| format!("{name} ({address})"));
+					name.map_or_else(|| address.to_string(), |name| format!("{name} ({address})"));
 				match headsets.get(address) {
 					Some(headset) => println!(
 						"{identity}: {} ({} microphone ports, {} speaker ports)",
@@ -392,16 +392,20 @@ mod tests {
 	};
 	use std::ffi::OsStr;
 
+	fn address(value: &str) -> Address {
+		Address::parse(value).unwrap()
+	}
+
 	#[test]
 	fn transport_disappearance_then_reconnect_requires_a_fresh_ptt_press() {
-		let address = "AA:BB:CC:DD:EE:01".to_owned();
+		let address = address("AA:BB:CC:DD:EE:01");
 		for disappear_at in [2, 3] {
 			let current = if disappear_at == 3 { 41 } else { 17 };
 			let connected = serde_json::json!([{
 				"type":"PipeWire:Interface:Device", "id":10,
 				"info":{
 					"props":{
-						"api.bluez5.address":address,
+						"api.bluez5.address":address.to_string(),
 						"api.bluez5.path":"/org/bluez/hci0/dev_AA_BB_CC_DD_EE_01",
 						"object.serial":1010
 					},
@@ -462,8 +466,8 @@ mod tests {
 
 	#[test]
 	fn queued_transport_disappearance_is_retired_even_after_reconnection() {
-		let a = "AA:BB:CC:DD:EE:01".to_owned();
-		let b = "AA:BB:CC:DD:EE:02".to_owned();
+		let a = address("AA:BB:CC:DD:EE:01");
+		let b = address("AA:BB:CC:DD:EE:02");
 		for disappear_at in [2, 3] {
 			let device = |id: u64, address: &str, current: u64| {
 				serde_json::json!({
@@ -536,7 +540,7 @@ mod tests {
 	fn validates_address_before_invoking_commands() {
 		assert!(parse_address("invalid; rm -rf /").is_err());
 		assert_eq!(
-			parse_address("aa:bb:cc:dd:ee:ff").unwrap(),
+			parse_address("aa:bb:cc:dd:ee:ff").unwrap().as_str(),
 			"AA:BB:CC:DD:EE:FF"
 		);
 	}
@@ -603,12 +607,12 @@ mod tests {
 		assert_eq!(
 			addresses(&input).unwrap(),
 			BTreeSet::from([
-				"AA:BB:CC:DD:EE:01".to_string(),
-				"AA:BB:CC:DD:EE:02".to_string(),
+				address("AA:BB:CC:DD:EE:01"),
+				address("AA:BB:CC:DD:EE:02"),
 			])
 		);
 		assert!(addresses(&[]).is_err());
-		assert!(addresses(&["AA:BB:CC:DD:EE:01".into(), "invalid".into()]).is_err());
+		assert!(parse_address("invalid").is_err());
 	}
 
 	fn temporary_network_path() -> PathBuf {
@@ -639,8 +643,8 @@ mod tests {
 	fn saves_and_restores_headset_network() {
 		let path = temporary_network_path();
 		let allowed = BTreeSet::from([
-			"AA:BB:CC:DD:EE:02".to_string(),
-			"AA:BB:CC:DD:EE:01".to_string(),
+			address("AA:BB:CC:DD:EE:02"),
+			address("AA:BB:CC:DD:EE:01"),
 		]);
 		save_headsets(&path, &allowed).unwrap();
 		assert_eq!(load_headsets(&path).unwrap(), allowed);
@@ -655,16 +659,16 @@ mod tests {
 	fn removes_headsets_from_saved_network() {
 		let path = temporary_network_path();
 		let allowed = BTreeSet::from([
-			"AA:BB:CC:DD:EE:01".to_string(),
-			"AA:BB:CC:DD:EE:02".to_string(),
+			address("AA:BB:CC:DD:EE:01"),
+			address("AA:BB:CC:DD:EE:02"),
 		]);
 		save_headsets(&path, &allowed).unwrap();
 
-		remove_headset(&path, "AA:BB:CC:DD:EE:01").unwrap();
+		remove_headset(&path, &address("AA:BB:CC:DD:EE:01")).unwrap();
 
 		assert_eq!(
 			load_headsets(&path).unwrap(),
-			BTreeSet::from(["AA:BB:CC:DD:EE:02".to_string()])
+			BTreeSet::from([address("AA:BB:CC:DD:EE:02")])
 		);
 		fs::remove_dir_all(path.parent().unwrap()).unwrap();
 	}
@@ -672,12 +676,12 @@ mod tests {
 	#[test]
 	fn removes_last_headset_and_rejects_unknown_address_without_changes() {
 		let path = temporary_network_path();
-		let allowed = BTreeSet::from(["AA:BB:CC:DD:EE:01".to_string()]);
+		let allowed = BTreeSet::from([address("AA:BB:CC:DD:EE:01")]);
 		save_headsets(&path, &allowed).unwrap();
 
-		assert!(remove_headset(&path, "AA:BB:CC:DD:EE:02").is_err());
+		assert!(remove_headset(&path, &address("AA:BB:CC:DD:EE:02")).is_err());
 		assert_eq!(load_headsets(&path).unwrap(), allowed);
-		remove_headset(&path, "AA:BB:CC:DD:EE:01").unwrap();
+		remove_headset(&path, &address("AA:BB:CC:DD:EE:01")).unwrap();
 		assert!(!path.exists());
 		assert!(load_headsets(&path).is_err());
 		fs::remove_dir_all(path.parent().unwrap()).unwrap();
@@ -690,7 +694,7 @@ mod tests {
 		fs::write(&path, "\naa:bb:cc:dd:ee:01\nAA:BB:CC:DD:EE:01\n \n").unwrap();
 		assert_eq!(
 			load_headsets(&path).unwrap(),
-			BTreeSet::from(["AA:BB:CC:DD:EE:01".to_string()])
+			BTreeSet::from([address("AA:BB:CC:DD:EE:01")])
 		);
 		fs::write(&path, "not-a-bluetooth-address\n").unwrap();
 		assert!(load_headsets(&path).is_err());
@@ -785,7 +789,7 @@ mod tests {
 	#[test]
 	fn connects_only_when_disconnected_or_info_fails() {
 		let device = "AA:BB:CC:DD:EE:01";
-		let allowed = BTreeSet::from([device.to_string()]);
+		let allowed = BTreeSet::from([address(device)]);
 		for (info, should_connect) in [
 			(Ok("Connected: yes\n"), false),
 			(Ok("Connected: no\n"), true),
@@ -918,8 +922,8 @@ mod tests {
 
 	#[test]
 	fn parses_ptt_without_changing_default_mode() {
-		let address = "AA:BB:CC:DD:EE:01".to_string();
-		let default = Cli::try_parse_from(["bt-intercom", "run", address.as_str()]).unwrap();
+		let raw_address = "AA:BB:CC:DD:EE:01";
+		let default = Cli::try_parse_from(["bt-intercom", "run", raw_address]).unwrap();
 		let CliCommand::Run {
 			ptt,
 			mode,
@@ -933,13 +937,13 @@ mod tests {
 		assert_eq!(mode, Mode::FullDuplex);
 		assert!(!dashboard);
 
-		let binding = format!("{address}=/dev/input/event4");
+		let binding = format!("{raw_address}=/dev/input/event4");
 		let configured = Cli::try_parse_from([
 			"bt-intercom",
 			"run",
 			"--ptt",
 			binding.as_str(),
-			address.as_str(),
+			raw_address,
 			"--connect",
 			"--dashboard",
 		])
@@ -954,11 +958,11 @@ mod tests {
 		else {
 			panic!("expected run command");
 		};
-		assert_eq!(addresses, [address]);
+		assert_eq!(addresses, [address(raw_address)]);
 		assert!(connect && dashboard);
 		assert_eq!(ptt.len(), 1);
 		assert_eq!(ptt[0].path, "/dev/input/event4");
-		assert_eq!(ptt[0].address, "AA:BB:CC:DD:EE:01");
+		assert_eq!(ptt[0].address, Some(address(raw_address)));
 	}
 
 	#[test]
@@ -980,7 +984,7 @@ mod tests {
 		assert!(validate_mode(Mode::HalfDuplex, &[], &allowed).is_err());
 		assert!(validate_mode(Mode::HalfDuplex, &[], &BTreeSet::new()).is_err());
 		let buttons = [PttButton {
-			address: "AA:BB:CC:DD:EE:01".into(),
+			address: Some(address("AA:BB:CC:DD:EE:01")),
 			path: "/dev/input/event1".into(),
 		}];
 		assert!(validate_mode(Mode::HalfDuplex, &buttons, &allowed).is_ok());
@@ -1035,25 +1039,25 @@ mod tests {
 	#[test]
 	fn confirmations_require_a_granted_source_and_owned_live_route() {
 		use serde_json::json;
-		let a = "AA:BB:CC:DD:EE:01";
-		let b = "AA:BB:CC:DD:EE:02";
+		let a = address("AA:BB:CC:DD:EE:01");
+		let b = address("AA:BB:CC:DD:EE:02");
 		let mut objects = Vec::new();
-		for (base, address) in [(10, a), (20, b)] {
+		for (base, address) in [(10, a.clone()), (20, b.clone())] {
 			objects.extend([
-				json!({"type":"PipeWire:Interface:Device","id":base,"info":{"props":{"api.bluez5.address":address}}}),
+				json!({"type":"PipeWire:Interface:Device","id":base,"info":{"props":{"api.bluez5.address":address.to_string()}}}),
 				json!({"type":"PipeWire:Interface:Node","id":base+1,"info":{"props":{"device.id":base.to_string(),"media.class":"Audio/Source","api.bluez5.profile":"headset-head-unit"}}}),
 				json!({"type":"PipeWire:Interface:Node","id":base+2,"info":{"props":{"device.id":base.to_string(),"media.class":"Audio/Sink","api.bluez5.profile":"headset-head-unit"}}}),
 				json!({"type":"PipeWire:Interface:Port","id":base+3,"info":{"props":{"node.id":(base+1).to_string(),"port.direction":"out","audio.channel":"MONO"}}}),
 				json!({"type":"PipeWire:Interface:Port","id":base+4,"info":{"props":{"node.id":(base+2).to_string(),"port.direction":"in","audio.channel":"MONO"}}}),
 			]);
 		}
-		let allowed = BTreeSet::from([a.into(), b.into()]);
+		let allowed = BTreeSet::from([a.clone(), b.clone()]);
 		let (headsets, _) = router::topology(&json!(objects), &allowed).unwrap();
 		let stopped = AtomicBool::new(false);
 		let mut transmit = Transmit::new(Mode::HalfDuplex, allowed);
 		let now = Instant::now();
-		transmit.event(a, true, now);
-		transmit.event(b, true, now);
+		transmit.event(&a, true, now);
+		transmit.event(&b, true, now);
 		let (sender, input) = mpsc::channel();
 		// A queued microphone's live route (or an incoming-only route to the
 		// floor holder) must not earn a confirmation.
@@ -1067,7 +1071,7 @@ mod tests {
 			&stopped,
 		)
 		.unwrap();
-		assert_eq!(transmit.pending, BTreeSet::from([a.into()]));
+		assert_eq!(transmit.pending, BTreeSet::from([a.clone()]));
 		confirm_transmissions(
 			Mode::HalfDuplex,
 			&mut transmit,
@@ -1078,7 +1082,7 @@ mod tests {
 			&stopped,
 		)
 		.unwrap();
-		assert_eq!(transmit.pending, BTreeSet::from([a.into()]));
+		assert_eq!(transmit.pending, BTreeSet::from([a.clone()]));
 		assert_eq!(
 			confirm_transmissions(
 				Mode::HalfDuplex,
@@ -1091,13 +1095,13 @@ mod tests {
 			),
 			Err("could not play PTT confirmation for AA:BB:CC:DD:EE:01: confirmation beep is unavailable".into())
 		);
-		assert_eq!(transmit.pending, BTreeSet::from([a.into()]));
+		assert_eq!(transmit.pending, BTreeSet::from([a.clone()]));
 		// Release arriving during routing retires the old grant and defers
 		// confirmation of the next source until its own routing update.
 		sender
-			.send(Ok((a.into(), false, now + Duration::from_millis(1))))
+			.send(Ok((a.clone(), false, now + Duration::from_millis(1))))
 			.unwrap();
-		transmit.pending.insert(a.into());
+		transmit.pending.insert(a.clone());
 		assert!(
 			confirm_transmissions(
 				Mode::HalfDuplex,
@@ -1110,8 +1114,8 @@ mod tests {
 			)
 			.unwrap()
 		);
-		assert_eq!(transmit.sources(), &BTreeSet::from([b.into()]));
-		assert_eq!(transmit.pending, BTreeSet::from([b.into()]));
+		assert_eq!(transmit.sources(), &BTreeSet::from([b.clone()]));
+		assert_eq!(transmit.pending, BTreeSet::from([b]));
 	}
 
 	#[test]
@@ -1140,16 +1144,16 @@ mod tests {
 
 	#[test]
 	fn validates_ptt_bindings_against_restored_network() {
-		let first = "AA:BB:CC:DD:EE:01".to_string();
-		let second = "AA:BB:CC:DD:EE:02".to_string();
+		let first = address("AA:BB:CC:DD:EE:01");
+		let second = address("AA:BB:CC:DD:EE:02");
 		let network = BTreeSet::from([first.clone(), second.clone()]);
 		let buttons = vec![
 			PttButton {
-				address: first.clone(),
+				address: Some(first.clone()),
 				path: "/dev/input/event4".into(),
 			},
 			PttButton {
-				address: second.clone(),
+				address: Some(second.clone()),
 				path: "/dev/input/event5".into(),
 			},
 		];
@@ -1158,7 +1162,7 @@ mod tests {
 		let duplicate_path = vec![
 			buttons[0].clone(),
 			PttButton {
-				address: second.clone(),
+				address: Some(second.clone()),
 				path: "/dev/input/event4".into(),
 			},
 		];
@@ -1166,7 +1170,7 @@ mod tests {
 		let duplicate_address = vec![
 			buttons[0].clone(),
 			PttButton {
-				address: first.clone(),
+				address: Some(first.clone()),
 				path: "/dev/input/event5".into(),
 			},
 		];

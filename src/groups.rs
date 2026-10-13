@@ -8,10 +8,12 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
+use crate::bluez::Address;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TalkGroup {
 	pub name: String,
-	pub members: BTreeSet<String>,
+	pub members: BTreeSet<Address>,
 }
 
 pub fn config_path(network_path: &Path) -> Result<PathBuf, String> {
@@ -71,9 +73,9 @@ pub fn load(path: &Path) -> Result<Vec<TalkGroup>, String> {
 						path.display()
 					)
 				})?;
-				crate::bluez::normalize_address(address).ok_or_else(|| {
+				crate::bluez::parse_address(address).map_err(|error| {
 					format!(
-						"invalid talk-group file {}: invalid headset address {address}",
+						"invalid talk-group file {}: {error}",
 						path.display()
 					)
 				})
@@ -93,8 +95,7 @@ pub fn save(path: &Path, groups: &[TalkGroup]) -> Result<(), String> {
 		if group
 			.members
 			.iter()
-			.any(|member| crate::bluez::normalize_address(member).is_none())
-		{
+			.any(|member| crate::bluez::Address::parse(member.as_str()).is_err()) {
 			return Err(format!(
 				"talk group {:?} contains an invalid headset address",
 				group.name
@@ -109,7 +110,7 @@ pub fn save(path: &Path, groups: &[TalkGroup]) -> Result<(), String> {
 	let contents = json!({
 		"groups": groups.iter().map(|group| json!({
 			"name": group.name.trim(),
-			"members": group.members.iter().filter_map(|address| crate::bluez::normalize_address(address)).collect::<Vec<_>>(),
+			"members": group.members.iter().map(Address::as_str).collect::<Vec<_>>(),
 		})).collect::<Vec<_>>(),
 	})
 	.to_string();

@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
+use crate::bluez::Address;
 use crate::bluez::{
 	FAIR_RSSI, GOOD_RSSI, STRONG_RSSI, bluetooth_name, device_flag, signal_strength,
 };
@@ -152,14 +153,14 @@ impl<'a> StatusPresentation<'a> {
 }
 
 pub(crate) struct StatusUpdate {
-	pub statuses: BTreeMap<String, HeadsetStatus>,
+	pub statuses: BTreeMap<Address, HeadsetStatus>,
 	pub error: Option<String>,
 }
 
 /// Dashboard routing is already sampled by the session; only the standalone
 /// control panel needs an additional PipeWire inspection.
 pub(crate) fn start_polling(
-	allowed: BTreeSet<String>,
+	allowed: BTreeSet<Address>,
 	include_audio: bool,
 	interval: Duration,
 	session_stopped: Arc<AtomicBool>,
@@ -186,7 +187,7 @@ pub(crate) fn start_polling(
 }
 
 fn poll_status(
-	allowed: &BTreeSet<String>,
+	allowed: &BTreeSet<Address>,
 	include_audio: bool,
 	stopped: &AtomicBool,
 	mut execute: impl FnMut(&[&str]) -> Result<String, String>,

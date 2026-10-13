@@ -8,6 +8,8 @@ use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::bluez::Address;
+
 pub(crate) fn headset_path() -> Result<PathBuf, String> {
 	let directory = env::var_os("XDG_CONFIG_HOME")
 		.map(PathBuf::from)
@@ -24,7 +26,7 @@ pub(crate) fn runtime_directory(xdg_runtime_dir: Option<&OsStr>) -> PathBuf {
 		.unwrap_or_else(env::temp_dir)
 }
 
-pub(crate) fn save(path: &Path, allowed: &BTreeSet<String>) -> Result<(), String> {
+pub(crate) fn save(path: &Path, allowed: &BTreeSet<Address>) -> Result<(), String> {
 	if allowed.is_empty() {
 		return Err("cannot save an empty headset network".into());
 	}
@@ -36,7 +38,7 @@ pub(crate) fn save(path: &Path, allowed: &BTreeSet<String>) -> Result<(), String
 
 	let contents = format!(
 		"{}\n",
-		allowed.iter().cloned().collect::<Vec<_>>().join("\n")
+		allowed.iter().map(Address::as_str).collect::<Vec<_>>().join("\n")
 	);
 	crate::atomic_file::write(path, contents.as_bytes()).map_err(|error| {
 		format!(
@@ -47,7 +49,7 @@ pub(crate) fn save(path: &Path, allowed: &BTreeSet<String>) -> Result<(), String
 	Ok(())
 }
 
-pub(crate) fn remove(path: &Path, address: &str) -> Result<(), String> {
+pub(crate) fn remove(path: &Path, address: &Address) -> Result<(), String> {
 	let mut allowed = load(path)?;
 	if !allowed.remove(address) {
 		return Err(format!("{address} is not in the saved headset network"));
@@ -65,7 +67,7 @@ pub(crate) fn remove(path: &Path, address: &str) -> Result<(), String> {
 	Ok(())
 }
 
-pub(crate) fn load(path: &Path) -> Result<BTreeSet<String>, String> {
+pub(crate) fn load(path: &Path) -> Result<BTreeSet<Address>, String> {
 	let contents = fs::read_to_string(path).map_err(|error| {
 		if error.kind() == std::io::ErrorKind::NotFound {
 			format!(
@@ -83,15 +85,13 @@ pub(crate) fn load(path: &Path) -> Result<BTreeSet<String>, String> {
 	for (index, line) in contents.lines().enumerate() {
 		let line = line.trim();
 		if !line.is_empty() {
-			allowed.insert(
-				crate::bluez::normalize_address(line).ok_or_else(|| {
-					format!(
-						"invalid headset network at {}:{}: expected a Bluetooth MAC address (XX:XX:XX:XX:XX:XX): {line}",
-						path.display(),
-						index + 1
-					)
-				})?,
-			);
+			allowed.insert(crate::bluez::parse_address(line).map_err(|error| {
+				format!(
+					"invalid headset network at {}:{}: {error}",
+					path.display(),
+					index + 1
+				)
+			})?);
 		}
 	}
 	if allowed.is_empty() {
@@ -103,7 +103,7 @@ pub(crate) fn load(path: &Path) -> Result<BTreeSet<String>, String> {
 	Ok(allowed)
 }
 
-pub(crate) fn load_for_run(path: &Path, pair_button: bool) -> Result<BTreeSet<String>, String> {
+pub(crate) fn load_for_run(path: &Path, pair_button: bool) -> Result<BTreeSet<Address>, String> {
 	if pair_button && !path.try_exists().map_err(|error| error.to_string())? {
 		Ok(BTreeSet::new())
 	} else {
@@ -113,8 +113,8 @@ pub(crate) fn load_for_run(path: &Path, pair_button: bool) -> Result<BTreeSet<St
 
 pub(crate) fn enroll(
 	path: &Path,
-	allowed: &mut BTreeSet<String>,
-	device: String,
+	allowed: &mut BTreeSet<Address>,
+	device: Address,
 ) -> Result<(), String> {
 	let mut enrolled = allowed.clone();
 	enrolled.insert(device);

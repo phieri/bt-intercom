@@ -14,6 +14,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(test)]
 use serde_json::Value;
 
+use crate::bluez::Address;
 use crate::groups::TalkGroup;
 pub use crate::pipewire::Headset;
 use crate::pipewire::{Link, OWNER_PROPERTY, Snapshot};
@@ -60,16 +61,16 @@ type StartLink = Box<dyn FnMut(&[&str]) -> Result<Box<dyn LinkHandle>, String>>;
 #[cfg(test)]
 pub fn topology(
 	objects: &Value,
-	allowed: &BTreeSet<String>,
-) -> Result<(BTreeMap<String, Headset>, BTreeSet<Link>), String> {
+	allowed: &BTreeSet<Address>,
+) -> Result<(BTreeMap<Address, Headset>, BTreeSet<Link>), String> {
 	Ok(Snapshot::parse(objects)?.topology(allowed, Transport::Hfp))
 }
 
 /// Returns whether a headset's microphone has a live route to another headset.
 #[cfg(test)]
 pub fn has_active_source_route(
-	address: &str,
-	headsets: &BTreeMap<String, Headset>,
+	address: &Address,
+	headsets: &BTreeMap<Address, Headset>,
 	links: &BTreeSet<(u64, u64)>,
 ) -> bool {
 	RoutingStatus::new(headsets, links).has_active_source_route(address)
@@ -78,8 +79,8 @@ pub fn has_active_source_route(
 /// Returns whether a headset has live microphone and speaker routes with a peer.
 #[cfg(test)]
 pub fn has_active_intercom_connection(
-	address: &str,
-	headsets: &BTreeMap<String, Headset>,
+	address: &Address,
+	headsets: &BTreeMap<Address, Headset>,
 	links: &BTreeSet<(u64, u64)>,
 ) -> bool {
 	RoutingStatus::new(headsets, links).has_active_intercom_connection(address)
@@ -88,7 +89,7 @@ pub fn has_active_intercom_connection(
 /// Reconciles desired headset routes with PipeWire while tracking owned links.
 pub struct Router<F = fn(&[&str]) -> Result<String, String>> {
 	/// Bluetooth addresses that may be discovered or routed.
-	pub allowed: BTreeSet<String>,
+	pub allowed: BTreeSet<Address>,
 	owner: String,
 	execute: F,
 	start_link: StartLink,
@@ -116,7 +117,7 @@ fn start_link(args: &[&str]) -> Result<Box<dyn LinkHandle>, String> {
 
 impl Router {
 	/// Creates a router using the system `pw-dump` and `pw-cli` commands.
-	pub fn new(allowed: BTreeSet<String>) -> Self {
+	pub fn new(allowed: BTreeSet<Address>) -> Self {
 		Self::with_executor(allowed, default_command)
 	}
 }
@@ -126,11 +127,11 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 	///
 	/// The executor is useful for tests and must return the command's stdout
 	/// or an error. Link creation still uses the production `pw-cli` backend.
-	pub fn with_executor(allowed: BTreeSet<String>, execute: F) -> Self {
+	pub fn with_executor(allowed: BTreeSet<Address>, execute: F) -> Self {
 		Self::with_backend(allowed, execute, Box::new(start_link))
 	}
 
-	fn with_backend(allowed: BTreeSet<String>, execute: F, start_link: StartLink) -> Self {
+	fn with_backend(allowed: BTreeSet<Address>, execute: F, start_link: StartLink) -> Self {
 		Self {
 			allowed,
 			owner: format!(
@@ -160,13 +161,13 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 		self.coordinator.set_sco_limit(limit);
 	}
 
-	pub fn transport_devices(&mut self) -> Result<BTreeMap<String, transport::Device>, String> {
+	pub fn transport_devices(&mut self) -> Result<BTreeMap<Address, transport::Device>, String> {
 		let snapshot = self.snapshot()?;
 		snapshot.transport_devices(&self.allowed)
 	}
 
 	/// Consume observed allowlisted device disappearances, even after reconnect.
-	pub fn take_transport_disconnects(&mut self) -> BTreeSet<String> {
+	pub fn take_transport_disconnects(&mut self) -> BTreeSet<Address> {
 		self.coordinator.take_disconnects()
 	}
 
@@ -174,7 +175,7 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 	/// Commands are asynchronous; callers must retry until profiles and ports
 	/// are observed ready, with a 30-second deadline for the entire transition.
 	/// Last selected profiles are intentionally left on exit.
-	pub fn prepare_transport(&mut self, sources: &BTreeSet<String>) -> Result<bool, String> {
+	pub fn prepare_transport(&mut self, sources: &BTreeSet<Address>) -> Result<bool, String> {
 		self.coordinator
 			.prepare(sources, &self.allowed, &mut self.execute, || {
 				self.owned.clear()
@@ -183,7 +184,7 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 
 	/// Routes every allowlisted microphone when transmitting, or removes all
 	/// owned routes when muted.
-	pub fn update(&mut self, transmitting: bool) -> Result<BTreeMap<String, Headset>, String> {
+	pub fn update(&mut self, transmitting: bool) -> Result<BTreeMap<Address, Headset>, String> {
 		let sources = if transmitting {
 			self.allowed.clone()
 		} else {
@@ -198,17 +199,17 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 	/// from link ownership checks and link creation.
 	pub fn update_sources(
 		&mut self,
-		sources: &BTreeSet<String>,
-	) -> Result<BTreeMap<String, Headset>, String> {
+		sources: &BTreeSet<Address>,
+	) -> Result<BTreeMap<Address, Headset>, String> {
 		self.update_sources_in_groups(sources, &[])
 	}
 
 	/// Reconciles routes from the specified microphones within shared groups.
 	pub fn update_sources_in_groups(
 		&mut self,
-		sources: &BTreeSet<String>,
+		sources: &BTreeSet<Address>,
 		groups: &[TalkGroup],
-	) -> Result<BTreeMap<String, Headset>, String> {
+	) -> Result<BTreeMap<Address, Headset>, String> {
 		let group_sources = if groups.is_empty() {
 			BTreeMap::from([(None, sources.clone())])
 		} else {
@@ -223,9 +224,9 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 	/// Reconciles routes for sources granted a floor in each talk group.
 	pub fn update_group_sources_in_groups(
 		&mut self,
-		group_sources: &BTreeMap<Option<String>, BTreeSet<String>>,
+		group_sources: &BTreeMap<Option<String>, BTreeSet<Address>>,
 		groups: &[TalkGroup],
-	) -> Result<BTreeMap<String, Headset>, String> {
+	) -> Result<BTreeMap<Address, Headset>, String> {
 		let sources = group_sources.values().flatten().cloned().collect();
 		if !self.prepare_transport(&sources)? {
 			log::debug!("Transport not ready for sources {sources:?}; releasing owned links");
@@ -307,13 +308,13 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 	}
 
 	/// Reads the current allowlisted headset topology and all observed links.
-	pub fn inspect(&mut self) -> Result<(BTreeMap<String, Headset>, BTreeSet<Link>), String> {
+	pub fn inspect(&mut self) -> Result<(BTreeMap<Address, Headset>, BTreeSet<Link>), String> {
 		let snapshot = self.snapshot()?;
 		Ok(snapshot.topology(&self.allowed, self.coordinator.transport))
 	}
 
 	/// Reads headset topology and only links owned by this router instance.
-	pub fn inspect_owned(&mut self) -> Result<(BTreeMap<String, Headset>, BTreeSet<Link>), String> {
+	pub fn inspect_owned(&mut self) -> Result<(BTreeMap<Address, Headset>, BTreeSet<Link>), String> {
 		let snapshot = self.snapshot()?;
 		let (headsets, _) = snapshot.topology(&self.allowed, self.coordinator.transport);
 		Ok((headsets, snapshot.owned_links(&self.owner)))
@@ -340,6 +341,10 @@ mod tests {
 	const B: &str = "AA:BB:CC:DD:EE:02";
 	const C: &str = "AA:BB:CC:DD:EE:03";
 
+	fn address(value: &str) -> Address {
+		Address::parse(value).unwrap()
+	}
+
 	fn headset(base: u64, address: &str) -> Vec<Value> {
 		vec![
 			json!({"type":"PipeWire:Interface:Device","id":base,"info":{"props":{"api.bluez5.address":address}}}),
@@ -355,8 +360,8 @@ mod tests {
 		[headset(10, A), headset(20, B)].concat()
 	}
 
-	fn allowed() -> BTreeSet<String> {
-		[A.to_string(), B.to_string()].into()
+	fn allowed() -> BTreeSet<Address> {
+		[address(A), address(B)].into()
 	}
 
 	fn transport_fixture() -> Vec<Value> {
@@ -412,8 +417,8 @@ mod tests {
 		*server.objects.borrow_mut() = transport_fixture();
 		let mut router = server.router();
 		router.set_transport(Transport::ScoA2dp);
-		let a = [A.to_string()].into();
-		let b = [B.to_string()].into();
+		let a = [address(A)].into();
+		let b = [address(B)].into();
 		assert!(!router.prepare_transport(&a).unwrap());
 		assert!(!router.prepare_transport(&a).unwrap());
 		let changes = || {
@@ -464,8 +469,8 @@ mod tests {
 		observe_profile(&server, 20, false);
 		let mut router = server.router();
 		router.set_transport(Transport::ScoA2dp);
-		assert!(!router.prepare_transport(&[A.to_string()].into()).unwrap());
-		assert!(!router.prepare_transport(&[B.to_string()].into()).unwrap());
+		assert!(!router.prepare_transport(&[address(A)].into()).unwrap());
+		assert!(!router.prepare_transport(&[address(B)].into()).unwrap());
 		let changes = || {
 			server
 				.calls
@@ -477,7 +482,7 @@ mod tests {
 		};
 		assert_eq!(changes().len(), 1);
 		observe_profile(&server, 10, true);
-		assert!(!router.prepare_transport(&[B.to_string()].into()).unwrap());
+		assert!(!router.prepare_transport(&[address(B)].into()).unwrap());
 		assert_eq!(changes().len(), 2);
 		assert_eq!(changes()[1][2], "10");
 		assert_eq!(changes()[1][4], "{ index: 41, save: false }");
@@ -504,7 +509,7 @@ mod tests {
 			json!("no");
 		assert!(
 			router
-				.prepare_transport(&[A.to_string()].into())
+				.prepare_transport(&[address(A)].into())
 				.unwrap_err()
 				.contains("no available advertised A2DP SBC")
 		);
@@ -516,7 +521,7 @@ mod tests {
 			json!("no");
 		assert!(
 			router
-				.prepare_transport(&[A.to_string()].into())
+				.prepare_transport(&[address(A)].into())
 				.unwrap_err()
 				.contains("no available advertised headset-head-unit")
 		);
@@ -525,7 +530,7 @@ mod tests {
 			json!("no");
 		assert!(
 			router
-				.prepare_transport(&[A.to_string()].into())
+				.prepare_transport(&[address(A)].into())
 				.unwrap_err()
 				.contains("no available advertised A2DP SBC")
 		);
@@ -542,7 +547,7 @@ mod tests {
 		});
 		router.set_transport(Transport::ScoA2dp);
 		assert!(!router.transport_devices().unwrap().contains_key(B));
-		assert!(router.prepare_transport(&[A.to_string()].into()).is_err());
+		assert!(router.prepare_transport(&[address(A)].into()).is_err());
 
 		let mut calls = 0;
 		let mut router = Router::with_executor(allowed(), |args: &[&str]| {
@@ -557,7 +562,7 @@ mod tests {
 		router.set_transport(Transport::ScoA2dp);
 		assert!(
 			router
-				.prepare_transport(&[A.to_string()].into())
+				.prepare_transport(&[address(A)].into())
 				.unwrap_err()
 				.contains("identity changed")
 		);
@@ -575,11 +580,11 @@ mod tests {
 		*server.objects.borrow_mut() = objects;
 		let mut router = server.router();
 		router.set_transport(Transport::ScoA2dp);
-		assert!(router.prepare_transport(&[A.to_string()].into()).unwrap());
-		assert!(!router.prepare_transport(&[B.to_string()].into()).unwrap());
+		assert!(router.prepare_transport(&[address(A)].into()).unwrap());
+		assert!(!router.prepare_transport(&[address(B)].into()).unwrap());
 		assert!(
 			router
-				.prepare_transport(&[C.to_string()].into())
+				.prepare_transport(&[address(C)].into())
 				.unwrap_err()
 				.contains("not allowlisted")
 		);
@@ -599,7 +604,7 @@ mod tests {
 			Ok(json!(objects).to_string())
 		});
 		router.set_transport(Transport::ScoA2dp);
-		assert!(!router.prepare_transport(&[A.to_string()].into()).unwrap());
+		assert!(!router.prepare_transport(&[address(A)].into()).unwrap());
 	}
 
 	#[test]
@@ -618,7 +623,7 @@ mod tests {
 			Ok(json!(*server.objects.borrow()).to_string())
 		});
 		router.set_transport(Transport::ScoA2dp);
-		assert!(!router.prepare_transport(&[A.to_string()].into()).unwrap());
+		assert!(!router.prepare_transport(&[address(A)].into()).unwrap());
 	}
 
 	#[test]
@@ -632,7 +637,7 @@ mod tests {
 			.retain(|object| object["id"] != 13);
 		let mut router = server.router();
 		router.set_transport(Transport::ScoA2dp);
-		let sources = [A.to_string()].into();
+		let sources = [address(A)].into();
 		assert!(!router.prepare_transport(&sources).unwrap());
 		assert!(router.coordinator.profile_changes.is_empty());
 		let started = router.coordinator.transition_started;
@@ -685,7 +690,7 @@ mod tests {
 		*server.objects.borrow_mut() = transport_fixture();
 		let mut router = server.router();
 		router.set_transport(Transport::ScoA2dp);
-		let sources = [A.to_string()].into();
+		let sources = [address(A)].into();
 		assert!(!router.prepare_transport(&sources).unwrap());
 		server.objects.borrow_mut()[6]["info"]["params"]["Profile"] = json!([{"index":41}]);
 		assert!(!router.prepare_transport(&sources).unwrap());
@@ -720,7 +725,7 @@ mod tests {
 		router.set_transport(Transport::ScoA2dp);
 		assert!(
 			router
-				.prepare_transport(&[A.to_string()].into())
+				.prepare_transport(&[address(A)].into())
 				.unwrap_err()
 				.contains("multiple live PipeWire Device")
 		);
@@ -752,9 +757,9 @@ mod tests {
 		router.update(true).unwrap();
 		router.set_transport(Transport::ScoA2dp);
 		assert_eq!(server.links(), 1);
-		assert!(!router.prepare_transport(&[A.to_string()].into()).unwrap());
+		assert!(!router.prepare_transport(&[address(A)].into()).unwrap());
 		observe_profile(&server, 20, false);
-		assert!(router.prepare_transport(&[A.to_string()].into()).unwrap());
+		assert!(router.prepare_transport(&[address(A)].into()).unwrap());
 		router.close();
 		assert_eq!(server.links(), 1);
 		assert_eq!(
@@ -773,7 +778,7 @@ mod tests {
 			desired_links(&headsets),
 			[(13, 24), (13, 25), (23, 14), (23, 15)].into()
 		);
-		let (headsets, _) = topology(&json!(fixture()), &[A.to_string()].into()).unwrap();
+		let (headsets, _) = topology(&json!(fixture()), &[address(A)].into()).unwrap();
 		assert!(desired_links(&headsets).is_empty());
 	}
 
@@ -786,11 +791,11 @@ mod tests {
 	#[test]
 	fn routes_only_headsets_sharing_a_talk_group() {
 		let objects = [fixture(), headset(30, C)].concat();
-		let allowed = [A.to_string(), B.to_string(), C.to_string()].into();
+		let allowed = [address(A), address(B), address(C)].into();
 		let (headsets, _) = topology(&json!(objects), &allowed).unwrap();
 		let groups = [TalkGroup {
 			name: "Team".into(),
-			members: [A.to_string(), C.to_string()].into(),
+			members: [address(A), address(C)].into(),
 		}];
 		assert_eq!(
 			desired_links_in_groups(&headsets, &groups),
@@ -805,21 +810,21 @@ mod tests {
 	#[test]
 	fn half_duplex_routes_each_source_only_in_groups_where_it_holds_the_floor() {
 		let objects = [fixture(), headset(30, C)].concat();
-		let allowed = [A.to_string(), B.to_string(), C.to_string()].into();
+		let allowed = [address(A), address(B), address(C)].into();
 		let (headsets, _) = topology(&json!(objects), &allowed).unwrap();
 		let groups = [
 			TalkGroup {
 				name: "North".into(),
-				members: [A.to_string(), B.to_string()].into(),
+				members: [address(A), address(B)].into(),
 			},
 			TalkGroup {
 				name: "South".into(),
-				members: [A.to_string(), B.to_string(), C.to_string()].into(),
+				members: [address(A), address(B), address(C)].into(),
 			},
 		];
 		let sources = BTreeMap::from([
-			(Some("North".into()), [A.to_string()].into()),
-			(Some("South".into()), [C.to_string()].into()),
+			(Some("North".into()), [address(A)].into()),
+			(Some("South".into()), [address(C)].into()),
 		]);
 		assert_eq!(
 			desired_links_by_group(&headsets, &sources, &groups),
@@ -831,27 +836,27 @@ mod tests {
 	fn detects_live_routes_from_each_headset_microphone() {
 		let (headsets, _) = topology(&json!(fixture()), &allowed()).unwrap();
 		let links = desired_links(&headsets);
-		assert!(has_active_source_route(A, &headsets, &links));
-		assert!(has_active_source_route(B, &headsets, &links));
+		assert!(has_active_source_route(&address(A), &headsets, &links));
+		assert!(has_active_source_route(&address(B), &headsets, &links));
 		let links = links
 			.into_iter()
 			.filter(|(output, _)| *output != 13)
 			.collect();
-		assert!(!has_active_source_route(A, &headsets, &links));
-		assert!(has_active_source_route(B, &headsets, &links));
+		assert!(!has_active_source_route(&address(A), &headsets, &links));
+		assert!(has_active_source_route(&address(B), &headsets, &links));
 	}
 
 	#[test]
 	fn detects_bidirectional_intercom_connections() {
 		let (headsets, _) = topology(&json!(fixture()), &allowed()).unwrap();
 		let links = desired_links(&headsets);
-		assert!(has_active_intercom_connection(A, &headsets, &links));
-		assert!(has_active_intercom_connection(B, &headsets, &links));
+		assert!(has_active_intercom_connection(&address(A), &headsets, &links));
+		assert!(has_active_intercom_connection(&address(B), &headsets, &links));
 		let one_way = [(13, 24), (13, 25)].into();
-		assert!(!has_active_intercom_connection(A, &headsets, &one_way));
-		assert!(!has_active_intercom_connection(B, &headsets, &one_way));
-		let (single, _) = topology(&json!(headset(10, A)), &[A.to_string()].into()).unwrap();
-		assert!(!has_active_intercom_connection(A, &single, &links));
+		assert!(!has_active_intercom_connection(&address(A), &headsets, &one_way));
+		assert!(!has_active_intercom_connection(&address(B), &headsets, &one_way));
+		let (single, _) = topology(&json!(headset(10, A)), &[address(A)].into()).unwrap();
+		assert!(!has_active_intercom_connection(&address(A), &single, &links));
 	}
 
 	#[test]
@@ -861,7 +866,7 @@ mod tests {
 		let mut sources = BTreeSet::new();
 		router.update_sources(&sources).unwrap();
 		assert_eq!(server.links(), 0);
-		sources.insert(A.to_string());
+		sources.insert(address(A));
 		router.update_sources(&sources).unwrap();
 		let (_, links) = router.inspect_owned().unwrap();
 		assert_eq!(links, [(13, 24), (13, 25)].into());

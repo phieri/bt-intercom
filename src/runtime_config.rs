@@ -6,6 +6,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::bluez::Address;
 use crate::groups::{self, TalkGroup};
 use crate::network;
 use crate::ptt::PttButton;
@@ -27,13 +28,16 @@ pub(crate) fn parse_interval(value: &str) -> Result<f64, String> {
 
 pub(crate) fn validate_ptt(
 	buttons: &[PttButton],
-	allowed: &BTreeSet<String>,
+	allowed: &BTreeSet<Address>,
 ) -> Result<(), String> {
 	let mut configured = BTreeSet::new();
 	let mut paths = BTreeSet::new();
 	for button in buttons {
-		if (!allowed.is_empty() && !allowed.contains(&button.address))
-			|| !configured.insert(button.address.clone())
+		let Some(address) = &button.address else {
+			return Err("--ptt auto must be resolved before validating headset mappings".into());
+		};
+		if (!allowed.is_empty() && !allowed.contains(address))
+			|| !configured.insert(address.clone())
 		{
 			return Err("--ptt requires one unique button mapping per listed headset".into());
 		}
@@ -50,7 +54,7 @@ pub(crate) fn validate_ptt(
 pub(crate) fn validate_mode(
 	mode: Mode,
 	buttons: &[PttButton],
-	allowed: &BTreeSet<String>,
+	allowed: &BTreeSet<Address>,
 ) -> Result<(), String> {
 	validate_ptt(buttons, allowed)?;
 	if mode == Mode::HalfDuplex && buttons.is_empty() {
@@ -60,7 +64,7 @@ pub(crate) fn validate_mode(
 }
 
 pub(crate) struct RunOptions {
-	pub addresses: Vec<String>,
+	pub addresses: Vec<Address>,
 	pub interval: f64,
 	pub connect: bool,
 	pub sco_limit: usize,
@@ -72,7 +76,7 @@ pub(crate) struct RunOptions {
 }
 
 pub(crate) struct RunConfig {
-	pub allowed: BTreeSet<String>,
+	pub allowed: BTreeSet<Address>,
 	pub interval: Duration,
 	pub connect: bool,
 	pub sco_limit: usize,
@@ -109,7 +113,7 @@ impl RunConfig {
 		mut options: RunOptions,
 		interactive: bool,
 		network_path: PathBuf,
-		resolve_ptt: impl FnOnce(&mut Vec<PttButton>, &BTreeSet<String>) -> Result<(), String>,
+		resolve_ptt: impl FnOnce(&mut Vec<PttButton>, &BTreeSet<Address>) -> Result<(), String>,
 	) -> Result<Self, String> {
 		transport::validate_transport(options.mode, options.transport)?;
 		if options.sco_limit == 0 {
@@ -125,23 +129,18 @@ impl RunConfig {
 		}
 		let explicit_network = !options.addresses.is_empty();
 		let allowed = if explicit_network {
-			options
-				.addresses
-				.iter()
-				.map(|value| crate::bluez::parse_address(value))
-				.collect::<Result<_, _>>()?
+			options.addresses.iter().cloned().collect()
 		} else {
 			network::load_for_run(&network_path, options.pair_button)?
 		};
 		if !options.pair_button && options.buttons.is_empty() {
 			options.buttons.push(PttButton {
-				address: crate::ptt_discovery::AUTO.into(),
+				address: None,
 				path: crate::ptt_discovery::AUTO.into(),
 			});
 		}
 		resolve_ptt(&mut options.buttons, &allowed)?;
-		for button in &mut options.buttons {
-			button.address = crate::bluez::parse_address(&button.address)?;
+		for button in &options.buttons {
 			if button.path.is_empty() {
 				return Err("--ptt requires an input device path".into());
 			}
@@ -209,7 +208,7 @@ mod tests {
 			sco_limit: 1,
 			pair_button: false,
 			buttons: vec![PttButton {
-				address: A.into(),
+				address: Some(A.into()),
 				path: "input".into(),
 			}],
 			mode: Mode::FullDuplex,
@@ -236,21 +235,25 @@ mod tests {
 					options.dashboard = true;
 				}
 				3 => options.interval = f64::NAN,
-				4 => options.addresses = vec!["invalid".into()],
+				4 => {
+					options.addresses.clear();
+					options.buttons.clear();
+					options.mode = Mode::HalfDuplex;
+				}
 				5 => {
 					options.pair_button = true;
 					options.mode = Mode::HalfDuplex;
 				}
 				6 => {
 					options.buttons = vec![PttButton {
-						address: B.into(),
+						address: Some(B.into()),
 						path: "input".into(),
 					}]
 				}
 				7 => {
 					options.pair_button = true;
 					options.buttons = vec![PttButton {
-						address: A.into(),
+						address: Some(A.into()),
 						path: "input".into(),
 					}];
 				}
@@ -282,7 +285,10 @@ mod tests {
 		let fixture = Fixture::new();
 		let path = fixture.network();
 		let mut explicit = options();
-		explicit.addresses = vec![A.to_lowercase(), A.into()];
+		explicit.addresses = vec![
+			Address::parse(&A.to_lowercase()).unwrap(),
+			Address::parse(A).unwrap(),
+		];
 		let config = RunConfig::resolve_at(explicit, true, path.clone()).unwrap();
 		assert_eq!(config.allowed, [A.into()].into());
 		assert!(config.explicit_network);
@@ -293,7 +299,7 @@ mod tests {
 		saved.mode = Mode::HalfDuplex;
 		saved.transport = Transport::ScoA2dp;
 		saved.buttons = vec![PttButton {
-			address: B.into(),
+			address: Some(B.into()),
 			path: "input".into(),
 		}];
 		let config = RunConfig::resolve_at(saved, true, path.clone()).unwrap();
@@ -322,7 +328,7 @@ mod tests {
 		let mut saved = options();
 		saved.addresses.clear();
 		saved.buttons = vec![PttButton {
-			address: A.into(),
+			address: Some(A.into()),
 			path: "input".into(),
 		}];
 		assert!(RunConfig::resolve_at(saved, true, path.clone()).is_err());
@@ -338,7 +344,7 @@ mod tests {
 		let config =
 			RunConfig::resolve_at_with_ptt(options, true, fixture.network(), |buttons, allowed| {
 				assert_eq!(buttons.len(), 1);
-				assert_eq!(buttons[0].address, crate::ptt_discovery::AUTO);
+				assert_eq!(buttons[0].address, None);
 				assert_eq!(buttons[0].path, crate::ptt_discovery::AUTO);
 				buttons.clear();
 				buttons.extend(
@@ -346,7 +352,7 @@ mod tests {
 						.iter()
 						.enumerate()
 						.map(|(index, address)| PttButton {
-							address: address.clone(),
+							address: Some(address.clone()),
 							path: format!("input{index}"),
 						}),
 				);

@@ -14,6 +14,7 @@ use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
 
+use crate::bluez::Address;
 use crate::bluez;
 use crate::dashboard::{Dashboard, RunStatus};
 use crate::groups;
@@ -54,7 +55,7 @@ pub(crate) fn guard_half_update<T>(
 
 /// Connects allowlisted devices that are currently disconnected or unavailable.
 pub(crate) fn connect_disconnected(
-	allowed: &BTreeSet<String>,
+	allowed: &BTreeSet<Address>,
 	stopped: &AtomicBool,
 	mut execute: impl FnMut(&[&str], Duration) -> Result<String, String>,
 ) {
@@ -77,7 +78,7 @@ pub(crate) fn connect_disconnected(
 
 /// Repeats connection checks until cancelled or explicitly woken for shutdown.
 pub(crate) fn reconnect_worker(
-	allowed: Arc<Mutex<BTreeSet<String>>>,
+	allowed: Arc<Mutex<BTreeSet<Address>>>,
 	stopped: Arc<AtomicBool>,
 	shutdown: Receiver<()>,
 	retry: Duration,
@@ -107,11 +108,11 @@ pub(crate) struct Session {
 	pairing: Option<PairButton>,
 	dashboard: Option<Dashboard>,
 	connector: Option<Worker>,
-	reconnect_devices: Arc<Mutex<BTreeSet<String>>>,
+	reconnect_devices: Arc<Mutex<BTreeSet<Address>>>,
 	beep: Option<PttBeep>,
-	headsets: BTreeMap<String, Headset>,
+	headsets: BTreeMap<Address, Headset>,
 	links: BTreeSet<(u64, u64)>,
-	connected_headsets: BTreeSet<String>,
+	connected_headsets: BTreeSet<Address>,
 	reported_controller_warnings: BTreeSet<String>,
 	last_error: Option<String>,
 	last_update: Option<Instant>,
@@ -134,7 +135,7 @@ impl Session {
 		router.set_sco_limit(config.sco_limit);
 		let mut transmit = Transmit::new(
 			config.mode,
-			config.buttons.iter().map(|button| button.address.clone()),
+			config.buttons.iter().filter_map(|button| button.address.clone()),
 		);
 		transmit.set_sco_limit(config.sco_limit);
 		transmit.set_groups(&config.groups);
@@ -388,7 +389,7 @@ impl Session {
 		}
 	}
 
-	fn routing_sources(&self) -> BTreeSet<String> {
+	fn routing_sources(&self) -> BTreeSet<Address> {
 		if self.input.is_some() {
 			self.transmit.sources().clone()
 		} else {
@@ -398,9 +399,9 @@ impl Session {
 
 	fn update_route_set(
 		&mut self,
-		sources: &BTreeSet<String>,
+		sources: &BTreeSet<Address>,
 		transport_ready: bool,
-	) -> Result<BTreeMap<String, Headset>, String> {
+	) -> Result<BTreeMap<Address, Headset>, String> {
 		if !transport_ready {
 			self.router.inspect().map(|(headsets, _)| headsets)
 		} else if self.config.groups.is_empty() && self.input.is_none() {
@@ -476,7 +477,7 @@ impl Session {
 
 	fn report_update(
 		&mut self,
-		update: Result<BTreeMap<String, Headset>, String>,
+		update: Result<BTreeMap<Address, Headset>, String>,
 		config_error: Option<String>,
 		inspect_error: Option<String>,
 	) {
@@ -570,7 +571,7 @@ mod tests {
 			connect: false,
 			pair_button: false,
 			buttons: vec![PttButton {
-				address: "AA:BB:CC:DD:EE:01".into(),
+				address: Some(Address::parse("AA:BB:CC:DD:EE:01").unwrap()),
 				path: "injected-input".into(),
 			}],
 			mode: Mode::HalfDuplex,
@@ -636,7 +637,9 @@ mod tests {
 		let mut session = Session::new(config(), Arc::new(AtomicBool::new(false)));
 		session.input = Some(PttInput::from_events(receiver));
 		session.transmit.topology(&[address.into()].into());
-		assert!(session.transmit.event(address, true, Instant::now()));
+		assert!(session
+			.transmit
+			.event(&Address::parse(address).unwrap(), true, Instant::now()));
 		session.last_update = Some(Instant::now());
 		let mut snapshots = 0;
 		let execute: Execute = Box::new(move |args| {
@@ -661,7 +664,7 @@ mod tests {
 	fn input_open_failure_does_not_save_network_or_start_workers() {
 		let mut config = config();
 		config.buttons = vec![PttButton {
-			address: "AA:BB:CC:DD:EE:01".into(),
+			address: Some(Address::parse("AA:BB:CC:DD:EE:01").unwrap()),
 			path: config
 				.network_path
 				.join("missing-input")

@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
+use crate::bluez::Address;
 use crate::transport::{Device, Transport, profile_matches};
 
 pub(crate) const OWNER_PROPERTY: &str = "bt-intercom.owner";
@@ -43,7 +44,7 @@ impl Headset {
 
 #[derive(Debug)]
 struct DeviceMetadata {
-	address: String,
+	address: Address,
 	transport: Option<Device>,
 }
 
@@ -66,7 +67,7 @@ struct AudioPort {
 #[derive(Debug)]
 pub(crate) struct Snapshot {
 	devices: BTreeMap<u64, DeviceMetadata>,
-	device_observations: Vec<(String, Option<String>)>,
+	device_observations: Vec<(Address, Option<String>)>,
 	nodes: BTreeMap<u64, Node>,
 	ports: Vec<AudioPort>,
 	links: BTreeSet<Link>,
@@ -115,7 +116,9 @@ impl Snapshot {
 			match object["type"].as_str() {
 				Some("PipeWire:Interface:Device") => {
 					if let Some(address) = text(props, "api.bluez5.address") {
-						let address = address.to_ascii_uppercase();
+						let Some(address) = Address::parse(&address).ok() else {
+							continue;
+						};
 						snapshot
 							.device_observations
 							.push((address.clone(), text(props, "api.bluez5.path")));
@@ -171,7 +174,7 @@ impl Snapshot {
 		Ok(snapshot)
 	}
 
-	pub(crate) fn addresses(&self) -> BTreeSet<String> {
+	pub(crate) fn addresses(&self) -> BTreeSet<Address> {
 		self.devices
 			.values()
 			.map(|device| device.address.clone())
@@ -180,8 +183,8 @@ impl Snapshot {
 
 	pub(crate) fn transport_devices(
 		&self,
-		allowed: &BTreeSet<String>,
-	) -> Result<BTreeMap<String, Device>, String> {
+		allowed: &BTreeSet<Address>,
+	) -> Result<BTreeMap<Address, Device>, String> {
 		let mut devices = BTreeMap::new();
 		let mut observed = BTreeMap::new();
 		for (address, path) in &self.device_observations {
@@ -219,9 +222,9 @@ impl Snapshot {
 
 	pub(crate) fn topology(
 		&self,
-		allowed: &BTreeSet<String>,
+		allowed: &BTreeSet<Address>,
 		transport: Transport,
-	) -> (BTreeMap<String, Headset>, BTreeSet<Link>) {
+	) -> (BTreeMap<Address, Headset>, BTreeSet<Link>) {
 		let mut headsets: BTreeMap<_, _> = self
 			.devices
 			.values()
@@ -293,7 +296,7 @@ mod tests {
 	#[test]
 	fn metadata_is_consistent_across_topology_transport_and_ownership() {
 		let snapshot = Snapshot::parse(&fixture()).unwrap();
-		let allowed = [ADDRESS.to_string()].into();
+		let allowed = [Address::parse(ADDRESS).unwrap()].into();
 		let devices = snapshot.transport_devices(&allowed).unwrap();
 		let (headsets, links) = snapshot.topology(&allowed, Transport::Hfp);
 		assert_eq!(snapshot.addresses(), allowed);
@@ -315,7 +318,7 @@ mod tests {
 		let mut value = fixture();
 		value[1]["info"]["props"]["device.id"] = json!(999);
 		let snapshot = Snapshot::parse(&value).unwrap();
-		let allowed = [ADDRESS.to_string()].into();
+		let allowed = [Address::parse(ADDRESS).unwrap()].into();
 		assert!(
 			snapshot.topology(&allowed, Transport::Hfp).0[ADDRESS]
 				.sources

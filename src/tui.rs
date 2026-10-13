@@ -17,6 +17,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table};
 use ratatui::{DefaultTerminal, Frame};
 
+use crate::bluez::Address;
 use crate::device_status::{
 	ConnectionState, HeadsetStatus, SignalQuality, StatusPresentation, StatusUpdate, start_polling,
 };
@@ -31,9 +32,9 @@ enum Focus {
 }
 
 struct ControlPanel {
-	allowed: BTreeSet<String>,
+	allowed: BTreeSet<Address>,
 	group_editor: GroupEditor,
-	status: BTreeMap<String, HeadsetStatus>,
+	status: BTreeMap<Address, HeadsetStatus>,
 	selected_group: Option<usize>,
 	selected_headset: usize,
 	focus: Focus,
@@ -44,7 +45,7 @@ struct ControlPanel {
 }
 
 impl ControlPanel {
-	fn new(allowed: BTreeSet<String>, groups_path: PathBuf) -> Result<Self, String> {
+	fn new(allowed: BTreeSet<Address>, groups_path: PathBuf) -> Result<Self, String> {
 		let groups = load(&groups_path)?;
 		let selected_group = (!groups.is_empty()).then_some(0);
 		Ok(Self {
@@ -188,7 +189,7 @@ impl ControlPanel {
 				Row::new([
 					Cell::from(presentation.name_or("—").to_string()),
 					Cell::from(Span::styled(
-						address.clone(),
+						address.as_str(),
 						self.palette.style(Meaning::Info),
 					)),
 					Cell::from(Span::styled(
@@ -391,7 +392,7 @@ impl Drop for TerminalRestore {
 	}
 }
 
-pub fn run(allowed: BTreeSet<String>, groups_path: PathBuf) -> Result<(), String> {
+pub fn run(allowed: BTreeSet<Address>, groups_path: PathBuf) -> Result<(), String> {
 	if !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
 		return Err("the control panel requires an interactive terminal".into());
 	}
@@ -442,7 +443,7 @@ mod tests {
 			.join(format!("bt-intercom-tui-{}", std::process::id()))
 			.join("talk-groups.json");
 		let _ = std::fs::remove_dir_all(path.parent().unwrap());
-		let address = "AA:BB:CC:DD:EE:01".to_string();
+		let address = Address::parse("AA:BB:CC:DD:EE:01").unwrap();
 		let mut panel = ControlPanel::new([address.clone()].into(), path.clone()).unwrap();
 
 		assert!(!panel.handle_key(KeyCode::Char('n')));

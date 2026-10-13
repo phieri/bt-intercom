@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+use crate::bluez::Address;
 use crate::pipewire::{HEADSET_PROFILE, Snapshot};
 use crate::transmit::{Mode, Transmit};
 
@@ -39,7 +40,7 @@ pub(crate) fn validate_transport(mode: Mode, transport: Transport) -> Result<(),
 }
 
 pub(crate) fn controller_warnings(
-	devices: &BTreeMap<String, Device>,
+	devices: &BTreeMap<Address, Device>,
 	sco_limit: usize,
 ) -> Vec<String> {
 	addresses_by_controller(devices.iter())
@@ -49,7 +50,11 @@ pub(crate) fn controller_warnings(
 			format!(
 				"{} headsets share {controller} ({}), exceeding --sco-limit {sco_limit}. HFP listeners also need SCO/eSCO; verify controller capacity or use --mode half-duplex --transport sco-a2dp with PTT when sharing a radio.",
 				addresses.len(),
-				addresses.join(", ")
+				addresses
+					.iter()
+					.map(ToString::to_string)
+					.collect::<Vec<_>>()
+					.join(", ")
 			)
 		})
 		.collect()
@@ -57,8 +62,8 @@ pub(crate) fn controller_warnings(
 
 pub(crate) fn refresh_transmit_requests(
 	transmit: &mut Transmit,
-	devices: &BTreeMap<String, Device>,
-	disconnected: &BTreeSet<String>,
+	devices: &BTreeMap<Address, Device>,
+	disconnected: &BTreeSet<Address>,
 ) -> bool {
 	let before = transmit.sources().clone();
 	let available: BTreeSet<_> = devices.keys().cloned().collect();
@@ -136,14 +141,14 @@ impl Device {
 }
 
 fn addresses_by_controller<'a>(
-	devices: impl IntoIterator<Item = (&'a String, &'a Device)>,
-) -> BTreeMap<&'a str, Vec<&'a str>> {
+	devices: impl IntoIterator<Item = (&'a Address, &'a Device)>,
+) -> BTreeMap<&'a str, Vec<&'a Address>> {
 	let mut controllers = BTreeMap::new();
 	for (address, device) in devices {
 		controllers
 			.entry(device.controller.as_str())
 			.or_insert_with(Vec::new)
-			.push(address.as_str());
+			.push(address);
 	}
 	controllers
 }
@@ -159,10 +164,10 @@ fn identifier(value: &Value) -> Option<String> {
 pub(crate) struct Coordinator {
 	pub(crate) transport: Transport,
 	sco_limit: usize,
-	sources: Option<BTreeSet<String>>,
-	pub(crate) profile_changes: BTreeMap<String, (Device, u64, Instant)>,
+	sources: Option<BTreeSet<Address>>,
+	pub(crate) profile_changes: BTreeMap<Address, (Device, u64, Instant)>,
 	pub(crate) transition_started: Option<Instant>,
-	disconnects: BTreeSet<String>,
+	disconnects: BTreeSet<Address>,
 }
 
 impl Default for Coordinator {
@@ -179,7 +184,7 @@ impl Default for Coordinator {
 }
 
 struct TransitionIo<'a, F, C> {
-	allowed: &'a BTreeSet<String>,
+	allowed: &'a BTreeSet<Address>,
 	execute: &'a mut F,
 	close_routes: C,
 }
@@ -196,13 +201,13 @@ impl Coordinator {
 		self.sco_limit = limit;
 	}
 
-	pub(crate) fn take_disconnects(&mut self) -> BTreeSet<String> {
+	pub(crate) fn take_disconnects(&mut self) -> BTreeSet<Address> {
 		std::mem::take(&mut self.disconnects)
 	}
 
 	pub(crate) fn snapshot(
 		&mut self,
-		allowed: &BTreeSet<String>,
+		allowed: &BTreeSet<Address>,
 		execute: &mut impl FnMut(&[&str]) -> Result<String, String>,
 	) -> Result<Snapshot, String> {
 		let snapshot = Snapshot::fetch(execute)?;
@@ -218,8 +223,8 @@ impl Coordinator {
 
 	pub(crate) fn prepare(
 		&mut self,
-		sources: &BTreeSet<String>,
-		allowed: &BTreeSet<String>,
+		sources: &BTreeSet<Address>,
+		allowed: &BTreeSet<Address>,
 		execute: &mut impl FnMut(&[&str]) -> Result<String, String>,
 		close_routes: impl FnMut(),
 	) -> Result<bool, String> {
@@ -239,7 +244,7 @@ impl Coordinator {
 
 	fn prepare_inner<F, C>(
 		&mut self,
-		sources: &BTreeSet<String>,
+		sources: &BTreeSet<Address>,
 		io: &mut TransitionIo<'_, F, C>,
 	) -> Result<bool, String>
 	where
@@ -273,7 +278,7 @@ impl Coordinator {
 
 	fn prepare_snapshot<F, C>(
 		&mut self,
-		sources: &BTreeSet<String>,
+		sources: &BTreeSet<Address>,
 		io: &mut TransitionIo<'_, F, C>,
 		snapshot: Snapshot,
 	) -> Result<bool, String>
@@ -323,10 +328,10 @@ impl Coordinator {
 
 	fn demote_receivers<F, C>(
 		&mut self,
-		sources: &BTreeSet<String>,
+		sources: &BTreeSet<Address>,
 		io: &mut TransitionIo<'_, F, C>,
 		snapshot: &Snapshot,
-		devices: &BTreeMap<String, Device>,
+		devices: &BTreeMap<Address, Device>,
 	) -> Result<bool, String>
 	where
 		F: FnMut(&[&str]) -> Result<String, String>,
@@ -348,9 +353,9 @@ impl Coordinator {
 
 	fn promote_sources<F, C>(
 		&mut self,
-		sources: &BTreeSet<String>,
+		sources: &BTreeSet<Address>,
 		io: &mut TransitionIo<'_, F, C>,
-		devices: &BTreeMap<String, Device>,
+		devices: &BTreeMap<Address, Device>,
 	) -> Result<(), String>
 	where
 		F: FnMut(&[&str]) -> Result<String, String>,
@@ -367,9 +372,9 @@ impl Coordinator {
 
 	fn sources_ready(
 		&self,
-		sources: &BTreeSet<String>,
-		headsets: &BTreeMap<String, crate::pipewire::Headset>,
-		devices: &BTreeMap<String, Device>,
+		sources: &BTreeSet<Address>,
+		headsets: &BTreeMap<Address, crate::pipewire::Headset>,
+		devices: &BTreeMap<Address, Device>,
 	) -> bool {
 		devices.iter().all(|(address, device)| {
 			headsets.get(address).is_some_and(|headset| {
@@ -384,10 +389,10 @@ impl Coordinator {
 
 	fn change_profile<F, C>(
 		&mut self,
-		address: &str,
+		address: &Address,
 		expected: &Device,
 		family: &str,
-		sources: &BTreeSet<String>,
+		sources: &BTreeSet<Address>,
 		io: &mut TransitionIo<'_, F, C>,
 	) -> Result<(), String>
 	where
@@ -461,14 +466,14 @@ impl Coordinator {
 		])
 		.map_err(|error| format!("{address}: could not select {family}: {error}"))?;
 		self.profile_changes
-			.insert(address.into(), (current.clone(), index, Instant::now()));
+			.insert(address.clone(), (current.clone(), index, Instant::now()));
 		Ok(())
 	}
 }
 
 fn validate_source_capacity(
-	sources: &BTreeSet<String>,
-	devices: &BTreeMap<String, Device>,
+	sources: &BTreeSet<Address>,
+	devices: &BTreeMap<Address, Device>,
 	sco_limit: usize,
 ) -> Result<(), String> {
 	for (controller, addresses) in addresses_by_controller(
@@ -480,14 +485,18 @@ fn validate_source_capacity(
 			return Err(format!(
 				"SCO capacity conflict on {controller}: {} sources ({}) exceed configured --sco-limit {sco_limit}",
 				addresses.len(),
-				addresses.join(", ")
+				addresses
+					.iter()
+					.map(ToString::to_string)
+					.collect::<Vec<_>>()
+					.join(", ")
 			));
 		}
 	}
 	Ok(())
 }
 
-fn validate_mixed_devices(devices: &BTreeMap<String, Device>) -> Result<(), String> {
+fn validate_mixed_devices(devices: &BTreeMap<Address, Device>) -> Result<(), String> {
 	for (address, device) in devices {
 		for family in [HEADSET_PROFILE, "a2dp-sink"] {
 			if device.index(family).is_none() {
@@ -507,14 +516,14 @@ fn validate_mixed_devices(devices: &BTreeMap<String, Device>) -> Result<(), Stri
 }
 
 impl Device {
-	pub(crate) fn parse(id: u64, address: &str, info: &Value) -> Option<Self> {
+	pub(crate) fn parse(id: u64, address: &Address, info: &Value) -> Option<Self> {
 		let props = &info["props"];
 		let path = props["api.bluez5.path"].as_str()?;
 		let (controller, device_path) = path.rsplit_once('/')?;
 		let hci = controller.strip_prefix("/org/bluez/hci")?;
 		if hci.is_empty()
 			|| !hci.bytes().all(|byte| byte.is_ascii_digit())
-			|| device_path != format!("dev_{}", address.replace(':', "_"))
+			|| device_path != format!("dev_{}", address.as_str().replace(':', "_"))
 		{
 			return None;
 		}
@@ -590,13 +599,17 @@ mod tests {
 
 	const ADDRESS: &str = "AA:BB:CC:DD:EE:01";
 
+	fn address(value: &str) -> Address {
+		Address::parse(value).unwrap()
+	}
+
 	fn device(profiles: Value, current: u64) -> Device {
 		Device::parse(
 			10,
-			ADDRESS,
+			&address(ADDRESS),
 			&json!({
 				"props": {
-					"api.bluez5.path": "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_01",
+					"api.bluez5.path": format!("/org/bluez/hci0/dev_{}", ADDRESS.replace(':', "_")),
 					"object.serial": 1000
 				},
 				"params": {
@@ -608,7 +621,7 @@ mod tests {
 		.unwrap()
 	}
 
-	fn device_on_controller(id: u64, address: &str, controller: &str) -> Device {
+	fn device_on_controller(id: u64, address: &Address, controller: &str) -> Device {
 		Device::parse(
 			id,
 			address,
@@ -616,7 +629,7 @@ mod tests {
 				"props": {
 					"api.bluez5.path": format!(
 						"/org/bluez/{controller}/dev_{}",
-						address.replace(':', "_")
+						address.as_str().replace(':', "_")
 					),
 					"object.serial": id + 1000
 				},
@@ -629,27 +642,24 @@ mod tests {
 	#[test]
 	fn source_capacity_obeys_per_controller_limit() {
 		let addresses = [
-			"AA:BB:CC:DD:EE:01",
-			"AA:BB:CC:DD:EE:02",
-			"AA:BB:CC:DD:EE:03",
+			address("AA:BB:CC:DD:EE:01"),
+			address("AA:BB:CC:DD:EE:02"),
+			address("AA:BB:CC:DD:EE:03"),
 		];
 		let devices = addresses
 			.iter()
 			.enumerate()
 			.map(|(index, address)| {
-				(
-					(*address).to_owned(),
-					device_on_controller(index as u64, address, "hci0"),
-				)
+				(address.clone(), device_on_controller(index as u64, address, "hci0"))
 			})
 			.collect::<BTreeMap<_, _>>();
 		let two = addresses[..2]
 			.iter()
-			.map(|address| (*address).to_owned())
+			.cloned()
 			.collect();
 		let three = addresses
 			.iter()
-			.map(|address| (*address).to_owned())
+			.cloned()
 			.collect();
 
 		assert!(

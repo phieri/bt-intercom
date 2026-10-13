@@ -8,6 +8,7 @@
 use std::fs;
 use std::path::Path;
 
+use crate::bluez::Address;
 use crate::ptt::{KEY_PLAYPAUSE, PttButton};
 
 /// Value accepted in place of an input device path to request discovery.
@@ -28,7 +29,7 @@ fn has_key(mask: &str, code: u16) -> bool {
 }
 
 /// Finds the event device that reports play/pause for `address` under `root`.
-fn find_in(root: &Path, address: &str) -> Result<String, String> {
+fn find_in(root: &Path, address: &Address) -> Result<String, String> {
 	let mut matches = vec![];
 	let entries = fs::read_dir(root).map_err(|error| format!("{}: {error}", root.display()))?;
 	for entry in entries.flatten() {
@@ -38,7 +39,7 @@ fn find_in(root: &Path, address: &str) -> Result<String, String> {
 		}
 		let device = entry.path().join("device");
 		let uniq = fs::read_to_string(device.join("uniq")).unwrap_or_default();
-		if !uniq.trim().eq_ignore_ascii_case(address) {
+		if !uniq.trim().eq_ignore_ascii_case(address.as_str()) {
 			continue;
 		}
 		let keys = fs::read_to_string(device.join("capabilities/key")).unwrap_or_default();
@@ -64,7 +65,7 @@ fn find_in(root: &Path, address: &str) -> Result<String, String> {
 /// A bare `--ptt auto` expands to every listed headset.
 pub(crate) fn resolve_pending(
 	buttons: &mut Vec<PttButton>,
-	allowed: &std::collections::BTreeSet<String>,
+	allowed: &std::collections::BTreeSet<Address>,
 ) -> Result<(), String> {
 	resolve_at(Path::new(SYS_INPUT), buttons, allowed)
 }
@@ -72,20 +73,23 @@ pub(crate) fn resolve_pending(
 fn resolve_at(
 	root: &Path,
 	buttons: &mut Vec<PttButton>,
-	allowed: &std::collections::BTreeSet<String>,
+	allowed: &std::collections::BTreeSet<Address>,
 ) -> Result<(), String> {
-	if let Some(position) = buttons.iter().position(|b| b.address == AUTO) {
+	if let Some(position) = buttons.iter().position(|button| button.address.is_none()) {
 		if buttons.len() > 1 {
 			return Err("--ptt auto cannot be combined with other --ptt mappings".into());
 		}
 		buttons.remove(position);
 		buttons.extend(allowed.iter().map(|address| PttButton {
-			address: address.clone(),
+			address: Some(address.clone()),
 			path: AUTO.into(),
 		}));
 	}
-	for button in buttons.iter_mut().filter(|b| b.path == AUTO) {
-		button.path = find_in(root, &button.address)?;
+	for button in buttons.iter_mut().filter(|button| button.path == AUTO) {
+		let Some(address) = &button.address else {
+			return Err("--ptt auto must be resolved to a headset address".into());
+		};
+		button.path = find_in(root, address)?;
 	}
 	Ok(())
 }
@@ -94,6 +98,10 @@ fn resolve_at(
 mod tests {
 	use super::*;
 	use std::collections::BTreeSet;
+
+	fn address(value: &str) -> Address {
+		Address::parse(value).unwrap()
+	}
 
 	fn device(root: &Path, name: &str, uniq: &str, keys: &str) {
 		let dir = root.join(name).join("device");
@@ -131,16 +139,16 @@ mod tests {
 		device(&root, "event4", "aa:bb:cc:dd:ee:02", "0");
 		device(&root, "event5", "aa:bb:cc:dd:ee:02", &keys);
 		assert_eq!(
-			find_in(&root, "AA:BB:CC:DD:EE:01").unwrap(),
+			find_in(&root, &address("AA:BB:CC:DD:EE:01")).unwrap(),
 			"/dev/input/event3"
 		);
 		assert_eq!(
-			find_in(&root, "AA:BB:CC:DD:EE:02").unwrap(),
+			find_in(&root, &address("AA:BB:CC:DD:EE:02")).unwrap(),
 			"/dev/input/event5"
 		);
-		assert!(find_in(&root, "AA:BB:CC:DD:EE:03").is_err());
+		assert!(find_in(&root, &address("AA:BB:CC:DD:EE:03")).is_err());
 		device(&root, "event6", "aa:bb:cc:dd:ee:01", &keys);
-		assert!(find_in(&root, "AA:BB:CC:DD:EE:01").is_err());
+		assert!(find_in(&root, &address("AA:BB:CC:DD:EE:01")).is_err());
 		fs::remove_dir_all(root).unwrap();
 	}
 
@@ -154,9 +162,12 @@ mod tests {
 			.to_string();
 		device(&root, "event1", "aa:bb:cc:dd:ee:01", &keys);
 		device(&root, "event2", "aa:bb:cc:dd:ee:02", &keys);
-		let allowed = BTreeSet::from(["AA:BB:CC:DD:EE:01".to_string(), "AA:BB:CC:DD:EE:02".into()]);
+		let allowed = BTreeSet::from([
+			address("AA:BB:CC:DD:EE:01"),
+			address("AA:BB:CC:DD:EE:02"),
+		]);
 		let mut buttons = vec![PttButton {
-			address: AUTO.into(),
+			address: None,
 			path: AUTO.into(),
 		}];
 		resolve_at(&root, &mut buttons, &allowed).unwrap();
