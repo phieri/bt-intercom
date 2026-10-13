@@ -17,8 +17,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, List, ListItem, ListState, Paragraph, Row, Table};
 use ratatui::{DefaultTerminal, Frame};
 
-use crate::bluez::{FAIR_RSSI, GOOD_RSSI};
-use crate::device_status::{HeadsetStatus, StatusUpdate, start_polling};
+use crate::device_status::{
+	ConnectionState, HeadsetStatus, SignalQuality, StatusPresentation, StatusUpdate, start_polling,
+};
 use crate::group_editor::GroupEditor;
 use crate::groups::load;
 use crate::terminal_style::{Meaning, Palette};
@@ -169,50 +170,43 @@ impl ControlPanel {
 			.iter()
 			.map(|address| {
 				let status = self.status.get(address);
-				let name = status
-					.and_then(|status| status.name.as_deref())
-					.unwrap_or("—");
-				let connected_state = status.and_then(|status| status.connected);
-				let connected = match connected_state {
-					Some(true) => "connected",
-					Some(false) => "disconnected",
-					None => "unknown",
+				let presentation = StatusPresentation::new(
+					status,
+					Some(status.is_some_and(|status| status.duplex)),
+				);
+				let connection_meaning = match presentation.connection {
+					ConnectionState::Connected => Meaning::Success,
+					ConnectionState::Disconnected => Meaning::Error,
+					ConnectionState::Unknown => Meaning::Warning,
 				};
-				let duplex_ready = status.is_some_and(|status| status.duplex);
-				let duplex = if duplex_ready { "ready" } else { "unavailable" };
-				let rssi = status
-					.and_then(|status| status.rssi)
-					.map_or_else(|| "—".to_string(), |rssi| format!("{rssi} dBm"));
-				let connection_meaning = match connected_state {
-					Some(true) => Meaning::Success,
-					Some(false) => Meaning::Error,
-					None => Meaning::Warning,
-				};
-				let signal_meaning = match status.and_then(|status| status.rssi) {
-					Some(rssi) if rssi >= GOOD_RSSI => Meaning::Success,
-					Some(rssi) if rssi >= FAIR_RSSI => Meaning::Warning,
-					Some(_) => Meaning::Error,
-					None => Meaning::Info,
+				let signal_meaning = match SignalQuality::from_rssi(presentation.rssi) {
+					SignalQuality::Strong | SignalQuality::Good => Meaning::Success,
+					SignalQuality::Fair => Meaning::Warning,
+					SignalQuality::Weak => Meaning::Error,
+					SignalQuality::Unknown => Meaning::Info,
 				};
 				Row::new([
-					Cell::from(name.to_string()),
+					Cell::from(presentation.name_or("—").to_string()),
 					Cell::from(Span::styled(
 						address.clone(),
 						self.palette.style(Meaning::Info),
 					)),
 					Cell::from(Span::styled(
-						connected,
+						presentation.connection.panel_label(),
 						self.palette.style(connection_meaning),
 					)),
 					Cell::from(Span::styled(
-						duplex,
-						self.palette.style(if duplex_ready {
+						presentation.panel_duplex_label(),
+						self.palette.style(if presentation.duplex == Some(true) {
 							Meaning::Success
 						} else {
 							Meaning::Warning
 						}),
 					)),
-					Cell::from(Span::styled(rssi, self.palette.style(signal_meaning))),
+					Cell::from(Span::styled(
+						presentation.rssi_label(),
+						self.palette.style(signal_meaning),
+					)),
 				])
 			})
 			.collect()
@@ -227,9 +221,11 @@ impl ControlPanel {
 					.and_then(|index| self.group_editor.groups.get(index))
 					.is_some_and(|group| group.members.contains(address));
 				let status = self.status.get(address);
-				let name = status
-					.and_then(|status| status.name.as_deref())
-					.unwrap_or(address.as_str());
+				let presentation = StatusPresentation::new(
+					status,
+					Some(status.is_some_and(|status| status.duplex)),
+				);
+				let name = presentation.name_or(address.as_str());
 				ListItem::new(Line::from(vec![
 					Span::styled(
 						if included { "[x] " } else { "[ ] " },

@@ -9,8 +9,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use crate::bluez::{FAIR_RSSI, GOOD_RSSI, STRONG_RSSI};
-use crate::device_status::{HeadsetStatus, StatusUpdate, start_polling};
+use crate::device_status::{HeadsetStatus, StatusPresentation, StatusUpdate, start_polling};
 use crate::router::Headset;
 use crate::routing_status::RoutingStatus;
 use crate::transmit::Mode;
@@ -85,42 +84,21 @@ impl Dashboard {
 		)?;
 		for address in allowed {
 			let bluetooth = self.state.get(address);
-			let status = |flag: Option<bool>| match flag {
-				Some(true) => "yes",
-				Some(false) => "no",
-				None => "?",
-			};
 			let headset = headsets.get(address);
+			let presentation =
+				StatusPresentation::new(bluetooth, headset.map(Headset::has_duplex_audio));
 			let (tx, rx) = routes.counts(address);
-			let signal = bluetooth
-				.filter(|info| info.connected == Some(true))
-				.and_then(|info| info.rssi)
-				.map_or_else(
-					|| "unknown".to_string(),
-					|rssi| {
-						let quality = if rssi >= STRONG_RSSI {
-							"strong"
-						} else if rssi >= GOOD_RSSI {
-							"good"
-						} else if rssi >= FAIR_RSSI {
-							"fair"
-						} else {
-							"weak"
-						};
-						format!("{rssi} dBm ({quality})")
-					},
-				);
+			let signal = presentation.dashboard_signal();
 			writeln!(
 				output,
 				"{:<18} {address}  {:<9}  {:<6}  {tx:>2}/{rx:<2}         {signal}",
-				bluetooth
-					.and_then(|info| info.name.as_deref())
-					.unwrap_or("—")
+				presentation
+					.name_or("—")
 					.chars()
 					.take(18)
 					.collect::<String>(),
-				status(bluetooth.and_then(|info| info.connected)),
-				status(headset.map(Headset::has_duplex_audio))
+				presentation.connection.dashboard_label(),
+				presentation.dashboard_duplex_label()
 			)?;
 		}
 		writeln!(

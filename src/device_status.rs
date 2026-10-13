@@ -8,7 +8,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
-use crate::bluez::{bluetooth_name, device_flag, signal_strength};
+use crate::bluez::{
+	FAIR_RSSI, GOOD_RSSI, STRONG_RSSI, bluetooth_name, device_flag, signal_strength,
+};
 use crate::process::{COMMAND_TIMEOUT, command_cancellable};
 use crate::router::{Headset, Router};
 use crate::worker::Worker;
@@ -28,6 +30,123 @@ impl HeadsetStatus {
 			connected: Some(device_flag(info, "Connected")),
 			duplex,
 			rssi: signal_strength(info),
+		}
+	}
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConnectionState {
+	Connected,
+	Disconnected,
+	Unknown,
+}
+
+impl ConnectionState {
+	pub(crate) fn from_flag(connected: Option<bool>) -> Self {
+		match connected {
+			Some(true) => Self::Connected,
+			Some(false) => Self::Disconnected,
+			None => Self::Unknown,
+		}
+	}
+
+	pub(crate) fn dashboard_label(self) -> &'static str {
+		match self {
+			Self::Connected => "yes",
+			Self::Disconnected => "no",
+			Self::Unknown => "?",
+		}
+	}
+
+	pub(crate) fn panel_label(self) -> &'static str {
+		match self {
+			Self::Connected => "connected",
+			Self::Disconnected => "disconnected",
+			Self::Unknown => "unknown",
+		}
+	}
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SignalQuality {
+	Strong,
+	Good,
+	Fair,
+	Weak,
+	Unknown,
+}
+
+impl SignalQuality {
+	pub(crate) fn from_rssi(rssi: Option<i32>) -> Self {
+		match rssi {
+			Some(rssi) if rssi >= STRONG_RSSI => Self::Strong,
+			Some(rssi) if rssi >= GOOD_RSSI => Self::Good,
+			Some(rssi) if rssi >= FAIR_RSSI => Self::Fair,
+			Some(_) => Self::Weak,
+			None => Self::Unknown,
+		}
+	}
+
+	pub(crate) fn label(self) -> &'static str {
+		match self {
+			Self::Strong => "strong",
+			Self::Good => "good",
+			Self::Fair => "fair",
+			Self::Weak => "weak",
+			Self::Unknown => "unknown",
+		}
+	}
+}
+
+pub(crate) struct StatusPresentation<'a> {
+	pub(crate) name: Option<&'a str>,
+	pub(crate) connection: ConnectionState,
+	pub(crate) duplex: Option<bool>,
+	pub(crate) rssi: Option<i32>,
+}
+
+impl<'a> StatusPresentation<'a> {
+	pub(crate) fn new(status: Option<&'a HeadsetStatus>, duplex: Option<bool>) -> Self {
+		Self {
+			name: status.and_then(|status| status.name.as_deref()),
+			connection: ConnectionState::from_flag(status.and_then(|status| status.connected)),
+			duplex,
+			rssi: status.and_then(|status| status.rssi),
+		}
+	}
+
+	pub(crate) fn name_or(&self, fallback: &'a str) -> &'a str {
+		self.name.unwrap_or(fallback)
+	}
+
+	pub(crate) fn dashboard_duplex_label(&self) -> &'static str {
+		match self.duplex {
+			Some(true) => "yes",
+			Some(false) => "no",
+			None => "?",
+		}
+	}
+
+	pub(crate) fn panel_duplex_label(&self) -> &'static str {
+		if self.duplex == Some(true) {
+			"ready"
+		} else {
+			"unavailable"
+		}
+	}
+
+	pub(crate) fn rssi_label(&self) -> String {
+		self.rssi
+			.map_or_else(|| "—".to_string(), |rssi| format!("{rssi} dBm"))
+	}
+
+	pub(crate) fn dashboard_signal(&self) -> String {
+		match (self.connection, self.rssi) {
+			(ConnectionState::Connected, Some(rssi)) => format!(
+				"{rssi} dBm ({})",
+				SignalQuality::from_rssi(Some(rssi)).label()
+			),
+			_ => "unknown".to_string(),
 		}
 	}
 }
@@ -230,5 +349,47 @@ mod tests {
 		assert_eq!(update.statuses["A"].connected, Some(false));
 		assert!(!update.statuses["A"].duplex);
 		assert_eq!(update.error.as_deref(), Some("PipeWire unavailable"));
+	}
+
+	#[test]
+	fn presentation_shares_status_semantics_without_collapsing_view_labels() {
+		let status = HeadsetStatus {
+			name: Some("Dispatch headset".into()),
+			connected: Some(true),
+			duplex: true,
+			rssi: Some(-67),
+		};
+		let presentation = StatusPresentation::new(Some(&status), Some(status.duplex));
+
+		assert_eq!(presentation.name_or("fallback"), "Dispatch headset");
+		assert_eq!(presentation.connection.dashboard_label(), "yes");
+		assert_eq!(presentation.connection.panel_label(), "connected");
+		assert_eq!(presentation.dashboard_duplex_label(), "yes");
+		assert_eq!(presentation.panel_duplex_label(), "ready");
+		assert_eq!(presentation.rssi_label(), "-67 dBm");
+		assert_eq!(presentation.dashboard_signal(), "-67 dBm (good)");
+
+		let unknown = StatusPresentation::new(None, None);
+		assert_eq!(unknown.name_or("fallback"), "fallback");
+		assert_eq!(unknown.connection.dashboard_label(), "?");
+		assert_eq!(unknown.connection.panel_label(), "unknown");
+		assert_eq!(unknown.dashboard_duplex_label(), "?");
+		assert_eq!(unknown.panel_duplex_label(), "unavailable");
+		assert_eq!(unknown.rssi_label(), "—");
+		assert_eq!(unknown.dashboard_signal(), "unknown");
+
+		let disconnected_status = HeadsetStatus {
+			connected: Some(false),
+			rssi: Some(-40),
+			..HeadsetStatus::default()
+		};
+		let disconnected = StatusPresentation::new(Some(&disconnected_status), Some(false));
+		assert_eq!(disconnected.dashboard_signal(), "unknown");
+		assert_eq!(disconnected.rssi_label(), "-40 dBm");
+		assert_eq!(SignalQuality::from_rssi(Some(-60)), SignalQuality::Strong);
+		assert_eq!(SignalQuality::from_rssi(Some(-70)), SignalQuality::Good);
+		assert_eq!(SignalQuality::from_rssi(Some(-80)), SignalQuality::Fair);
+		assert_eq!(SignalQuality::from_rssi(Some(-81)), SignalQuality::Weak);
+		assert_eq!(SignalQuality::from_rssi(None), SignalQuality::Unknown);
 	}
 }
