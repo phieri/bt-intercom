@@ -350,4 +350,48 @@ mod tests {
 		assert!(!update.statuses["A"].duplex);
 		assert_eq!(update.error.as_deref(), Some("PipeWire unavailable"));
 	}
+
+	#[test]
+	fn presentation_shares_status_semantics_without_collapsing_view_labels() {
+		let status = HeadsetStatus {
+			name: Some("Dispatch headset".into()),
+			connected: Some(true),
+			duplex: true,
+			rssi: Some(-67),
+		};
+		let presentation = StatusPresentation::new(Some(&status), Some(status.duplex));
+
+		assert_eq!(presentation.name_or("fallback"), "Dispatch headset");
+		assert_eq!(presentation.connection.dashboard_label(), "yes");
+		assert_eq!(presentation.connection.panel_label(), "connected");
+		assert_eq!(presentation.dashboard_duplex_label(), "yes");
+		assert_eq!(presentation.panel_duplex_label(), "ready");
+		assert_eq!(presentation.rssi_label(), "-67 dBm");
+		assert_eq!(presentation.dashboard_signal(), "-67 dBm (good)");
+
+		let unknown = StatusPresentation::new(None, None);
+		assert_eq!(unknown.name_or("fallback"), "fallback");
+		assert_eq!(unknown.connection.dashboard_label(), "?");
+		assert_eq!(unknown.connection.panel_label(), "unknown");
+		assert_eq!(unknown.dashboard_duplex_label(), "?");
+		assert_eq!(unknown.panel_duplex_label(), "unavailable");
+		assert_eq!(unknown.rssi_label(), "—");
+		assert_eq!(unknown.dashboard_signal(), "unknown");
+
+		let disconnected = StatusPresentation::new(
+			Some(&HeadsetStatus {
+				connected: Some(false),
+				rssi: Some(-40),
+				..HeadsetStatus::default()
+			}),
+			Some(false),
+		);
+		assert_eq!(disconnected.dashboard_signal(), "unknown");
+		assert_eq!(disconnected.rssi_label(), "-40 dBm");
+		assert_eq!(SignalQuality::from_rssi(Some(-60)), SignalQuality::Strong);
+		assert_eq!(SignalQuality::from_rssi(Some(-70)), SignalQuality::Good);
+		assert_eq!(SignalQuality::from_rssi(Some(-80)), SignalQuality::Fair);
+		assert_eq!(SignalQuality::from_rssi(Some(-81)), SignalQuality::Weak);
+		assert_eq!(SignalQuality::from_rssi(None), SignalQuality::Unknown);
+	}
 }
