@@ -31,6 +31,11 @@ use crate::worker::Worker;
 
 type Execute = Box<dyn FnMut(&[&str]) -> Result<String, String>>;
 
+struct InspectionOutcome {
+	changed: bool,
+	error: Option<String>,
+}
+
 pub(crate) fn guard_half_update<T>(
 	mode: Mode,
 	update: &Result<T, String>,
@@ -362,13 +367,13 @@ impl Session {
 		}
 		let update = self.update_route_set(&sources, transport_ready);
 		guard_half_update(self.config.mode, &update, || self.router.close())?;
-		let (changed, inspect_error) = self.inspect_and_confirm()?;
-		if changed {
+		let inspection = self.inspect_and_confirm()?;
+		if inspection.changed {
 			self.router.close();
 			self.links.clear();
 		}
-		self.report_update(update, config_error, inspect_error);
-		self.last_update = (!changed).then(Instant::now);
+		self.report_update(update, config_error, inspection.error);
+		self.last_update = (!inspection.changed).then(Instant::now);
 		Ok(())
 	}
 
@@ -409,13 +414,16 @@ impl Session {
 		}
 	}
 
-	fn inspect_and_confirm(&mut self) -> Result<(bool, Option<String>), String> {
+	fn inspect_and_confirm(&mut self) -> Result<InspectionOutcome, String> {
 		let (current, active) = match self.router.inspect_owned() {
 			Ok(snapshot) => snapshot,
 			Err(error) => {
 				self.headsets.clear();
 				self.links.clear();
-				return Ok((false, Some(error)));
+				return Ok(InspectionOutcome {
+					changed: false,
+					error: Some(error),
+				});
 			}
 		};
 		self.headsets = current;
@@ -460,7 +468,10 @@ impl Session {
 				&self.stopped,
 			);
 		}
-		Ok((changed, None))
+		Ok(InspectionOutcome {
+			changed,
+			error: None,
+		})
 	}
 
 	fn report_update(
