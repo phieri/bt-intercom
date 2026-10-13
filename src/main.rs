@@ -10,6 +10,7 @@ mod bluez;
 mod dashboard;
 mod device_status;
 mod groups;
+mod group_editor;
 mod network;
 mod pair_button;
 mod pipewire;
