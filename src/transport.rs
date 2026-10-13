@@ -182,8 +182,7 @@ impl TransitionPhase {
 		if let Self::Preparing {
 			sources: current,
 			started_at,
-		} = self
-			&& current == sources
+		} = self && current == sources
 		{
 			return *started_at;
 		}
@@ -203,11 +202,10 @@ impl TransitionPhase {
 			sources: sources.clone(),
 		};
 	}
-
 }
 
 /// Explicit transition state, independent of command execution and audio links.
-struct TransitionState {
+pub(crate) struct TransitionState {
 	phase: TransitionPhase,
 	pending_profiles: BTreeMap<Address, PendingProfile>,
 }
@@ -231,13 +229,11 @@ impl TransitionState {
 	}
 
 	fn retain_unobserved_profiles(&mut self, devices: &BTreeMap<Address, Device>) {
-		self.pending_profiles
-			.retain(|address, pending| {
-				devices.get(address).is_some_and(|current| {
-					current.same_identity(&pending.device)
-						&& current.current != Some(pending.index)
-				})
-			});
+		self.pending_profiles.retain(|address, pending| {
+			devices.get(address).is_some_and(|current| {
+				current.same_identity(&pending.device) && current.current != Some(pending.index)
+			})
+		});
 	}
 
 	fn has_pending_profiles(&self) -> bool {
@@ -259,7 +255,8 @@ impl TransitionState {
 		self.pending_profiles.get(address)
 	}
 
-	fn preparing_since(&self) -> Option<Instant> {
+	#[cfg(test)]
+	pub(crate) fn preparing_since(&self) -> Option<Instant> {
 		match self.phase {
 			TransitionPhase::Preparing { started_at, .. } => Some(started_at),
 			TransitionPhase::Idle | TransitionPhase::Ready { .. } => None,
@@ -267,12 +264,12 @@ impl TransitionState {
 	}
 
 	#[cfg(test)]
-	fn profile_count(&self) -> usize {
+	pub(crate) fn profile_count(&self) -> usize {
 		self.pending_profiles.len()
 	}
 
 	#[cfg(test)]
-	fn expire_preparation(&mut self, age: Duration) {
+	pub(crate) fn expire_preparation(&mut self, age: Duration) {
 		if let TransitionPhase::Preparing { started_at, .. } = &mut self.phase {
 			*started_at = Instant::now() - age;
 		}
@@ -283,7 +280,7 @@ impl TransitionState {
 pub(crate) struct Coordinator {
 	pub(crate) transport: Transport,
 	sco_limit: usize,
-	transition: TransitionState,
+	pub(crate) transition: TransitionState,
 	disconnects: BTreeSet<Address>,
 }
 
