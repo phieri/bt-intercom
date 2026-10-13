@@ -46,6 +46,10 @@ impl LinkRegistry {
 		}
 	}
 
+	fn clear(&mut self) {
+		self.owned.clear();
+	}
+
 	fn reconcile(
 		&mut self,
 		desired: &BTreeSet<Link>,
@@ -324,12 +328,10 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 		);
 		let mut failures = Vec::new();
 		let live = snapshot.owned_links(&self.owned.owner);
-		failures.extend(self.owned.reconcile(
-			&desired,
-			&existing,
-			&live,
-			&mut self.start_link,
-		));
+		failures.extend(
+			self.owned
+				.reconcile(&desired, &existing, &live, &mut self.start_link),
+		);
 		if failures.is_empty() {
 			Ok(headsets)
 		} else {

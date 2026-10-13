@@ -7,6 +7,7 @@
 
 mod atomic_file;
 mod bluez;
+mod cli;
 mod dashboard;
 mod device_status;
 mod group_editor;
@@ -50,9 +51,11 @@ use std::time::Duration;
 #[cfg(test)]
 use std::time::Instant;
 
-use bluez::{Address, bluetooth_name, device_flag, parse_address};
-use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
-use clap_complete::Shell;
+#[cfg(test)]
+use bluez::parse_address;
+use bluez::{Address, bluetooth_name, device_flag};
+use clap::FromArgMatches;
+use cli::{Cli, CliCommand, cli_command};
 use groups::config_path as talk_groups_path;
 use network::{
 	headset_path as headset_network_path, load as load_headsets, remove as remove_headset,
@@ -62,123 +65,13 @@ use network::{load_for_run as load_run_headsets, save as save_headsets};
 use process::{COMMAND_TIMEOUT, command};
 #[cfg(test)]
 use ptt::KEY_PLAYPAUSE;
-use ptt::PttButton;
 use router::Router;
-use runtime_config::parse_interval;
+#[cfg(test)]
 use transmit::Mode;
 #[cfg(test)]
 use transmit::Transmit;
+#[cfg(test)]
 use transport::Transport;
-
-#[derive(Parser)]
-#[command(
-	name = "bt-intercom",
-	version = concat!(
-		env!("CARGO_PKG_VERSION"),
-		"\nBuild datetime: ",
-		env!("BT_INTERCOM_BUILD_DATETIME")
-	),
-	long_version = concat!(
-		env!("CARGO_PKG_VERSION"),
-		"\nBuild datetime: ",
-		env!("BT_INTERCOM_BUILD_DATETIME")
-	),
-	about = "A Bluetooth headset intercom for Linux",
-	arg_required_else_help = true
-)]
-struct Cli {
-	/// Enable detailed diagnostics on stderr (unless RUST_LOG is set).
-	#[arg(long, global = true)]
-	verbose: bool,
-	#[command(subcommand)]
-	command: CliCommand,
-}
-
-fn cli_command() -> clap::Command {
-	Cli::command().disable_version_flag(true).arg(
-		clap::Arg::new("version")
-			.short('V')
-			.short_alias('v')
-			.long("version")
-			.action(clap::ArgAction::Version),
-	)
-}
-
-#[derive(Subcommand)]
-enum CliCommand {
-	/// Scan for nearby Bluetooth devices.
-	Scan {
-		/// Scan duration in seconds.
-		#[arg(
-            long,
-            default_value_t = 15,
-            value_parser = clap::value_parser!(u64).range(1..=300)
-        )]
-		seconds: u64,
-	},
-	/// Pair, trust, and connect a headset.
-	Pair {
-		#[arg(value_parser = parse_address)]
-		address: Address,
-	},
-	/// Remove a headset from the saved intercom network.
-	Remove {
-		#[arg(value_parser = parse_address)]
-		address: Address,
-	},
-	/// Show Bluetooth headset audio status.
-	Status {
-		#[arg(required = true, value_parser = parse_address)]
-		addresses: Vec<Address>,
-	},
-	/// Route configured headset microphones to one another, optionally showing the live dashboard.
-	Run {
-		#[arg(value_parser = parse_address)]
-		addresses: Vec<Address>,
-		/// Routing update interval in seconds.
-		#[arg(long, default_value_t = 2.0, value_parser = parse_interval)]
-		interval: f64,
-		/// Reconnect disconnected headsets every 30 seconds.
-		#[arg(long)]
-		connect: bool,
-		/// Maximum simultaneous SCO/eSCO links per Bluetooth controller (default: 1).
-		/// Increase only after verifying the controller, firmware, and headset capacity.
-		#[arg(long, default_value_t = 1, value_parser = parse_sco_limit)]
-		sco_limit: usize,
-		/// Pair one nearby Just Works headset on a Raspberry Pi GPIO17 button press.
-		/// Requires full-duplex without --ptt; wire physical pin 11 to ground.
-		#[arg(long, conflicts_with = "ptt")]
-		pair_button: bool,
-		/// Map a headset address to an evdev input path; repeat once per headset.
-		/// Defaults to matching every headset automatically. Use ADDRESS=auto, or a
-		/// lone `auto`, to request automatic discovery explicitly.
-		#[arg(long, value_name = "ADDRESS=/dev/input/eventX|auto", value_parser = parse_ptt_binding)]
-		ptt: Vec<PttButton>,
-		/// Transmit policy. Half-duplex requires --ptt for every headset:
-		/// hold play/pause to request the FIFO floor; release to cancel/relinquish.
-		/// Full-duplex mappings start in PTT; three play/pause presses within
-		/// 1 second (first to third, inclusive; release between presses) toggle
-		/// that headset independently between PTT and always open.
-		/// Without active mappings full-duplex is always open. Disconnected mapped
-		/// headsets reset to PTT and require a fresh press after reconnection.
-		#[arg(long, value_enum, default_value_t = Mode::FullDuplex)]
-		mode: Mode,
-		/// Audio transport: hfp leaves profiles unchanged; sco-a2dp switches
-		/// the talker to HFP and listeners to A2DP (requires half-duplex PTT).
-		#[arg(long, value_enum, default_value_t = Transport::Hfp)]
-		transport: Transport,
-		/// Show the live terminal dashboard.
-		#[arg(long)]
-		dashboard: bool,
-	},
-	/// Generate shell completion definitions.
-	Completions {
-		#[arg(value_enum)]
-		shell: Shell,
-	},
-	/// Open the interactive terminal control panel.
-	Panel,
-}
 
 /// Opens an interactive BlueZ agent session to pair the specified device.
 fn pair_command(device: &str) -> Result<(), String> {
@@ -198,35 +91,6 @@ fn pair_command(device: &str) -> Result<(), String> {
 	} else {
 		Err(format!("bluetoothctl pair exited with {status}"))
 	}
-}
-
-fn parse_sco_limit(value: &str) -> Result<usize, String> {
-	let limit = value
-		.parse::<usize>()
-		.map_err(|_| "--sco-limit must be a positive integer")?;
-	if limit == 0 {
-		return Err("--sco-limit must be at least 1".into());
-	}
-	Ok(limit)
-}
-
-fn parse_ptt_binding(value: &str) -> Result<PttButton, String> {
-	if value == ptt_discovery::AUTO {
-		return Ok(PttButton {
-			address: None,
-			path: value.into(),
-		});
-	}
-	let (device, path) = value
-		.split_once('=')
-		.ok_or("--ptt must be ADDRESS=/dev/input/eventX")?;
-	if path.is_empty() {
-		return Err("--ptt requires an input device path".into());
-	}
-	Ok(PttButton {
-		address: Some(parse_address(device).map_err(|error| error.to_string())?),
-		path: path.into(),
-	})
 }
 
 /// Parses and validates one or more Bluetooth addresses.
@@ -383,13 +247,15 @@ fn main() {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use crate::ptt::PttButton;
 	use crate::ptt::{BEEP_WAV, confirm_transmissions, drain_events, read_input_events};
-	use crate::runtime_config::{validate_mode, validate_ptt};
+	use crate::runtime_config::{parse_interval, validate_mode, validate_ptt};
 	use crate::session::{connect_disconnected, guard_half_update, reconnect_worker};
 	use crate::transport::{
 		refresh_transmit_requests as refresh_transport_requests, validate_controller_count,
 		validate_transport,
 	};
+	use clap::{CommandFactory, Parser};
 	use std::ffi::OsStr;
 
 	fn address(value: &str) -> Address {
