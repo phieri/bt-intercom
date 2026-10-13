@@ -82,7 +82,10 @@ mod tests {
 
 	fn path(label: &str) -> PathBuf {
 		std::env::temp_dir()
-			.join(format!("bt-intercom-group-editor-{label}-{}", std::process::id()))
+			.join(format!(
+				"bt-intercom-group-editor-{label}-{}",
+				std::process::id()
+			))
 			.join("talk-groups.json")
 	}
 
@@ -112,8 +115,11 @@ mod tests {
 	#[test]
 	fn persistence_errors_are_reported_without_discarding_edits() {
 		let path = path("failure");
+		let directory = path.parent().unwrap();
+		std::fs::create_dir_all(directory).unwrap();
+		std::fs::write(directory.join("not-a-directory"), "file").unwrap();
 		let mut editor = GroupEditor::new(
-			path.join("not-a-directory").join("groups.json"),
+			directory.join("not-a-directory").join("groups.json"),
 			Vec::new(),
 		);
 

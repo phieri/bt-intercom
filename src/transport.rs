@@ -42,11 +42,7 @@ pub(crate) fn controller_warnings(
 	devices: &BTreeMap<String, Device>,
 	sco_limit: usize,
 ) -> Vec<String> {
-	addresses_by_controller(
-		devices
-			.iter()
-			.map(|(address, device)| (address, device)),
-	)
+	addresses_by_controller(devices.iter())
 		.into_iter()
 		.filter(|(_, addresses)| addresses.len() > sco_limit)
 		.map(|(controller, addresses)| {
@@ -475,9 +471,11 @@ fn validate_source_capacity(
 	devices: &BTreeMap<String, Device>,
 	sco_limit: usize,
 ) -> Result<(), String> {
-	for (controller, addresses) in addresses_by_controller(sources.iter().filter_map(|address| {
-		devices.get(address).map(|device| (address, device))
-	})) {
+	for (controller, addresses) in addresses_by_controller(
+		sources
+			.iter()
+			.filter_map(|address| devices.get(address).map(|device| (address, device))),
+	) {
 		if addresses.len() > sco_limit {
 			return Err(format!(
 				"SCO capacity conflict on {controller}: {} sources ({}) exceed configured --sco-limit {sco_limit}",
