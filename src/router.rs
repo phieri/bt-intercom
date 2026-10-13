@@ -33,6 +33,90 @@ trait LinkHandle {
 	fn is_running(&mut self) -> Result<bool, String>;
 }
 
+struct LinkRegistry {
+	owner: String,
+	owned: BTreeMap<Link, (Box<dyn LinkHandle>, Instant)>,
+}
+
+impl LinkRegistry {
+	fn new(owner: String) -> Self {
+		Self {
+			owner,
+			owned: BTreeMap::new(),
+		}
+	}
+
+	fn clear(&mut self) {
+		self.owned.clear();
+	}
+
+	fn reconcile(
+		&mut self,
+		desired: &BTreeSet<Link>,
+		existing: &BTreeSet<Link>,
+		live: &BTreeSet<Link>,
+		start_link: &mut StartLink,
+	) -> Vec<String> {
+		let mut failures = Vec::new();
+		self.owned.retain(|link, (handle, started)| {
+			if !desired.contains(link) {
+				log::debug!(
+					"Releasing link {} -> {} (no longer desired)",
+					link.0,
+					link.1
+				);
+				return false;
+			}
+			match handle.is_running() {
+				Ok(true) if live.contains(link) || started.elapsed() < Duration::from_secs(15) => {
+					true
+				}
+				Ok(true) => {
+					failures.push(format!("Link did not appear for {} -> {}", link.0, link.1));
+					false
+				}
+				Ok(false) => {
+					failures.push(format!("Link process exited for {} -> {}", link.0, link.1));
+					false
+				}
+				Err(error) => {
+					failures.push(error);
+					false
+				}
+			}
+		});
+		let properties = serde_json::json!({
+			OWNER_PROPERTY: self.owner,
+			"object.linger": false,
+		})
+		.to_string();
+		for &(output, input) in desired.difference(existing) {
+			if self.owned.contains_key(&(output, input)) {
+				continue;
+			}
+			match start_link(&[
+				"pw-cli",
+				"-m",
+				"create-link",
+				"-",
+				&output.to_string(),
+				"-",
+				&input.to_string(),
+				&properties,
+			]) {
+				Ok(handle) => {
+					log::debug!("Creating link {output} -> {input}");
+					self.owned.insert((output, input), (handle, Instant::now()));
+				}
+				Err(error) => {
+					failures.push(format!("Could not link ports {output} -> {input}: {error}"))
+				}
+			}
+		}
+		failures
+	}
+}
+
 /// The production link handle; dropping it terminates its owning `pw-cli`.
 struct LinkProcess(Child);
 
@@ -90,10 +174,9 @@ pub fn has_active_intercom_connection(
 pub struct Router<F = fn(&[&str]) -> Result<String, String>> {
 	/// Bluetooth addresses that may be discovered or routed.
 	pub allowed: BTreeSet<Address>,
-	owner: String,
 	execute: F,
 	start_link: StartLink,
-	owned: BTreeMap<Link, (Box<dyn LinkHandle>, Instant)>,
+	owned: LinkRegistry,
 	coordinator: transport::Coordinator,
 }
 
@@ -132,20 +215,20 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 	}
 
 	fn with_backend(allowed: BTreeSet<Address>, execute: F, start_link: StartLink) -> Self {
+		let owner = format!(
+			"{}-{}-{}",
+			std::process::id(),
+			SystemTime::now()
+				.duration_since(UNIX_EPOCH)
+				.unwrap_or_default()
+				.as_nanos(),
+			NEXT_ROUTER.fetch_add(1, Ordering::Relaxed)
+		);
 		Self {
 			allowed,
-			owner: format!(
-				"{}-{}-{}",
-				std::process::id(),
-				SystemTime::now()
-					.duration_since(UNIX_EPOCH)
-					.unwrap_or_default()
-					.as_nanos(),
-				NEXT_ROUTER.fetch_add(1, Ordering::Relaxed)
-			),
 			execute,
 			start_link,
-			owned: BTreeMap::new(),
+			owned: LinkRegistry::new(owner),
 			coordinator: transport::Coordinator::default(),
 		}
 	}
@@ -241,65 +324,14 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 			headsets.len(),
 			desired.len(),
 			existing.len(),
-			self.owned.len()
+			self.owned.owned.len()
 		);
 		let mut failures = Vec::new();
-		let live = snapshot.owned_links(&self.owner);
-		self.owned.retain(|link, (handle, started)| {
-			if !desired.contains(link) {
-				log::debug!(
-					"Releasing link {} -> {} (no longer desired)",
-					link.0,
-					link.1
-				);
-				return false;
-			}
-			match handle.is_running() {
-				Ok(true) if live.contains(link) || started.elapsed() < Duration::from_secs(15) => {
-					true
-				}
-				Ok(true) => {
-					failures.push(format!("Link did not appear for {} -> {}", link.0, link.1));
-					false
-				}
-				Ok(false) => {
-					failures.push(format!("Link process exited for {} -> {}", link.0, link.1));
-					false
-				}
-				Err(error) => {
-					failures.push(error);
-					false
-				}
-			}
-		});
-		let properties = serde_json::json!({
-			OWNER_PROPERTY: self.owner,
-			"object.linger": false,
-		})
-		.to_string();
-		for &(output, input) in desired.difference(&existing) {
-			if self.owned.contains_key(&(output, input)) {
-				continue;
-			}
-			match (self.start_link)(&[
-				"pw-cli",
-				"-m",
-				"create-link",
-				"-",
-				&output.to_string(),
-				"-",
-				&input.to_string(),
-				&properties,
-			]) {
-				Ok(handle) => {
-					log::debug!("Creating link {output} -> {input}");
-					self.owned.insert((output, input), (handle, Instant::now()));
-				}
-				Err(error) => {
-					failures.push(format!("Could not link ports {output} -> {input}: {error}"))
-				}
-			}
-		}
+		let live = snapshot.owned_links(&self.owned.owner);
+		failures.extend(
+			self.owned
+				.reconcile(&desired, &existing, &live, &mut self.start_link),
+		);
 		if failures.is_empty() {
 			Ok(headsets)
 		} else {
@@ -319,7 +351,7 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 	) -> Result<(BTreeMap<Address, Headset>, BTreeSet<Link>), String> {
 		let snapshot = self.snapshot()?;
 		let (headsets, _) = snapshot.topology(&self.allowed, self.coordinator.transport);
-		Ok((headsets, snapshot.owned_links(&self.owner)))
+		Ok((headsets, snapshot.owned_links(&self.owned.owner)))
 	}
 
 	fn snapshot(&mut self) -> Result<Snapshot, String> {
@@ -641,16 +673,16 @@ mod tests {
 		router.set_transport(Transport::ScoA2dp);
 		let sources = [address(A)].into();
 		assert!(!router.prepare_transport(&sources).unwrap());
-		assert!(router.coordinator.profile_changes.is_empty());
-		let started = router.coordinator.transition_started;
+		assert_eq!(router.coordinator.transition.profile_count(), 0);
+		let started = router.coordinator.transition.preparing_since();
 		assert!(!router.prepare_transport(&sources).unwrap());
-		assert_eq!(router.coordinator.transition_started, started);
+		assert_eq!(router.coordinator.transition.preparing_since(), started);
 		server
 			.objects
 			.borrow_mut()
 			.push(transport_fixture()[3].clone());
 		assert!(router.prepare_transport(&sources).unwrap());
-		assert!(router.coordinator.transition_started.is_none());
+		assert!(router.coordinator.transition.preparing_since().is_none());
 		router.update_sources(&sources).unwrap();
 		assert_eq!(server.links(), 2);
 
@@ -664,19 +696,22 @@ mod tests {
 			.unwrap()["info"]["params"]["Profile"] = json!([{"index":17}]);
 		assert!(!router.prepare_transport(&sources).unwrap());
 		assert_eq!(server.links(), 0);
-		let started = router.coordinator.transition_started;
+		let started = router.coordinator.transition.preparing_since();
 		assert!(!router.prepare_transport(&sources).unwrap());
-		assert_eq!(router.coordinator.transition_started, started);
+		assert_eq!(router.coordinator.transition.preparing_since(), started);
 		observe_profile(&server, 20, false);
 		assert!(router.prepare_transport(&sources).unwrap());
-		assert!(router.coordinator.transition_started.is_none());
+		assert!(router.coordinator.transition.preparing_since().is_none());
 
 		server
 			.objects
 			.borrow_mut()
 			.retain(|object| object["id"] != 13);
 		assert!(!router.prepare_transport(&sources).unwrap());
-		router.coordinator.transition_started = Some(Instant::now() - Duration::from_secs(31));
+		router
+			.coordinator
+			.transition
+			.expire_preparation(Duration::from_secs(31));
 		assert!(
 			router
 				.prepare_transport(&sources)
@@ -696,8 +731,11 @@ mod tests {
 		assert!(!router.prepare_transport(&sources).unwrap());
 		server.objects.borrow_mut()[6]["info"]["params"]["Profile"] = json!([{"index":41}]);
 		assert!(!router.prepare_transport(&sources).unwrap());
-		assert!(router.coordinator.profile_changes.is_empty());
-		router.coordinator.transition_started = Some(Instant::now() - Duration::from_secs(31));
+		assert_eq!(router.coordinator.transition.profile_count(), 0);
+		router
+			.coordinator
+			.transition
+			.expire_preparation(Duration::from_secs(31));
 		assert!(
 			router
 				.prepare_transport(&sources)
@@ -1149,7 +1187,7 @@ mod tests {
 		server.replace_after_snapshot.replace(true);
 		router.update(false).unwrap();
 		assert_eq!(server.links(), 4);
-		assert!(router.owned.is_empty());
+		assert!(router.owned.owned.is_empty());
 	}
 
 	#[test]

@@ -160,13 +160,127 @@ fn identifier(value: &Value) -> Option<String> {
 		.or_else(|| value.as_u64().map(|n| n.to_string()))
 }
 
-/// Profile-transition state, independent of the clients owning audio links.
+struct PendingProfile {
+	device: Device,
+	index: u64,
+	requested_at: Instant,
+}
+
+enum TransitionPhase {
+	Idle,
+	Preparing {
+		sources: BTreeSet<Address>,
+		started_at: Instant,
+	},
+	Ready {
+		sources: BTreeSet<Address>,
+	},
+}
+
+impl TransitionPhase {
+	fn begin(&mut self, sources: &BTreeSet<Address>) -> Instant {
+		if let Self::Preparing {
+			sources: current,
+			started_at,
+		} = self && current == sources
+		{
+			return *started_at;
+		}
+		let started_at = Instant::now();
+		*self = Self::Preparing {
+			sources: sources.clone(),
+			started_at,
+		};
+		started_at
+	}
+
+	fn mark_ready(&mut self) {
+		let Self::Preparing { sources, .. } = self else {
+			return;
+		};
+		*self = Self::Ready {
+			sources: sources.clone(),
+		};
+	}
+}
+
+/// Explicit transition state, independent of command execution and audio links.
+pub(crate) struct TransitionState {
+	phase: TransitionPhase,
+	pending_profiles: BTreeMap<Address, PendingProfile>,
+}
+
+impl Default for TransitionState {
+	fn default() -> Self {
+		Self {
+			phase: TransitionPhase::Idle,
+			pending_profiles: BTreeMap::new(),
+		}
+	}
+}
+
+impl TransitionState {
+	fn begin(&mut self, sources: &BTreeSet<Address>) -> Instant {
+		self.phase.begin(sources)
+	}
+
+	fn mark_ready(&mut self) {
+		self.phase.mark_ready();
+	}
+
+	fn retain_unobserved_profiles(&mut self, devices: &BTreeMap<Address, Device>) {
+		self.pending_profiles.retain(|address, pending| {
+			devices.get(address).is_some_and(|current| {
+				current.same_identity(&pending.device) && current.current != Some(pending.index)
+			})
+		});
+	}
+
+	fn has_pending_profiles(&self) -> bool {
+		!self.pending_profiles.is_empty()
+	}
+
+	fn record_profile(&mut self, address: Address, device: Device, index: u64) {
+		self.pending_profiles.insert(
+			address,
+			PendingProfile {
+				device,
+				index,
+				requested_at: Instant::now(),
+			},
+		);
+	}
+
+	fn pending_profile(&self, address: &Address) -> Option<&PendingProfile> {
+		self.pending_profiles.get(address)
+	}
+
+	#[cfg(test)]
+	pub(crate) fn preparing_since(&self) -> Option<Instant> {
+		match self.phase {
+			TransitionPhase::Preparing { started_at, .. } => Some(started_at),
+			TransitionPhase::Idle | TransitionPhase::Ready { .. } => None,
+		}
+	}
+
+	#[cfg(test)]
+	pub(crate) fn profile_count(&self) -> usize {
+		self.pending_profiles.len()
+	}
+
+	#[cfg(test)]
+	pub(crate) fn expire_preparation(&mut self, age: Duration) {
+		if let TransitionPhase::Preparing { started_at, .. } = &mut self.phase {
+			*started_at = Instant::now() - age;
+		}
+	}
+}
+
+/// Profile-transition coordinator, independent of the clients owning audio links.
 pub(crate) struct Coordinator {
 	pub(crate) transport: Transport,
 	sco_limit: usize,
-	sources: Option<BTreeSet<Address>>,
-	pub(crate) profile_changes: BTreeMap<Address, (Device, u64, Instant)>,
-	pub(crate) transition_started: Option<Instant>,
+	pub(crate) transition: TransitionState,
 	disconnects: BTreeSet<Address>,
 }
 
@@ -175,9 +289,7 @@ impl Default for Coordinator {
 		Self {
 			transport: Transport::default(),
 			sco_limit: 1,
-			sources: None,
-			profile_changes: BTreeMap::new(),
-			transition_started: None,
+			transition: TransitionState::default(),
 			disconnects: BTreeSet::new(),
 		}
 	}
@@ -235,7 +347,7 @@ impl Coordinator {
 		};
 		let result = self.prepare_inner(sources, &mut io);
 		if matches!(result, Ok(true)) {
-			self.transition_started = None;
+			self.transition.mark_ready();
 		} else {
 			(io.close_routes)();
 		}
@@ -260,12 +372,16 @@ impl Coordinator {
 		{
 			return Err(format!("{address}: requested source is not allowlisted"));
 		}
-		if self.sources.as_ref() != Some(sources) {
+		if !matches!(
+			&self.transition.phase,
+			TransitionPhase::Preparing {
+				sources: current, ..
+			} | TransitionPhase::Ready { sources: current }
+				if current == sources
+		) {
 			(io.close_routes)();
-			self.sources = Some(sources.clone());
-			self.transition_started = Some(Instant::now());
 		}
-		let started = self.transition_started.get_or_insert_with(Instant::now);
+		let started = self.transition.begin(sources);
 		if started.elapsed() >= Duration::from_secs(30) {
 			return Err("SCO/A2DP transport did not become ready within 30 seconds: expected HFP microphone/speaker ports for requested sources and A2DP speaker ports with no old HFP nodes for receivers; inspect pw-dump, Bluetooth connections and WirePlumber profile policy".into());
 		}
@@ -287,12 +403,7 @@ impl Coordinator {
 		C: FnMut(),
 	{
 		let devices = snapshot.transport_devices(io.allowed)?;
-		self.profile_changes
-			.retain(|address, (expected, index, _)| {
-				devices.get(address).is_some_and(|current| {
-					current.same_identity(expected) && current.current != Some(*index)
-				})
-			});
+		self.transition.retain_unobserved_profiles(&devices);
 		let (headsets, _) = snapshot.topology(io.allowed, self.transport);
 		for address in headsets.keys() {
 			if !devices.contains_key(address) {
@@ -308,14 +419,14 @@ impl Coordinator {
 		validate_mixed_devices(&devices)?;
 		// An accepted promotion can arrive after a floor change. Observe it
 		// before issuing its demotion or another promotion.
-		for (address, (_, _, started)) in &self.profile_changes {
-			if started.elapsed() >= Duration::from_secs(15) {
+		for (address, pending) in &self.transition.pending_profiles {
+			if pending.requested_at.elapsed() >= Duration::from_secs(15) {
 				return Err(format!(
 					"{address}: timed out waiting for the requested PipeWire profile; inspect pw-dump and Bluetooth connection"
 				));
 			}
 		}
-		if !self.profile_changes.is_empty() {
+		if self.transition.has_pending_profiles() {
 			return Ok(false);
 		}
 
@@ -445,11 +556,11 @@ impl Coordinator {
 			}) {
 			return Ok(());
 		}
-		if let Some((device, pending, started)) = self.profile_changes.get(address)
-			&& device.same_identity(current)
-			&& *pending == index
+		if let Some(pending) = self.transition.pending_profile(address)
+			&& pending.device.same_identity(current)
+			&& pending.index == index
 		{
-			if started.elapsed() >= Duration::from_secs(15) {
+			if pending.requested_at.elapsed() >= Duration::from_secs(15) {
 				return Err(format!(
 					"{address}: timed out waiting for {family}; inspect pw-dump and Bluetooth connection"
 				));
@@ -465,8 +576,8 @@ impl Coordinator {
 			&format!("{{ index: {index}, save: false }}"),
 		])
 		.map_err(|error| format!("{address}: could not select {family}: {error}"))?;
-		self.profile_changes
-			.insert(address.clone(), (current.clone(), index, Instant::now()));
+		self.transition
+			.record_profile(address.clone(), current.clone(), index);
 		Ok(())
 	}
 }
