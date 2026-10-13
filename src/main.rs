@@ -9,6 +9,7 @@ mod atomic_file;
 mod bluez;
 mod dashboard;
 mod device_status;
+mod group_editor;
 mod groups;
 mod network;
 mod pair_button;

@@ -19,7 +19,8 @@ use ratatui::{DefaultTerminal, Frame};
 
 use crate::bluez::{FAIR_RSSI, GOOD_RSSI};
 use crate::device_status::{HeadsetStatus, StatusUpdate, start_polling};
-use crate::groups::{TalkGroup, load, normalize_name, save};
+use crate::group_editor::GroupEditor;
+use crate::groups::load;
 use crate::terminal_style::{Meaning, Palette};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,15 +31,12 @@ enum Focus {
 
 struct ControlPanel {
 	allowed: BTreeSet<String>,
-	groups_path: PathBuf,
-	groups: Vec<TalkGroup>,
+	group_editor: GroupEditor,
 	status: BTreeMap<String, HeadsetStatus>,
 	selected_group: Option<usize>,
 	selected_headset: usize,
 	focus: Focus,
 	new_group_name: Option<String>,
-	error: Option<String>,
-	persistence_error: Option<String>,
 	status_error: Option<String>,
 	last_updated: Option<Instant>,
 	palette: Palette,
@@ -47,36 +45,24 @@ struct ControlPanel {
 impl ControlPanel {
 	fn new(allowed: BTreeSet<String>, groups_path: PathBuf) -> Result<Self, String> {
 		let groups = load(&groups_path)?;
+		let selected_group = (!groups.is_empty()).then_some(0);
 		Ok(Self {
 			allowed,
-			groups_path,
-			selected_group: (!groups.is_empty()).then_some(0),
-			groups,
+			group_editor: GroupEditor::new(groups_path, groups),
+			selected_group,
 			status: BTreeMap::new(),
 			selected_headset: 0,
 			focus: Focus::Groups,
 			new_group_name: None,
-			error: None,
-			persistence_error: None,
 			status_error: None,
 			last_updated: None,
 			palette: Palette::detect(std::io::stdout().is_terminal()),
 		})
 	}
 
-	fn persist_groups(&mut self) {
-		match save(&self.groups_path, &self.groups) {
-			Ok(()) => {
-				self.error = None;
-				self.persistence_error = None;
-			}
-			Err(error) => self.persistence_error = Some(error),
-		}
-	}
-
 	fn apply_status_update(&mut self, update: StatusUpdate) {
 		self.status = update.statuses;
-		self.error = None;
+		self.group_editor.error = None;
 		self.status_error = update.error;
 		self.last_updated = Some(Instant::now());
 	}
@@ -88,63 +74,46 @@ impl ControlPanel {
 			.unwrap_or_default()
 			.trim()
 			.to_string();
-		if name.is_empty() {
-			self.error = Some("Talk-group name cannot be empty.".into());
-		} else if self
-			.groups
-			.iter()
-			.any(|group| normalize_name(&group.name) == normalize_name(&name))
-		{
-			self.error = Some(format!("A talk group named {name:?} already exists."));
-		} else {
-			self.groups.push(TalkGroup {
-				name,
-				members: BTreeSet::new(),
-			});
-			self.selected_group = Some(self.groups.len() - 1);
+		if self.group_editor.add(&name) {
+			self.selected_group = Some(self.group_editor.groups.len() - 1);
 			self.focus = Focus::Members;
-			self.persist_groups();
 		}
 	}
 
 	fn remove_selected_group(&mut self) {
 		if let Some(index) = self
 			.selected_group
-			.filter(|index| *index < self.groups.len())
+			.filter(|index| *index < self.group_editor.groups.len())
+			.filter(|index| self.group_editor.remove(*index))
 		{
-			self.groups.remove(index);
-			self.selected_group = if self.groups.is_empty() {
+			self.selected_group = if self.group_editor.groups.is_empty() {
 				None
 			} else {
-				Some(index.min(self.groups.len() - 1))
+				Some(index.min(self.group_editor.groups.len() - 1))
 			};
-			self.persist_groups();
 		}
 	}
 
 	fn toggle_selected_member(&mut self) {
-		let Some(group) = self
+		let Some(group_index) = self
 			.selected_group
-			.and_then(|index| self.groups.get_mut(index))
+			.filter(|index| *index < self.group_editor.groups.len())
 		else {
-			self.error = Some("Create or select a talk group first.".into());
+			self.group_editor.error = Some("Create or select a talk group first.".into());
 			return;
 		};
 		let Some(address) = self.allowed.iter().nth(self.selected_headset).cloned() else {
 			return;
 		};
-		if !group.members.remove(&address) {
-			group.members.insert(address);
-		}
-		self.persist_groups();
+		self.group_editor.toggle_member(group_index, address);
 	}
 
 	fn move_selection(&mut self, down: bool) {
 		match self.focus {
-			Focus::Groups if !self.groups.is_empty() => {
+			Focus::Groups if !self.group_editor.groups.is_empty() => {
 				let current = self.selected_group.unwrap_or(0);
 				let next = if down {
-					(current + 1).min(self.groups.len() - 1)
+					(current + 1).min(self.group_editor.groups.len() - 1)
 				} else {
 					current.saturating_sub(1)
 				};
@@ -186,7 +155,7 @@ impl ControlPanel {
 			KeyCode::Down => self.move_selection(true),
 			KeyCode::Char('n') if self.focus == Focus::Groups => {
 				self.new_group_name = Some(String::new());
-				self.error = None;
+				self.group_editor.error = None;
 			}
 			KeyCode::Char('d') if self.focus == Focus::Groups => self.remove_selected_group(),
 			KeyCode::Char(' ') if self.focus == Focus::Members => self.toggle_selected_member(),
@@ -255,7 +224,7 @@ impl ControlPanel {
 			.map(|address| {
 				let included = self
 					.selected_group
-					.and_then(|index| self.groups.get(index))
+					.and_then(|index| self.group_editor.groups.get(index))
 					.is_some_and(|group| group.members.contains(address));
 				let status = self.status.get(address);
 				let name = status
@@ -319,6 +288,7 @@ impl ControlPanel {
 			Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
 				.areas(sections[1]);
 		let group_items: Vec<ListItem<'_>> = self
+			.group_editor
 			.groups
 			.iter()
 			.map(|group| ListItem::new(group.name.as_str()))
@@ -351,7 +321,7 @@ impl ControlPanel {
 		let members = self.member_items();
 		let group_name = self
 			.selected_group
-			.and_then(|index| self.groups.get(index))
+			.and_then(|index| self.group_editor.groups.get(index))
 			.map_or("Select a talk group", |group| group.name.as_str());
 		let members_list = List::new(members)
 			.block(
@@ -371,9 +341,10 @@ impl ControlPanel {
 		frame.render_stateful_widget(members_list, lower[1], &mut member_state);
 
 		let hint = self
+			.group_editor
 			.persistence_error
 			.as_deref()
-			.or(self.error.as_deref())
+			.or(self.group_editor.error.as_deref())
 			.or(self.status_error.as_deref())
 			.unwrap_or({
 				if let Some(name) = &self.new_group_name {
@@ -393,8 +364,8 @@ impl ControlPanel {
 		frame.render_widget(
 			Paragraph::new(format!("{hint} | {refreshed}"))
 				.style(
-					if self.error.is_some()
-						|| self.persistence_error.is_some()
+					if self.group_editor.error.is_some()
+						|| self.group_editor.persistence_error.is_some()
 						|| self.status_error.is_some()
 					{
 						self.palette.style(Meaning::Error)
@@ -483,40 +454,16 @@ mod tests {
 			panel.handle_key(KeyCode::Char(character));
 		}
 		panel.handle_key(KeyCode::Enter);
-		assert_eq!(panel.groups[0].name, "Dispatch");
+		assert_eq!(panel.group_editor.groups[0].name, "Dispatch");
 		assert_eq!(panel.focus, Focus::Members);
 		panel.handle_key(KeyCode::Char(' '));
-		assert!(panel.groups[0].members.contains(&address));
-		assert_eq!(load(&path).unwrap(), panel.groups);
+		assert!(panel.group_editor.groups[0].members.contains(&address));
+		assert_eq!(load(&path).unwrap(), panel.group_editor.groups);
 
 		panel.handle_key(KeyCode::Tab);
 		panel.handle_key(KeyCode::Char('d'));
-		assert!(panel.groups.is_empty());
+		assert!(panel.group_editor.groups.is_empty());
 		assert!(load(&path).unwrap().is_empty());
-		let _ = std::fs::remove_dir_all(path.parent().unwrap());
-	}
-
-	#[test]
-	fn group_name_uniqueness_matches_persistence_normalization() {
-		let path = std::env::temp_dir()
-			.join(format!("bt-intercom-tui-unicode-{}", std::process::id()))
-			.join("talk-groups.json");
-		let _ = std::fs::remove_dir_all(path.parent().unwrap());
-		save(
-			&path,
-			&[TalkGroup {
-				name: "équipe".into(),
-				members: BTreeSet::new(),
-			}],
-		)
-		.unwrap();
-		let mut panel = ControlPanel::new(BTreeSet::new(), path.clone()).unwrap();
-		panel.new_group_name = Some("Équipe".into());
-
-		panel.add_group();
-
-		assert_eq!(panel.groups.len(), 1);
-		assert!(panel.error.as_deref().unwrap().contains("already exists"));
 		let _ = std::fs::remove_dir_all(path.parent().unwrap());
 	}
 
@@ -526,15 +473,18 @@ mod tests {
 			.join(format!("bt-intercom-tui-errors-{}", std::process::id()))
 			.join("talk-groups.json");
 		let mut panel = ControlPanel::new(BTreeSet::new(), path).unwrap();
-		panel.error = Some("transient action error".into());
-		panel.persistence_error = Some("save failed".into());
+		panel.group_editor.error = Some("transient action error".into());
+		panel.group_editor.persistence_error = Some("save failed".into());
 
 		panel.apply_status_update(StatusUpdate {
 			statuses: BTreeMap::new(),
 			error: None,
 		});
 
-		assert!(panel.error.is_none());
-		assert_eq!(panel.persistence_error.as_deref(), Some("save failed"));
+		assert!(panel.group_editor.error.is_none());
+		assert_eq!(
+			panel.group_editor.persistence_error.as_deref(),
+			Some("save failed")
+		);
 	}
 }

@@ -42,14 +42,7 @@ pub(crate) fn controller_warnings(
 	devices: &BTreeMap<String, Device>,
 	sco_limit: usize,
 ) -> Vec<String> {
-	let mut controllers: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-	for (address, device) in devices {
-		controllers
-			.entry(&device.controller)
-			.or_default()
-			.push(address);
-	}
-	controllers
+	addresses_by_controller(devices.iter())
 		.into_iter()
 		.filter(|(_, addresses)| addresses.len() > sco_limit)
 		.map(|(controller, addresses)| {
@@ -140,6 +133,19 @@ impl Device {
 	pub(crate) fn same_identity(&self, other: &Self) -> bool {
 		self.id == other.id && self.serial == other.serial && self.path == other.path
 	}
+}
+
+fn addresses_by_controller<'a>(
+	devices: impl IntoIterator<Item = (&'a String, &'a Device)>,
+) -> BTreeMap<&'a str, Vec<&'a str>> {
+	let mut controllers = BTreeMap::new();
+	for (address, device) in devices {
+		controllers
+			.entry(device.controller.as_str())
+			.or_insert_with(Vec::new)
+			.push(address.as_str());
+	}
+	controllers
 }
 
 fn identifier(value: &Value) -> Option<String> {
@@ -465,17 +471,11 @@ fn validate_source_capacity(
 	devices: &BTreeMap<String, Device>,
 	sco_limit: usize,
 ) -> Result<(), String> {
-	let mut controllers: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-	for address in sources {
-		let Some(device) = devices.get(address) else {
-			continue;
-		};
-		controllers
-			.entry(&device.controller)
-			.or_default()
-			.push(address);
-	}
-	for (controller, addresses) in controllers {
+	for (controller, addresses) in addresses_by_controller(
+		sources
+			.iter()
+			.filter_map(|address| devices.get(address).map(|device| (address, device))),
+	) {
 		if addresses.len() > sco_limit {
 			return Err(format!(
 				"SCO capacity conflict on {controller}: {} sources ({}) exceed configured --sco-limit {sco_limit}",
