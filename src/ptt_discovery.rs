@@ -162,10 +162,7 @@ mod tests {
 			.to_string();
 		device(&root, "event1", "aa:bb:cc:dd:ee:01", &keys);
 		device(&root, "event2", "aa:bb:cc:dd:ee:02", &keys);
-		let allowed = BTreeSet::from([
-			address("AA:BB:CC:DD:EE:01"),
-			address("AA:BB:CC:DD:EE:02"),
-		]);
+		let allowed = BTreeSet::from([address("AA:BB:CC:DD:EE:01"), address("AA:BB:CC:DD:EE:02")]);
 		let mut buttons = vec![PttButton {
 			address: None,
 			path: AUTO.into(),

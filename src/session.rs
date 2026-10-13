@@ -14,8 +14,8 @@ use crossterm::cursor::MoveTo;
 use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
 
-use crate::bluez::Address;
 use crate::bluez;
+use crate::bluez::Address;
 use crate::dashboard::{Dashboard, RunStatus};
 use crate::groups;
 use crate::network;
@@ -351,7 +351,10 @@ impl Session {
 		let routing = RoutingCoordinator::new(&config, &stopped);
 		let mut transmit = Transmit::new(
 			config.mode,
-			config.buttons.iter().filter_map(|button| button.address.clone()),
+			config
+				.buttons
+				.iter()
+				.filter_map(|button| button.address.clone()),
 		);
 		transmit.set_sco_limit(config.sco_limit);
 		transmit.set_groups(&config.groups);
@@ -706,9 +709,11 @@ mod tests {
 		let mut session = Session::new(config(), Arc::new(AtomicBool::new(false)));
 		session.input = Some(PttInput::from_events(receiver));
 		session.transmit.topology(&[address.into()].into());
-		assert!(session
-			.transmit
-			.event(&Address::parse(address).unwrap(), true, Instant::now()));
+		assert!(
+			session
+				.transmit
+				.event(&Address::parse(address).unwrap(), true, Instant::now())
+		);
 		session.last_update = Some(Instant::now());
 		let mut snapshots = 0;
 		let execute: Execute = Box::new(move |args| {

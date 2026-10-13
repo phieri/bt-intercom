@@ -15,9 +15,9 @@ pub(crate) struct Address(String);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum AddressErrorKind {
-	InvalidLength,
-	InvalidSeparator { index: usize },
-	InvalidHexDigit { index: usize },
+	Length,
+	Separator { index: usize },
+	HexDigit { index: usize },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -32,7 +32,7 @@ impl Address {
 		if bytes.len() != 17 {
 			return Err(AddressError {
 				input: value.into(),
-				kind: AddressErrorKind::InvalidLength,
+				kind: AddressErrorKind::Length,
 			});
 		}
 		for (index, byte) in bytes.iter().enumerate() {
@@ -40,13 +40,13 @@ impl Address {
 				if *byte != b':' {
 					return Err(AddressError {
 						input: value.into(),
-						kind: AddressErrorKind::InvalidSeparator { index },
+						kind: AddressErrorKind::Separator { index },
 					});
 				}
 			} else if !byte.is_ascii_hexdigit() {
 				return Err(AddressError {
 					input: value.into(),
-					kind: AddressErrorKind::InvalidHexDigit { index },
+					kind: AddressErrorKind::HexDigit { index },
 				});
 			}
 		}
@@ -87,9 +87,9 @@ impl fmt::Display for Address {
 impl fmt::Display for AddressError {
 	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
 		let reason = match self.kind {
-			AddressErrorKind::InvalidLength => "must contain six hexadecimal octets",
-			AddressErrorKind::InvalidSeparator { .. } => "must separate octets with colons",
-			AddressErrorKind::InvalidHexDigit { .. } => "contains a non-hexadecimal character",
+			AddressErrorKind::Length => "must contain six hexadecimal octets",
+			AddressErrorKind::Separator { .. } => "must separate octets with colons",
+			AddressErrorKind::HexDigit { .. } => "contains a non-hexadecimal character",
 		};
 		write!(
 			formatter,
@@ -223,7 +223,9 @@ mod tests {
 	#[test]
 	fn normalizes_only_valid_bluetooth_addresses() {
 		assert_eq!(
-			normalize_address("aa:bb:cc:dd:ee:ff").as_ref().map(Address::as_str),
+			normalize_address("aa:bb:cc:dd:ee:ff")
+				.as_ref()
+				.map(Address::as_str),
 			Some("AA:BB:CC:DD:EE:FF")
 		);
 		for value in [
@@ -235,6 +237,21 @@ mod tests {
 		] {
 			assert_eq!(normalize_address(value), None, "{value:?}");
 		}
+	}
+
+	#[test]
+	fn address_errors_identify_the_invalid_component() {
+		assert_eq!(
+			Address::parse("AA:BB:CC:DD:EE").unwrap_err().kind,
+			AddressErrorKind::Length
+		);
+		assert_eq!(
+			Address::parse("AA-BB:CC:DD:EE:FF").unwrap_err().kind,
+			AddressErrorKind::Separator { index: 2 }
+		);
+		let error = Address::parse("AA:BB:CC:DD:EE:FG").unwrap_err();
+		assert_eq!(error.kind, AddressErrorKind::HexDigit { index: 16 });
+		assert!(error.to_string().contains("non-hexadecimal character"));
 	}
 
 	#[test]

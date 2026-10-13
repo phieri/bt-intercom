@@ -650,17 +650,14 @@ mod tests {
 			.iter()
 			.enumerate()
 			.map(|(index, address)| {
-				(address.clone(), device_on_controller(index as u64, address, "hci0"))
+				(
+					address.clone(),
+					device_on_controller(index as u64, address, "hci0"),
+				)
 			})
 			.collect::<BTreeMap<_, _>>();
-		let two = addresses[..2]
-			.iter()
-			.cloned()
-			.collect();
-		let three = addresses
-			.iter()
-			.cloned()
-			.collect();
+		let two = addresses[..2].iter().cloned().collect();
+		let three = addresses.iter().cloned().collect();
 
 		assert!(
 			validate_source_capacity(&two, &devices, 1)

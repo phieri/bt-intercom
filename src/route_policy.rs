@@ -187,14 +187,8 @@ mod tests {
 		);
 
 		let floors = BTreeMap::from([
-			(
-				Some("North".into()),
-				[address("AA:BB:CC:DD:EE:01")].into(),
-			),
-			(
-				Some("South".into()),
-				[address("AA:BB:CC:DD:EE:03")].into(),
-			),
+			(Some("North".into()), [address("AA:BB:CC:DD:EE:01")].into()),
+			(Some("South".into()), [address("AA:BB:CC:DD:EE:03")].into()),
 		]);
 		assert_eq!(
 			desired_links_by_group(&headsets, &floors, &groups),
@@ -203,7 +197,7 @@ mod tests {
 		assert_eq!(
 			desired_links_by_group(
 				&headsets,
-				& BTreeMap::from([(None, [address("AA:BB:CC:DD:EE:01")].into())]),
+				&BTreeMap::from([(None, [address("AA:BB:CC:DD:EE:01")].into())]),
 				&[]
 			),
 			[(1, 4), (1, 6)].into()

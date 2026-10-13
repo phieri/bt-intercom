@@ -606,10 +606,7 @@ mod tests {
 		];
 		assert_eq!(
 			addresses(&input).unwrap(),
-			BTreeSet::from([
-				address("AA:BB:CC:DD:EE:01"),
-				address("AA:BB:CC:DD:EE:02"),
-			])
+			BTreeSet::from([address("AA:BB:CC:DD:EE:01"), address("AA:BB:CC:DD:EE:02"),])
 		);
 		assert!(addresses(&[]).is_err());
 		assert!(parse_address("invalid").is_err());
@@ -642,10 +639,7 @@ mod tests {
 	#[test]
 	fn saves_and_restores_headset_network() {
 		let path = temporary_network_path();
-		let allowed = BTreeSet::from([
-			address("AA:BB:CC:DD:EE:02"),
-			address("AA:BB:CC:DD:EE:01"),
-		]);
+		let allowed = BTreeSet::from([address("AA:BB:CC:DD:EE:02"), address("AA:BB:CC:DD:EE:01")]);
 		save_headsets(&path, &allowed).unwrap();
 		assert_eq!(load_headsets(&path).unwrap(), allowed);
 		assert_eq!(
@@ -658,10 +652,7 @@ mod tests {
 	#[test]
 	fn removes_headsets_from_saved_network() {
 		let path = temporary_network_path();
-		let allowed = BTreeSet::from([
-			address("AA:BB:CC:DD:EE:01"),
-			address("AA:BB:CC:DD:EE:02"),
-		]);
+		let allowed = BTreeSet::from([address("AA:BB:CC:DD:EE:01"), address("AA:BB:CC:DD:EE:02")]);
 		save_headsets(&path, &allowed).unwrap();
 
 		remove_headset(&path, &address("AA:BB:CC:DD:EE:01")).unwrap();
@@ -1120,15 +1111,24 @@ mod tests {
 
 	#[test]
 	fn draining_delayed_input_uses_capture_timestamps_not_processing_time() {
-		let mut transmit = Transmit::new(Mode::FullDuplex, ["a".into()]);
+		let input_address = address("AA:BB:CC:DD:EE:01");
+		let mut transmit = Transmit::new(Mode::FullDuplex, [input_address.clone()]);
 		let now = Instant::now();
 		let (sender, input) = mpsc::channel();
 		for ms in [0, 500, 1001] {
 			sender
-				.send(Ok(("a".into(), true, now + Duration::from_millis(ms))))
+				.send(Ok((
+					input_address.clone(),
+					true,
+					now + Duration::from_millis(ms),
+				)))
 				.unwrap();
 			sender
-				.send(Ok(("a".into(), false, now + Duration::from_millis(ms + 1))))
+				.send(Ok((
+					input_address.clone(),
+					false,
+					now + Duration::from_millis(ms + 1),
+				)))
 				.unwrap();
 		}
 		assert!(drain_events(&input, &mut transmit).unwrap());
@@ -1220,12 +1220,13 @@ mod tests {
 			events.extend(event(kind, key, value));
 		}
 		let (sender, receiver) = mpsc::channel();
-		read_input_events(std::io::Cursor::new(events), "headset".into(), sender);
+		let input_address = address("AA:BB:CC:DD:EE:01");
+		read_input_events(std::io::Cursor::new(events), input_address.clone(), sender);
 
 		let (address, pressed, press_at) = receiver.recv().unwrap().unwrap();
-		assert_eq!((address, pressed), ("headset".into(), true));
+		assert_eq!((address, pressed), (input_address.clone(), true));
 		let (address, pressed, release_at) = receiver.recv().unwrap().unwrap();
-		assert_eq!((address, pressed), ("headset".into(), false));
+		assert_eq!((address, pressed), (input_address.clone(), false));
 		assert!(release_at >= press_at);
 		assert!(receiver.recv().unwrap().is_err());
 		assert!(matches!(
@@ -1234,11 +1235,7 @@ mod tests {
 		));
 
 		let (sender, receiver) = mpsc::channel();
-		read_input_events(
-			std::io::Cursor::new(event(0, 3, 0)),
-			"headset".into(),
-			sender,
-		);
+		read_input_events(std::io::Cursor::new(event(0, 3, 0)), input_address, sender);
 		assert!(receiver.recv().unwrap().is_err());
 	}
 

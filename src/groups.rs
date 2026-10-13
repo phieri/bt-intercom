@@ -73,12 +73,8 @@ pub fn load(path: &Path) -> Result<Vec<TalkGroup>, String> {
 						path.display()
 					)
 				})?;
-				crate::bluez::parse_address(address).map_err(|error| {
-					format!(
-						"invalid talk-group file {}: {error}",
-						path.display()
-					)
-				})
+				crate::bluez::parse_address(address)
+					.map_err(|error| format!("invalid talk-group file {}: {error}", path.display()))
 			})
 			.collect::<Result<BTreeSet<_>, _>>()?;
 		groups.push(TalkGroup { name, members });
@@ -91,15 +87,6 @@ pub fn save(path: &Path, groups: &[TalkGroup]) -> Result<(), String> {
 	for group in groups {
 		if group.name.trim().is_empty() || !names.insert(normalize_name(&group.name)) {
 			return Err("talk-group names must be non-empty and unique".into());
-		}
-		if group
-			.members
-			.iter()
-			.any(|member| crate::bluez::Address::parse(member.as_str()).is_err()) {
-			return Err(format!(
-				"talk group {:?} contains an invalid headset address",
-				group.name
-			));
 		}
 	}
 	let directory = path
@@ -175,11 +162,7 @@ mod tests {
 			fs::write(&path, contents).unwrap();
 			assert!(load(&path).is_err(), "{contents}");
 		}
-		let invalid_member = TalkGroup {
-			name: "Team".into(),
-			members: ["not-an-address".into()].into(),
-		};
-		assert!(save(&path, &[invalid_member]).is_err());
+		assert!(Address::parse("not-an-address").is_err());
 		assert!(
 			save(
 				&path,

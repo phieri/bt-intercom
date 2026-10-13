@@ -231,10 +231,7 @@ mod tests {
 
 	#[test]
 	fn rendered_counts_match_confirmation_readiness() {
-		let allowed = BTreeSet::from([
-			"AA:BB:CC:DD:EE:01".into(),
-			"AA:BB:CC:DD:EE:02".into(),
-		]);
+		let allowed = BTreeSet::from(["AA:BB:CC:DD:EE:01".into(), "AA:BB:CC:DD:EE:02".into()]);
 		let objects = json!([
 			{"type":"PipeWire:Interface:Device","id":1,"info":{"props":{"api.bluez5.address":"AA:BB:CC:DD:EE:01"}}},
 			{"type":"PipeWire:Interface:Node","id":2,"info":{"props":{"device.id":1,"media.class":"Audio/Source","api.bluez5.profile":"headset-head-unit"}}},

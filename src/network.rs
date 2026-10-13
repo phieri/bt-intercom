@@ -38,7 +38,11 @@ pub(crate) fn save(path: &Path, allowed: &BTreeSet<Address>) -> Result<(), Strin
 
 	let contents = format!(
 		"{}\n",
-		allowed.iter().map(Address::as_str).collect::<Vec<_>>().join("\n")
+		allowed
+			.iter()
+			.map(Address::as_str)
+			.collect::<Vec<_>>()
+			.join("\n")
 	);
 	crate::atomic_file::write(path, contents.as_bytes()).map_err(|error| {
 		format!(

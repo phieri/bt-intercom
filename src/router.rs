@@ -314,7 +314,9 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 	}
 
 	/// Reads headset topology and only links owned by this router instance.
-	pub fn inspect_owned(&mut self) -> Result<(BTreeMap<Address, Headset>, BTreeSet<Link>), String> {
+	pub fn inspect_owned(
+		&mut self,
+	) -> Result<(BTreeMap<Address, Headset>, BTreeSet<Link>), String> {
 		let snapshot = self.snapshot()?;
 		let (headsets, _) = snapshot.topology(&self.allowed, self.coordinator.transport);
 		Ok((headsets, snapshot.owned_links(&self.owner)))
@@ -850,13 +852,33 @@ mod tests {
 	fn detects_bidirectional_intercom_connections() {
 		let (headsets, _) = topology(&json!(fixture()), &allowed()).unwrap();
 		let links = desired_links(&headsets);
-		assert!(has_active_intercom_connection(&address(A), &headsets, &links));
-		assert!(has_active_intercom_connection(&address(B), &headsets, &links));
+		assert!(has_active_intercom_connection(
+			&address(A),
+			&headsets,
+			&links
+		));
+		assert!(has_active_intercom_connection(
+			&address(B),
+			&headsets,
+			&links
+		));
 		let one_way = [(13, 24), (13, 25)].into();
-		assert!(!has_active_intercom_connection(&address(A), &headsets, &one_way));
-		assert!(!has_active_intercom_connection(&address(B), &headsets, &one_way));
+		assert!(!has_active_intercom_connection(
+			&address(A),
+			&headsets,
+			&one_way
+		));
+		assert!(!has_active_intercom_connection(
+			&address(B),
+			&headsets,
+			&one_way
+		));
 		let (single, _) = topology(&json!(headset(10, A)), &[address(A)].into()).unwrap();
-		assert!(!has_active_intercom_connection(&address(A), &single, &links));
+		assert!(!has_active_intercom_connection(
+			&address(A),
+			&single,
+			&links
+		));
 	}
 
 	#[test]
