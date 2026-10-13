@@ -7,6 +7,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
+use crate::bluez::Address;
 use crate::groups::TalkGroup;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
@@ -26,24 +27,24 @@ struct Button {
 
 pub struct Transmit {
 	mode: Mode,
-	buttons: BTreeMap<String, Button>,
+	buttons: BTreeMap<Address, Button>,
 	groups: Vec<TalkGroup>,
-	queues: BTreeMap<Option<String>, VecDeque<String>>,
-	group_sources: BTreeMap<Option<String>, BTreeSet<String>>,
-	active: BTreeSet<String>,
-	controllers: Option<BTreeMap<String, String>>,
+	queues: BTreeMap<Option<String>, VecDeque<Address>>,
+	group_sources: BTreeMap<Option<String>, BTreeSet<Address>>,
+	active: BTreeSet<Address>,
+	controllers: Option<BTreeMap<Address, String>>,
 	sco_limit: usize,
-	request_order: VecDeque<String>,
-	pub pending: BTreeSet<String>,
+	request_order: VecDeque<Address>,
+	pub pending: BTreeSet<Address>,
 }
 
-type GroupSources = BTreeMap<Option<String>, BTreeSet<String>>;
+type GroupSources = BTreeMap<Option<String>, BTreeSet<Address>>;
 
 fn allocate_floors(
 	candidates: &GroupSources,
 	previous: &GroupSources,
-	request_order: &VecDeque<String>,
-	controllers: Option<&BTreeMap<String, String>>,
+	request_order: &VecDeque<Address>,
+	controllers: Option<&BTreeMap<Address, String>>,
 	sco_limit: usize,
 ) -> GroupSources {
 	let Some(controllers) = controllers else {
@@ -51,7 +52,7 @@ fn allocate_floors(
 	};
 
 	let mut group_sources = GroupSources::new();
-	let mut reserved: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+	let mut reserved: BTreeMap<&str, BTreeSet<&Address>> = BTreeMap::new();
 
 	for address in request_order {
 		let Some(controller) = controllers.get(address).map(String::as_str) else {
@@ -72,7 +73,7 @@ fn allocate_floors(
 		}
 
 		let controller_sources = reserved.entry(controller).or_default();
-		if !controller_sources.contains(address.as_str()) && controller_sources.len() >= sco_limit {
+		if !controller_sources.contains(address) && controller_sources.len() >= sco_limit {
 			continue;
 		}
 		controller_sources.insert(address);
@@ -97,7 +98,7 @@ fn allocate_floors(
 		}
 
 		let controller_sources = reserved.entry(controller).or_default();
-		if !controller_sources.contains(address.as_str()) && controller_sources.len() >= sco_limit {
+		if !controller_sources.contains(address) && controller_sources.len() >= sco_limit {
 			continue;
 		}
 		for group in candidate_groups {
@@ -113,7 +114,7 @@ fn allocate_floors(
 }
 
 impl Transmit {
-	pub fn new(mode: Mode, mapped: impl IntoIterator<Item = String>) -> Self {
+	pub fn new(mode: Mode, mapped: impl IntoIterator<Item = Address>) -> Self {
 		Self {
 			mode,
 			buttons: mapped.into_iter().map(|a| (a, Button::default())).collect(),
@@ -130,7 +131,7 @@ impl Transmit {
 
 	/// Apply a per-controller SCO source limit, independently of talk groups.
 	/// Missing mappings cannot receive a grant, but held requests remain queued.
-	pub fn set_controllers(&mut self, controllers: &BTreeMap<String, String>) {
+	pub fn set_controllers(&mut self, controllers: &BTreeMap<Address, String>) {
 		self.controllers = Some(controllers.clone());
 		self.refresh();
 	}
@@ -160,7 +161,7 @@ impl Transmit {
 	}
 
 	/// Returns whether a genuine transition was processed.
-	pub fn event(&mut self, address: &str, pressed: bool, at: Instant) -> bool {
+	pub fn event(&mut self, address: &Address, pressed: bool, at: Instant) -> bool {
 		let memberships = self.memberships(address);
 		let Some(button) = self.buttons.get_mut(address) else {
 			return false;
@@ -207,7 +208,7 @@ impl Transmit {
 	/// Drop disconnected requests, including the floor. Reconnection alone must
 	/// not restart a held or always-open mapped microphone: require a new press.
 	/// Preserve the physical pressed bit so duplicate presses cannot re-arm it.
-	pub fn topology(&mut self, available: &BTreeSet<String>) -> bool {
+	pub fn topology(&mut self, available: &BTreeSet<Address>) -> bool {
 		let before = self.active.clone();
 		for (address, button) in &mut self.buttons {
 			if !available.contains(address) {
@@ -261,7 +262,7 @@ impl Transmit {
 		self.group_sources = group_sources;
 	}
 
-	fn memberships(&self, address: &str) -> Vec<Option<String>> {
+	fn memberships(&self, address: &Address) -> Vec<Option<String>> {
 		if self.groups.is_empty() {
 			return vec![None];
 		}
@@ -272,11 +273,11 @@ impl Transmit {
 			.collect()
 	}
 
-	pub fn sources(&self) -> &BTreeSet<String> {
+	pub fn sources(&self) -> &BTreeSet<Address> {
 		&self.active
 	}
 
-	pub fn group_sources(&self) -> &BTreeMap<Option<String>, BTreeSet<String>> {
+	pub fn group_sources(&self) -> &BTreeMap<Option<String>, BTreeSet<Address>> {
 		&self.group_sources
 	}
 }
@@ -286,15 +287,19 @@ mod tests {
 	use super::*;
 	use crate::groups::TalkGroup;
 
-	fn setup(mode: Mode) -> (Transmit, Instant) {
-		(
-			Transmit::new(mode, ["a".into(), "b".into(), "c".into()]),
-			Instant::now(),
-		)
+	fn address(value: &str) -> Address {
+		Address::parse(value).unwrap_or_else(|_| {
+			let suffix = value.bytes().fold(0u8, u8::wrapping_add);
+			Address::parse(&format!("00:00:00:00:00:{suffix:02X}")).unwrap()
+		})
 	}
 
-	fn set(addresses: &[&str]) -> BTreeSet<String> {
-		addresses.iter().map(|a| (*a).into()).collect()
+	fn setup(mode: Mode) -> (Transmit, Instant) {
+		(Transmit::new(mode, set(&["a", "b", "c"])), Instant::now())
+	}
+
+	fn set(addresses: &[&str]) -> BTreeSet<Address> {
+		addresses.iter().map(|value| address(value)).collect()
 	}
 
 	fn group(name: &str, members: &[&str]) -> TalkGroup {
@@ -305,11 +310,11 @@ mod tests {
 	}
 
 	fn press(t: &mut Transmit, a: &str, base: Instant, ms: u64) {
-		t.event(a, true, base + Duration::from_millis(ms));
+		t.event(&address(a), true, base + Duration::from_millis(ms));
 	}
 
 	fn release(t: &mut Transmit, a: &str, base: Instant, ms: u64) {
-		t.event(a, false, base + Duration::from_millis(ms));
+		t.event(&address(a), false, base + Duration::from_millis(ms));
 	}
 
 	#[test]
@@ -320,11 +325,11 @@ mod tests {
 			(Some("Middle".into()), set(&["b"])),
 		]);
 		let previous = BTreeMap::from([(Some("Zulu".into()), set(&["c"]))]);
-		let request_order = VecDeque::from(["a".into(), "b".into(), "c".into()]);
+		let request_order = VecDeque::from([address("a"), address("b"), address("c")]);
 		let controllers = BTreeMap::from([
-			("a".into(), "hci0".into()),
-			("b".into(), "hci0".into()),
-			("c".into(), "hci0".into()),
+			(address("a"), "hci0".into()),
+			(address("b"), "hci0".into()),
+			(address("c"), "hci0".into()),
 		]);
 
 		assert_eq!(
@@ -358,8 +363,8 @@ mod tests {
 			(Some("Missing".into()), set(&["m"])),
 			(Some("Mapped".into()), set(&["a"])),
 		]);
-		let request_order = VecDeque::from(["m".into(), "a".into()]);
-		let controllers = BTreeMap::from([("a".into(), "hci0".into())]);
+		let request_order = VecDeque::from([address("m"), address("a")]);
+		let controllers = BTreeMap::from([(address("a"), "hci0".into())]);
 
 		assert_eq!(
 			allocate_floors(
@@ -396,8 +401,8 @@ mod tests {
 		press(&mut t, "c", now, 0);
 		press(&mut t, "b", now, 1);
 		press(&mut t, "a", now, 2);
-		assert!(!t.event("b", true, now));
-		assert!(!t.event("unknown", true, now));
+		assert!(!t.event(&address("b"), true, now));
+		assert!(!t.event(&address("unknown"), true, now));
 		release(&mut t, "c", now, 3);
 		assert_eq!(t.sources(), &set(&["b"]));
 		release(&mut t, "b", now, 4);
@@ -433,9 +438,9 @@ mod tests {
 			group("Middle", &["c"]),
 		]);
 		t.set_controllers(&BTreeMap::from([
-			("a".into(), "hci0".into()),
-			("b".into(), "hci0".into()),
-			("c".into(), "hci0".into()),
+			(address("a"), "hci0".into()),
+			(address("b"), "hci0".into()),
+			(address("c"), "hci0".into()),
 		]));
 		press(&mut t, "a", now, 0);
 		press(&mut t, "c", now, 1);
@@ -457,9 +462,9 @@ mod tests {
 		]);
 		t.set_sco_limit(2);
 		t.set_controllers(&BTreeMap::from([
-			("a".into(), "hci0".into()),
-			("b".into(), "hci0".into()),
-			("c".into(), "hci0".into()),
+			(address("a"), "hci0".into()),
+			(address("b"), "hci0".into()),
+			(address("c"), "hci0".into()),
 		]));
 		press(&mut t, "a", now, 0);
 		press(&mut t, "c", now, 1);
@@ -478,15 +483,15 @@ mod tests {
 		press(&mut t, "b", now, 1);
 		assert!(t.sources().is_empty());
 		t.set_controllers(&BTreeMap::from([
-			("a".into(), "hci0".into()),
-			("b".into(), "hci1".into()),
+			(address("a"), "hci0".into()),
+			(address("b"), "hci1".into()),
 		]));
 		assert_eq!(t.sources(), &set(&["a", "b"]));
-		t.set_controllers(&BTreeMap::from([("b".into(), "hci1".into())]));
+		t.set_controllers(&BTreeMap::from([(address("b"), "hci1".into())]));
 		assert_eq!(t.sources(), &set(&["b"]));
 		t.set_controllers(&BTreeMap::from([
-			("a".into(), "hci0".into()),
-			("b".into(), "hci1".into()),
+			(address("a"), "hci0".into()),
+			(address("b"), "hci1".into()),
 		]));
 		assert_eq!(t.sources(), &set(&["a", "b"]));
 	}
@@ -499,8 +504,8 @@ mod tests {
 		press(&mut t, "b", now, 1);
 		assert_eq!(t.sources(), &set(&["a", "b"]));
 		t.set_controllers(&BTreeMap::from([
-			("a".into(), "hci0".into()),
-			("b".into(), "hci0".into()),
+			(address("a"), "hci0".into()),
+			(address("b"), "hci0".into()),
 		]));
 		assert_eq!(t.sources(), &set(&["a"]));
 	}
@@ -522,7 +527,7 @@ mod tests {
 		press(&mut t, "b", now, 1);
 		assert!(t.set_groups(&[group("Team", &["b", "c"])]));
 		assert!(t.sources().is_empty());
-		assert!(!t.event("a", true, now + Duration::from_millis(2)));
+		assert!(!t.event(&address("a"), true, now + Duration::from_millis(2)));
 		release(&mut t, "b", now, 3);
 		press(&mut t, "b", now, 4);
 		assert_eq!(t.sources(), &set(&["b"]));
@@ -567,9 +572,9 @@ mod tests {
 		let (mut t, now) = setup(Mode::FullDuplex);
 		for ms in [0, 400, 1001] {
 			press(&mut t, "a", now, ms);
-			assert!(!t.event("a", true, now + Duration::from_millis(ms)));
+			assert!(!t.event(&address("a"), true, now + Duration::from_millis(ms)));
 			release(&mut t, "a", now, ms + 1);
-			assert!(!t.event("a", false, now + Duration::from_millis(ms + 2)));
+			assert!(!t.event(&address("a"), false, now + Duration::from_millis(ms + 2)));
 		}
 		assert!(t.sources().is_empty());
 		// Sliding window: the 400, 1001, 1200 presses now constitute a triple.
@@ -598,7 +603,7 @@ mod tests {
 		assert_eq!(t.sources(), &set(&["b"]));
 		assert_eq!(t.pending, set(&["b"]));
 		t.topology(&set(&["a", "b", "c"]));
-		assert!(!t.event("a", true, now));
+		assert!(!t.event(&address("a"), true, now));
 		release(&mut t, "b", now, 2);
 		assert!(t.sources().is_empty());
 		release(&mut t, "a", now, 3);

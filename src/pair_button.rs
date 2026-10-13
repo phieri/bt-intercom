@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use rppal::gpio::{Gpio, InputPin};
 
-use crate::bluez::device_flag;
+use crate::bluez::{Address, device_flag};
 use crate::process::COMMAND_TIMEOUT;
 use crate::worker::Worker;
 
@@ -58,7 +58,7 @@ impl Button {
 }
 
 pub(crate) struct PairButton {
-	pub(crate) events: Receiver<Result<String, String>>,
+	pub(crate) events: Receiver<Result<Address, String>>,
 	_worker: Worker,
 }
 
@@ -78,7 +78,7 @@ impl PairButton {
 
 	pub(crate) fn start(
 		pin: InputPin,
-		mut allowed: BTreeSet<String>,
+		mut allowed: BTreeSet<Address>,
 		cancelled: Arc<AtomicBool>,
 		network_path: PathBuf,
 	) -> Self {
@@ -138,7 +138,7 @@ impl PairButton {
 	}
 }
 
-fn discovered_devices(output: &str) -> BTreeSet<String> {
+fn discovered_devices(output: &str) -> BTreeSet<Address> {
 	output
 		.lines()
 		.filter_map(|line| {
@@ -163,11 +163,11 @@ fn is_headset(info: &str) -> bool {
 }
 
 fn pair_headset(
-	allowed: &BTreeSet<String>,
+	allowed: &BTreeSet<Address>,
 	mut execute: impl FnMut(&[&str], Duration) -> Result<String, String>,
 	mut pair: impl FnMut(&str) -> Result<(), String>,
 	mut rollback: impl FnMut(&str) -> Result<(), String>,
-) -> Result<String, String> {
+) -> Result<Address, String> {
 	let scan = execute(
 		&["bluetoothctl", "--timeout", "15", "scan", "bredr"],
 		Duration::from_secs(20),
@@ -410,8 +410,8 @@ mod tests {
 			|_| panic!("successful pairing must not be rolled back"),
 		)
 		.unwrap();
-		assert_eq!(result, "AA:BB:CC:DD:EE:01");
-		assert_eq!(paired, Some(result));
+		assert_eq!(result.as_str(), "AA:BB:CC:DD:EE:01");
+		assert_eq!(paired.as_deref(), Some(result.as_str()));
 		assert_eq!(calls.len(), 6);
 		assert!(calls[3].contains("trust"));
 		assert!(calls[5].contains("connect"));

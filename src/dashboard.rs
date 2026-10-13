@@ -9,6 +9,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
+use crate::bluez::Address;
 use crate::device_status::{HeadsetStatus, StatusPresentation, StatusUpdate, start_polling};
 use crate::router::Headset;
 use crate::routing_status::RoutingStatus;
@@ -20,7 +21,7 @@ use crate::worker::Worker;
 /// The polling worker can be stopped explicitly with [`Dashboard::stop`].
 pub struct Dashboard {
 	receiver: Receiver<StatusUpdate>,
-	state: BTreeMap<String, HeadsetStatus>,
+	state: BTreeMap<Address, HeadsetStatus>,
 	status_error: Option<String>,
 	worker: Option<Worker>,
 }
@@ -32,7 +33,7 @@ pub struct RunStatus {
 
 impl Dashboard {
 	/// Starts polling each allowlisted device until shutdown or cancellation.
-	pub fn start(allowed: BTreeSet<String>, stopped: Arc<AtomicBool>) -> Self {
+	pub fn start(allowed: BTreeSet<Address>, stopped: Arc<AtomicBool>) -> Self {
 		let (worker, receiver) = start_polling(allowed, false, Duration::from_secs(10), stopped);
 		Self {
 			receiver,
@@ -56,8 +57,8 @@ impl Dashboard {
 	/// Renders the latest Bluetooth and routing state to the supplied writer.
 	pub fn draw(
 		&self,
-		allowed: &BTreeSet<String>,
-		headsets: &BTreeMap<String, Headset>,
+		allowed: &BTreeSet<Address>,
+		headsets: &BTreeMap<Address, Headset>,
 		links: &BTreeSet<(u64, u64)>,
 		status: RunStatus,
 		error: Option<&str>,
@@ -188,7 +189,7 @@ mod tests {
 
 	#[test]
 	fn renders_unknown_status_and_observed_owned_links() {
-		let allowed = BTreeSet::from(["AA:BB:CC:DD:EE:01".to_string()]);
+		let allowed = BTreeSet::from(["AA:BB:CC:DD:EE:01".into()]);
 		let (sender, receiver) = mpsc::channel();
 		drop(sender);
 		let dashboard = Dashboard {
@@ -230,10 +231,7 @@ mod tests {
 
 	#[test]
 	fn rendered_counts_match_confirmation_readiness() {
-		let allowed = BTreeSet::from([
-			"AA:BB:CC:DD:EE:01".to_string(),
-			"AA:BB:CC:DD:EE:02".to_string(),
-		]);
+		let allowed = BTreeSet::from(["AA:BB:CC:DD:EE:01".into(), "AA:BB:CC:DD:EE:02".into()]);
 		let objects = json!([
 			{"type":"PipeWire:Interface:Device","id":1,"info":{"props":{"api.bluez5.address":"AA:BB:CC:DD:EE:01"}}},
 			{"type":"PipeWire:Interface:Node","id":2,"info":{"props":{"device.id":1,"media.class":"Audio/Source","api.bluez5.profile":"headset-head-unit"}}},
@@ -245,8 +243,9 @@ mod tests {
 		let (headsets, _) = crate::router::topology(&objects, &allowed).unwrap();
 		let links = BTreeSet::from([(3, 6), (3, 99), (99, 6)]);
 		let routes = RoutingStatus::new(&headsets, &links);
-		assert!(routes.has_active_source_route("AA:BB:CC:DD:EE:01"));
-		assert!(!routes.has_active_intercom_connection("AA:BB:CC:DD:EE:01"));
+		let source = Address::from("AA:BB:CC:DD:EE:01");
+		assert!(routes.has_active_source_route(&source));
+		assert!(!routes.has_active_intercom_connection(&source));
 		let (_, receiver) = mpsc::channel();
 		let dashboard = Dashboard {
 			receiver,
@@ -293,9 +292,9 @@ mod tests {
 		let addresses = levels
 			.iter()
 			.enumerate()
-			.map(|(index, _)| format!("AA:BB:CC:DD:EE:{:02}", index + 1))
+			.map(|(index, _)| format!("AA:BB:CC:DD:EE:{:02}", index + 1).into())
 			.collect::<BTreeSet<_>>();
-		let disconnected = "AA:BB:CC:DD:EE:07".to_string();
+		let disconnected = Address::from("AA:BB:CC:DD:EE:07");
 		let allowed = addresses
 			.iter()
 			.cloned()
@@ -306,7 +305,7 @@ mod tests {
 			.enumerate()
 			.map(|(index, (rssi, _))| {
 				(
-					format!("AA:BB:CC:DD:EE:{:02}", index + 1),
+					format!("AA:BB:CC:DD:EE:{:02}", index + 1).into(),
 					HeadsetStatus {
 						name: None,
 						connected: Some(true),
@@ -353,14 +352,14 @@ mod tests {
 		}
 		let disconnected_row = text
 			.lines()
-			.find(|line| line.contains(&disconnected))
+			.find(|line| line.contains(disconnected.as_str()))
 			.unwrap();
 		assert!(disconnected_row.contains("unknown"));
 	}
 
 	#[test]
 	fn renders_bluetooth_alias_with_the_address() {
-		let address = "AA:BB:CC:DD:EE:01".to_string();
+		let address = Address::from("AA:BB:CC:DD:EE:01");
 		let allowed = BTreeSet::from([address.clone()]);
 		let (sender, receiver) = mpsc::channel();
 		drop(sender);

@@ -15,6 +15,7 @@ use crossterm::execute;
 use crossterm::terminal::{Clear, ClearType};
 
 use crate::bluez;
+use crate::bluez::Address;
 use crate::dashboard::{Dashboard, RunStatus};
 use crate::groups;
 use crate::network;
@@ -36,6 +37,14 @@ struct InspectionOutcome {
 	error: Option<String>,
 }
 
+struct RouteUpdateOutcome {
+	update: Result<BTreeMap<Address, Headset>, String>,
+	config_error: Option<String>,
+	inspect_error: Option<String>,
+	changed: bool,
+	invalidated: bool,
+}
+
 pub(crate) fn guard_half_update<T>(
 	mode: Mode,
 	update: &Result<T, String>,
@@ -54,7 +63,7 @@ pub(crate) fn guard_half_update<T>(
 
 /// Connects allowlisted devices that are currently disconnected or unavailable.
 pub(crate) fn connect_disconnected(
-	allowed: &BTreeSet<String>,
+	allowed: &BTreeSet<Address>,
 	stopped: &AtomicBool,
 	mut execute: impl FnMut(&[&str], Duration) -> Result<String, String>,
 ) {
@@ -77,7 +86,7 @@ pub(crate) fn connect_disconnected(
 
 /// Repeats connection checks until cancelled or explicitly woken for shutdown.
 pub(crate) fn reconnect_worker(
-	allowed: Arc<Mutex<BTreeSet<String>>>,
+	allowed: Arc<Mutex<BTreeSet<Address>>>,
 	stopped: Arc<AtomicBool>,
 	shutdown: Receiver<()>,
 	retry: Duration,
@@ -101,21 +110,234 @@ pub(crate) fn reconnect_worker(
 pub(crate) struct Session {
 	config: RunConfig,
 	stopped: Arc<AtomicBool>,
-	router: Router<Execute>,
+	routing: RoutingCoordinator,
 	transmit: Transmit,
 	input: Option<PttInput>,
 	pairing: Option<PairButton>,
 	dashboard: Option<Dashboard>,
 	connector: Option<Worker>,
-	reconnect_devices: Arc<Mutex<BTreeSet<String>>>,
+	reconnect_devices: Arc<Mutex<BTreeSet<Address>>>,
 	beep: Option<PttBeep>,
-	headsets: BTreeMap<String, Headset>,
-	links: BTreeSet<(u64, u64)>,
-	connected_headsets: BTreeSet<String>,
-	reported_controller_warnings: BTreeSet<String>,
 	last_error: Option<String>,
 	last_update: Option<Instant>,
 	redraw: bool,
+}
+
+struct RoutingCoordinator {
+	router: Router<Execute>,
+	headsets: BTreeMap<Address, Headset>,
+	links: BTreeSet<(u64, u64)>,
+	connected_headsets: BTreeSet<Address>,
+	reported_controller_warnings: BTreeSet<String>,
+}
+
+impl RoutingCoordinator {
+	fn new(config: &RunConfig, stopped: &Arc<AtomicBool>) -> Self {
+		let cancellation = Arc::clone(stopped);
+		let execute: Execute =
+			Box::new(move |args| command_cancellable(args, COMMAND_TIMEOUT, Some(&cancellation)));
+		let mut router = Router::with_executor(config.allowed.clone(), execute);
+		router.set_transport(config.transport);
+		router.set_sco_limit(config.sco_limit);
+		Self {
+			router,
+			headsets: BTreeMap::new(),
+			links: BTreeSet::new(),
+			connected_headsets: BTreeSet::new(),
+			reported_controller_warnings: BTreeSet::new(),
+		}
+	}
+
+	fn update(
+		&mut self,
+		config: &mut RunConfig,
+		transmit: &mut Transmit,
+		input: Option<&PttInput>,
+		beep: Option<&PttBeep>,
+		stopped: &AtomicBool,
+	) -> Result<RouteUpdateOutcome, String> {
+		let config_error = self.reload_groups(config, transmit);
+		self.refresh_topology(config, transmit, input)?;
+		let sources = self.routing_sources(input, transmit);
+		let prepared = self.router.prepare_transport(&sources);
+		guard_half_update(config.mode, &prepared, || self.router.close())?;
+		let transport_ready = prepared?;
+		if let Some(input) = input
+			&& drain_events(&input.events, transmit)?
+		{
+			self.router.close();
+			self.links.clear();
+			return Ok(RouteUpdateOutcome {
+				update: Ok(BTreeMap::new()),
+				config_error,
+				inspect_error: None,
+				changed: true,
+				invalidated: true,
+			});
+		}
+		let update = self.update_route_set(config, input, &sources, transport_ready, transmit);
+		guard_half_update(config.mode, &update, || self.router.close())?;
+		let inspection = self.inspect_and_confirm(config, transmit, input, beep, stopped)?;
+		if inspection.changed {
+			self.router.close();
+			self.links.clear();
+		}
+		Ok(RouteUpdateOutcome {
+			update,
+			config_error,
+			inspect_error: inspection.error,
+			changed: inspection.changed,
+			invalidated: false,
+		})
+	}
+
+	fn reload_groups(&mut self, config: &mut RunConfig, transmit: &mut Transmit) -> Option<String> {
+		match groups::load(&config.groups_path) {
+			Ok(groups) => {
+				transmit.set_groups(&groups);
+				config.groups = groups;
+				None
+			}
+			Err(error) => Some(error),
+		}
+	}
+
+	fn refresh_topology(
+		&mut self,
+		config: &RunConfig,
+		transmit: &mut Transmit,
+		input: Option<&PttInput>,
+	) -> Result<(), String> {
+		if config.transport == Transport::ScoA2dp {
+			let devices = self.router.transport_devices();
+			guard_half_update(config.mode, &devices, || self.router.close())?;
+			let devices = devices?;
+			transmit.set_controllers(
+				&devices
+					.iter()
+					.map(|(address, device)| (address.clone(), device.controller.clone()))
+					.collect(),
+			);
+			transmit.topology(&devices.keys().cloned().collect());
+		} else {
+			if let Ok(devices) = self.router.transport_devices() {
+				for warning in transport::controller_warnings(&devices, config.sco_limit) {
+					if self.reported_controller_warnings.insert(warning.clone()) {
+						log::warn!("{warning}");
+					}
+				}
+			}
+			if let Some(input) = input {
+				let snapshot = self.router.inspect_owned();
+				drain_events(&input.events, transmit)?;
+				if let Ok((current, _)) = snapshot {
+					let available = current
+						.iter()
+						.filter(|(_, headset)| headset.has_duplex_audio())
+						.map(|(address, _)| address.clone())
+						.collect();
+					transmit.topology(&available);
+				}
+			}
+		}
+		Ok(())
+	}
+
+	fn routing_sources(&self, input: Option<&PttInput>, transmit: &Transmit) -> BTreeSet<Address> {
+		if input.is_some() {
+			transmit.sources().clone()
+		} else {
+			self.router.allowed.clone()
+		}
+	}
+
+	fn update_route_set(
+		&mut self,
+		config: &RunConfig,
+		input: Option<&PttInput>,
+		sources: &BTreeSet<Address>,
+		transport_ready: bool,
+		transmit: &Transmit,
+	) -> Result<BTreeMap<Address, Headset>, String> {
+		if !transport_ready {
+			self.router.inspect().map(|(headsets, _)| headsets)
+		} else if config.groups.is_empty() && input.is_none() {
+			self.router.update(true)
+		} else if config.mode == Mode::HalfDuplex && !config.groups.is_empty() {
+			self.router
+				.update_group_sources_in_groups(transmit.group_sources(), &config.groups)
+		} else {
+			self.router
+				.update_sources_in_groups(sources, &config.groups)
+		}
+	}
+
+	fn inspect_and_confirm(
+		&mut self,
+		config: &RunConfig,
+		transmit: &mut Transmit,
+		input: Option<&PttInput>,
+		beep: Option<&PttBeep>,
+		stopped: &AtomicBool,
+	) -> Result<InspectionOutcome, String> {
+		let (current, active) = match self.router.inspect_owned() {
+			Ok(snapshot) => snapshot,
+			Err(error) => {
+				self.headsets.clear();
+				self.links.clear();
+				return Ok(InspectionOutcome {
+					changed: false,
+					error: Some(error),
+				});
+			}
+		};
+		self.headsets = current;
+		self.links = active;
+		let mut changed = false;
+		if let Some(input) = input {
+			changed |= drain_events(&input.events, transmit)?;
+			if config.transport == Transport::ScoA2dp {
+				let devices = self.router.transport_devices();
+				guard_half_update(config.mode, &devices, || self.router.close())?;
+				changed |= transport::refresh_transmit_requests(
+					transmit,
+					&devices?,
+					&self.router.take_transport_disconnects(),
+				);
+			} else {
+				let available = self
+					.headsets
+					.iter()
+					.filter(|(_, headset)| headset.has_duplex_audio())
+					.map(|(address, _)| address.clone())
+					.collect();
+				changed |= transmit.topology(&available);
+			}
+			if !changed {
+				changed |= confirm_transmissions(
+					config.mode,
+					transmit,
+					&input.events,
+					&self.headsets,
+					&self.links,
+					beep,
+					stopped,
+				)?;
+			}
+		} else {
+			confirm_connections(
+				&mut self.connected_headsets,
+				&self.headsets,
+				&self.links,
+				beep,
+				stopped,
+			);
+		}
+		Ok(InspectionOutcome {
+			changed,
+			error: None,
+		})
+	}
 }
 
 impl Session {
@@ -126,15 +348,13 @@ impl Session {
 	}
 
 	fn new(config: RunConfig, stopped: Arc<AtomicBool>) -> Self {
-		let cancellation = Arc::clone(&stopped);
-		let execute: Execute =
-			Box::new(move |args| command_cancellable(args, COMMAND_TIMEOUT, Some(&cancellation)));
-		let mut router = Router::with_executor(config.allowed.clone(), execute);
-		router.set_transport(config.transport);
-		router.set_sco_limit(config.sco_limit);
+		let routing = RoutingCoordinator::new(&config, &stopped);
 		let mut transmit = Transmit::new(
 			config.mode,
-			config.buttons.iter().map(|button| button.address.clone()),
+			config
+				.buttons
+				.iter()
+				.filter_map(|button| button.address.clone()),
 		);
 		transmit.set_sco_limit(config.sco_limit);
 		transmit.set_groups(&config.groups);
@@ -142,7 +362,7 @@ impl Session {
 		Self {
 			config,
 			stopped,
-			router,
+			routing,
 			transmit,
 			input: None,
 			pairing: None,
@@ -150,10 +370,6 @@ impl Session {
 			connector: None,
 			reconnect_devices,
 			beep: None,
-			headsets: BTreeMap::new(),
-			links: BTreeSet::new(),
-			connected_headsets: BTreeSet::new(),
-			reported_controller_warnings: BTreeSet::new(),
 			last_error: None,
 			last_update: None,
 			redraw: true,
@@ -287,12 +503,13 @@ impl Session {
 			while let Ok(event) = pairing.events.try_recv() {
 				match event {
 					Ok(device) => {
-						self.router.allowed.insert(device.clone());
-						*self.reconnect_devices.lock().unwrap() = self.router.allowed.clone();
+						self.routing.router.allowed.insert(device.clone());
+						*self.reconnect_devices.lock().unwrap() =
+							self.routing.router.allowed.clone();
 						if let Some(current) = &mut self.dashboard {
 							current.stop();
 							self.dashboard = Some(Dashboard::start(
-								self.router.allowed.clone(),
+								self.routing.router.allowed.clone(),
 								Arc::clone(&self.stopped),
 							));
 						}
@@ -313,170 +530,26 @@ impl Session {
 		Ok(())
 	}
 
-	fn refresh_topology(&mut self) -> Result<(), String> {
-		if self.config.transport == Transport::ScoA2dp {
-			let devices = self.router.transport_devices();
-			guard_half_update(self.config.mode, &devices, || self.router.close())?;
-			let devices = devices?;
-			self.transmit.set_controllers(
-				&devices
-					.iter()
-					.map(|(address, device)| (address.clone(), device.controller.clone()))
-					.collect(),
-			);
-			self.transmit.topology(&devices.keys().cloned().collect());
-		} else {
-			if let Ok(devices) = self.router.transport_devices() {
-				for warning in transport::controller_warnings(&devices, self.config.sco_limit) {
-					if self.reported_controller_warnings.insert(warning.clone()) {
-						log::warn!("{warning}");
-					}
-				}
-			}
-			// Profile transitions remove microphones; only HFP treats this as a disconnect.
-			if let Some(input) = &self.input {
-				let snapshot = self.router.inspect_owned();
-				drain_events(&input.events, &mut self.transmit)?;
-				if let Ok((current, _)) = snapshot {
-					let available = current
-						.iter()
-						.filter(|(_, headset)| headset.has_duplex_audio())
-						.map(|(address, _)| address.clone())
-						.collect();
-					self.transmit.topology(&available);
-				}
-			}
-		}
-		Ok(())
-	}
-
 	fn update_routes(&mut self) -> Result<(), String> {
-		let config_error = self.reload_groups();
-		self.refresh_topology()?;
-		let sources = self.routing_sources();
-		let prepared = self.router.prepare_transport(&sources);
-		guard_half_update(self.config.mode, &prepared, || self.router.close())?;
-		let transport_ready = prepared?;
-		if let Some(input) = &self.input
-			&& drain_events(&input.events, &mut self.transmit)?
-		{
-			self.router.close();
-			self.links.clear();
+		let outcome = self.routing.update(
+			&mut self.config,
+			&mut self.transmit,
+			self.input.as_ref(),
+			self.beep.as_ref(),
+			&self.stopped,
+		)?;
+		if outcome.invalidated {
 			self.last_update = None;
 			return Ok(());
 		}
-		let update = self.update_route_set(&sources, transport_ready);
-		guard_half_update(self.config.mode, &update, || self.router.close())?;
-		let inspection = self.inspect_and_confirm()?;
-		if inspection.changed {
-			self.router.close();
-			self.links.clear();
-		}
-		self.report_update(update, config_error, inspection.error);
-		self.last_update = (!inspection.changed).then(Instant::now);
+		self.report_update(outcome.update, outcome.config_error, outcome.inspect_error);
+		self.last_update = (!outcome.changed).then(Instant::now);
 		Ok(())
-	}
-
-	fn reload_groups(&mut self) -> Option<String> {
-		match groups::load(&self.config.groups_path) {
-			Ok(groups) => {
-				self.transmit.set_groups(&groups);
-				self.config.groups = groups;
-				None
-			}
-			Err(error) => Some(error),
-		}
-	}
-
-	fn routing_sources(&self) -> BTreeSet<String> {
-		if self.input.is_some() {
-			self.transmit.sources().clone()
-		} else {
-			self.router.allowed.clone()
-		}
-	}
-
-	fn update_route_set(
-		&mut self,
-		sources: &BTreeSet<String>,
-		transport_ready: bool,
-	) -> Result<BTreeMap<String, Headset>, String> {
-		if !transport_ready {
-			self.router.inspect().map(|(headsets, _)| headsets)
-		} else if self.config.groups.is_empty() && self.input.is_none() {
-			self.router.update(true)
-		} else if self.config.mode == Mode::HalfDuplex && !self.config.groups.is_empty() {
-			self.router
-				.update_group_sources_in_groups(self.transmit.group_sources(), &self.config.groups)
-		} else {
-			self.router
-				.update_sources_in_groups(sources, &self.config.groups)
-		}
-	}
-
-	fn inspect_and_confirm(&mut self) -> Result<InspectionOutcome, String> {
-		let (current, active) = match self.router.inspect_owned() {
-			Ok(snapshot) => snapshot,
-			Err(error) => {
-				self.headsets.clear();
-				self.links.clear();
-				return Ok(InspectionOutcome {
-					changed: false,
-					error: Some(error),
-				});
-			}
-		};
-		self.headsets = current;
-		self.links = active;
-		let mut changed = false;
-		if let Some(input) = &self.input {
-			changed |= drain_events(&input.events, &mut self.transmit)?;
-			if self.config.transport == Transport::ScoA2dp {
-				let devices = self.router.transport_devices();
-				guard_half_update(self.config.mode, &devices, || self.router.close())?;
-				changed |= transport::refresh_transmit_requests(
-					&mut self.transmit,
-					&devices?,
-					&self.router.take_transport_disconnects(),
-				);
-			} else {
-				let available = self
-					.headsets
-					.iter()
-					.filter(|(_, headset)| headset.has_duplex_audio())
-					.map(|(address, _)| address.clone())
-					.collect();
-				changed |= self.transmit.topology(&available);
-			}
-			if !changed {
-				changed |= confirm_transmissions(
-					self.config.mode,
-					&mut self.transmit,
-					&input.events,
-					&self.headsets,
-					&self.links,
-					self.beep.as_ref(),
-					&self.stopped,
-				)?;
-			}
-		} else {
-			confirm_connections(
-				&mut self.connected_headsets,
-				&self.headsets,
-				&self.links,
-				self.beep.as_ref(),
-				&self.stopped,
-			);
-		}
-		Ok(InspectionOutcome {
-			changed,
-			error: None,
-		})
 	}
 
 	fn report_update(
 		&mut self,
-		update: Result<BTreeMap<String, Headset>, String>,
+		update: Result<BTreeMap<Address, Headset>, String>,
 		config_error: Option<String>,
 		inspect_error: Option<String>,
 	) {
@@ -498,7 +571,7 @@ impl Session {
 						.count();
 					log::info!(
 						"{active}/{} headsets with duplex audio",
-						self.router.allowed.len()
+						self.routing.router.allowed.len()
 					);
 				}
 				Err(error) => log::warn!("Routing update failed: {error}"),
@@ -521,9 +594,9 @@ impl Session {
 			}
 			dashboard
 				.draw(
-					&self.router.allowed,
-					&self.headsets,
-					&self.links,
+					&self.routing.router.allowed,
+					&self.routing.headsets,
+					&self.routing.links,
 					RunStatus {
 						mode: self.config.mode,
 						transmitting: self.input.is_none() || !self.transmit.sources().is_empty(),
@@ -541,7 +614,7 @@ impl Session {
 impl Drop for Session {
 	fn drop(&mut self) {
 		self.stopped.store(true, Ordering::SeqCst);
-		self.router.close();
+		self.routing.router.close();
 		self.pairing.take();
 		if let Some(input) = &mut self.input {
 			input.stop();
@@ -570,7 +643,7 @@ mod tests {
 			connect: false,
 			pair_button: false,
 			buttons: vec![PttButton {
-				address: "AA:BB:CC:DD:EE:01".into(),
+				address: Some(Address::parse("AA:BB:CC:DD:EE:01").unwrap()),
 				path: "injected-input".into(),
 			}],
 			mode: Mode::HalfDuplex,
@@ -589,7 +662,7 @@ mod tests {
 		let stopped = Arc::new(AtomicBool::new(false));
 		let mut session = Session::new(config(), Arc::clone(&stopped));
 		let execute: Execute = Box::new(|_| Err("injected snapshot failure".into()));
-		session.router = Router::with_executor(session.config.allowed.clone(), execute);
+		session.routing.router = Router::with_executor(session.config.allowed.clone(), execute);
 		let (done, completed) = mpsc::channel();
 		session.connector = Some(Worker::spawn(Arc::clone(&stopped), move |_, wake| {
 			let _ = wake.recv();
@@ -609,7 +682,7 @@ mod tests {
 			cancellation.store(true, Ordering::SeqCst);
 			Err("cancelled".into())
 		});
-		session.router = Router::with_executor(session.config.allowed.clone(), execute);
+		session.routing.router = Router::with_executor(session.config.allowed.clone(), execute);
 		assert!(session.run().is_ok());
 		assert!(stopped.load(Ordering::SeqCst));
 	}
@@ -636,7 +709,11 @@ mod tests {
 		let mut session = Session::new(config(), Arc::new(AtomicBool::new(false)));
 		session.input = Some(PttInput::from_events(receiver));
 		session.transmit.topology(&[address.into()].into());
-		assert!(session.transmit.event(address, true, Instant::now()));
+		assert!(
+			session
+				.transmit
+				.event(&Address::parse(address).unwrap(), true, Instant::now())
+		);
 		session.last_update = Some(Instant::now());
 		let mut snapshots = 0;
 		let execute: Execute = Box::new(move |args| {
@@ -649,11 +726,11 @@ mod tests {
 			}
 			Ok(snapshot.clone())
 		});
-		session.router = Router::with_executor(session.config.allowed.clone(), execute);
+		session.routing.router = Router::with_executor(session.config.allowed.clone(), execute);
 		session.update_routes().unwrap();
 		assert!(session.transmit.sources().is_empty());
 		assert!(session.transmit.pending.is_empty());
-		assert!(session.links.is_empty());
+		assert!(session.routing.links.is_empty());
 		assert!(session.last_update.is_none());
 	}
 
@@ -661,7 +738,7 @@ mod tests {
 	fn input_open_failure_does_not_save_network_or_start_workers() {
 		let mut config = config();
 		config.buttons = vec![PttButton {
-			address: "AA:BB:CC:DD:EE:01".into(),
+			address: Some(Address::parse("AA:BB:CC:DD:EE:01").unwrap()),
 			path: config
 				.network_path
 				.join("missing-input")

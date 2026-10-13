@@ -8,10 +8,12 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
+use crate::bluez::Address;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TalkGroup {
 	pub name: String,
-	pub members: BTreeSet<String>,
+	pub members: BTreeSet<Address>,
 }
 
 pub fn config_path(network_path: &Path) -> Result<PathBuf, String> {
@@ -71,12 +73,8 @@ pub fn load(path: &Path) -> Result<Vec<TalkGroup>, String> {
 						path.display()
 					)
 				})?;
-				crate::bluez::normalize_address(address).ok_or_else(|| {
-					format!(
-						"invalid talk-group file {}: invalid headset address {address}",
-						path.display()
-					)
-				})
+				crate::bluez::parse_address(address)
+					.map_err(|error| format!("invalid talk-group file {}: {error}", path.display()))
 			})
 			.collect::<Result<BTreeSet<_>, _>>()?;
 		groups.push(TalkGroup { name, members });
@@ -90,16 +88,6 @@ pub fn save(path: &Path, groups: &[TalkGroup]) -> Result<(), String> {
 		if group.name.trim().is_empty() || !names.insert(normalize_name(&group.name)) {
 			return Err("talk-group names must be non-empty and unique".into());
 		}
-		if group
-			.members
-			.iter()
-			.any(|member| crate::bluez::normalize_address(member).is_none())
-		{
-			return Err(format!(
-				"talk group {:?} contains an invalid headset address",
-				group.name
-			));
-		}
 	}
 	let directory = path
 		.parent()
@@ -109,7 +97,7 @@ pub fn save(path: &Path, groups: &[TalkGroup]) -> Result<(), String> {
 	let contents = json!({
 		"groups": groups.iter().map(|group| json!({
 			"name": group.name.trim(),
-			"members": group.members.iter().filter_map(|address| crate::bluez::normalize_address(address)).collect::<Vec<_>>(),
+			"members": group.members.iter().map(Address::as_str).collect::<Vec<_>>(),
 		})).collect::<Vec<_>>(),
 	})
 	.to_string();
@@ -174,11 +162,7 @@ mod tests {
 			fs::write(&path, contents).unwrap();
 			assert!(load(&path).is_err(), "{contents}");
 		}
-		let invalid_member = TalkGroup {
-			name: "Team".into(),
-			members: ["not-an-address".into()].into(),
-		};
-		assert!(save(&path, &[invalid_member]).is_err());
+		assert!(Address::parse("not-an-address").is_err());
 		assert!(
 			save(
 				&path,

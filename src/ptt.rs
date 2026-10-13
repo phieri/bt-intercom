@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
+use crate::bluez::Address;
 use crate::network::runtime_directory;
 use crate::process::command_cancellable;
 use crate::router::Headset;
@@ -26,11 +27,11 @@ pub(crate) const KEY_PLAYPAUSE: u16 = 164;
 
 #[derive(Clone, Debug)]
 pub(crate) struct PttButton {
-	pub address: String,
+	pub address: Option<Address>,
 	pub path: String,
 }
 
-pub(crate) type PttEvent = Result<(String, bool, Instant), String>;
+pub(crate) type PttEvent = Result<(Address, bool, Instant), String>;
 
 pub(crate) struct PttBeep {
 	path: PathBuf,
@@ -82,7 +83,7 @@ pub(crate) fn confirm_transmissions(
 	mode: Mode,
 	transmit: &mut Transmit,
 	input: &Receiver<PttEvent>,
-	headsets: &BTreeMap<String, Headset>,
+	headsets: &BTreeMap<Address, Headset>,
 	links: &BTreeSet<(u64, u64)>,
 	beep: Option<&PttBeep>,
 	stopped: &AtomicBool,
@@ -131,8 +132,8 @@ pub(crate) fn confirm_transmissions(
 }
 
 pub(crate) fn confirm_connections(
-	routed_headsets: &mut BTreeSet<String>,
-	headsets: &BTreeMap<String, Headset>,
+	routed_headsets: &mut BTreeSet<Address>,
+	headsets: &BTreeMap<Address, Headset>,
 	links: &BTreeSet<(u64, u64)>,
 	beep: Option<&PttBeep>,
 	stopped: &AtomicBool,
@@ -177,7 +178,7 @@ pub(crate) fn drain_events(
 }
 
 #[cfg(test)]
-pub(crate) fn read_input_events<R: Read>(input: R, address: String, sender: Sender<PttEvent>) {
+pub(crate) fn read_input_events<R: Read>(input: R, address: Address, sender: Sender<PttEvent>) {
 	let (_wake, receiver) = mpsc::channel();
 	read_events(input, address, sender, &AtomicBool::new(false), &receiver);
 }
@@ -213,7 +214,10 @@ impl PreparedInputs {
 			.map(|(button, file)| {
 				let sender = sender.clone();
 				Worker::spawn(Arc::clone(&stopped), move |stopped, wake| {
-					read_events(file, button.address, sender, &stopped, &wake);
+					let Some(address) = button.address else {
+						return;
+					};
+					read_events(file, address, sender, &stopped, &wake);
 				})
 			})
 			.collect();
@@ -241,7 +245,7 @@ impl PttInput {
 /// Preserve the prefix of a record across short reads and WouldBlock.
 pub(crate) fn read_events<R: Read>(
 	mut input: R,
-	address: String,
+	address: Address,
 	sender: Sender<PttEvent>,
 	stopped: &AtomicBool,
 	wake: &Receiver<()>,
@@ -316,7 +320,13 @@ mod tests {
 		input.set_nonblocking(true).unwrap();
 		let (sender, events) = mpsc::channel();
 		let worker = Worker::spawn(Arc::new(AtomicBool::new(false)), move |stopped, wake| {
-			read_events(input, "headset".into(), sender, &stopped, &wake);
+			read_events(
+				input,
+				Address::parse("AA:BB:CC:DD:EE:01").unwrap(),
+				sender,
+				&stopped,
+				&wake,
+			);
 		});
 		(output, events, worker)
 	}
@@ -363,7 +373,7 @@ mod tests {
 				.recv_timeout(Duration::from_secs(1))
 				.unwrap()
 				.unwrap();
-			assert_eq!(address, "headset");
+			assert_eq!(address.as_str(), "AA:BB:CC:DD:EE:01");
 			assert_eq!(actual, pressed);
 		}
 		drop(worker);

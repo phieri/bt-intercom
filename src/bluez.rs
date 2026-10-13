@@ -2,9 +2,126 @@
 
 //! Helpers for parsing BlueZ device information.
 
+use std::borrow::Borrow;
+use std::fmt;
+use std::str::FromStr;
+
 pub(crate) const STRONG_RSSI: i32 = -60;
 pub(crate) const GOOD_RSSI: i32 = -70;
 pub(crate) const FAIR_RSSI: i32 = -80;
+
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub(crate) struct Address(String);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum AddressErrorKind {
+	Length,
+	Separator { index: usize },
+	HexDigit { index: usize },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AddressError {
+	pub(crate) input: String,
+	pub(crate) kind: AddressErrorKind,
+}
+
+impl Address {
+	pub(crate) fn parse(value: &str) -> Result<Self, AddressError> {
+		let bytes = value.as_bytes();
+		if bytes.len() != 17 {
+			return Err(AddressError {
+				input: value.into(),
+				kind: AddressErrorKind::Length,
+			});
+		}
+		for (index, byte) in bytes.iter().enumerate() {
+			if index % 3 == 2 {
+				if *byte != b':' {
+					return Err(AddressError {
+						input: value.into(),
+						kind: AddressErrorKind::Separator { index },
+					});
+				}
+			} else if !byte.is_ascii_hexdigit() {
+				return Err(AddressError {
+					input: value.into(),
+					kind: AddressErrorKind::HexDigit { index },
+				});
+			}
+		}
+		Ok(Self(value.to_ascii_uppercase()))
+	}
+
+	pub(crate) fn as_str(&self) -> &str {
+		&self.0
+	}
+}
+
+impl Borrow<str> for Address {
+	fn borrow(&self) -> &str {
+		self.as_str()
+	}
+}
+
+impl AsRef<str> for Address {
+	fn as_ref(&self) -> &str {
+		self.as_str()
+	}
+}
+
+impl std::ops::Deref for Address {
+	type Target = str;
+
+	fn deref(&self) -> &Self::Target {
+		self.as_str()
+	}
+}
+
+impl fmt::Display for Address {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		formatter.write_str(self.as_str())
+	}
+}
+
+impl fmt::Display for AddressError {
+	fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+		let reason = match self.kind {
+			AddressErrorKind::Length => "must contain six hexadecimal octets",
+			AddressErrorKind::Separator { .. } => "must separate octets with colons",
+			AddressErrorKind::HexDigit { .. } => "contains a non-hexadecimal character",
+		};
+		write!(
+			formatter,
+			"expected a Bluetooth MAC address (XX:XX:XX:XX:XX:XX): {} ({reason})",
+			self.input
+		)
+	}
+}
+
+impl std::error::Error for AddressError {}
+
+impl FromStr for Address {
+	type Err = AddressError;
+
+	fn from_str(value: &str) -> Result<Self, Self::Err> {
+		Self::parse(value)
+	}
+}
+
+#[cfg(test)]
+impl From<&str> for Address {
+	fn from(value: &str) -> Self {
+		Self::parse(value).expect("test fixture must use a valid Bluetooth address")
+	}
+}
+
+#[cfg(test)]
+impl From<String> for Address {
+	fn from(value: String) -> Self {
+		Self::parse(&value).expect("test fixture must use a valid Bluetooth address")
+	}
+}
 
 pub(crate) fn property<'a>(info: &'a str, field: &str) -> Option<&'a str> {
 	info.lines().find_map(|line| {
@@ -17,27 +134,15 @@ pub(crate) fn device_flag(info: &str, flag: &str) -> bool {
 	property(info, flag) == Some("yes")
 }
 
-pub(crate) fn normalize_address(value: &str) -> Option<String> {
-	let bytes = value.as_bytes();
-	if bytes.len() != 17
-		|| !bytes.iter().enumerate().all(|(index, byte)| {
-			if index % 3 == 2 {
-				*byte == b':'
-			} else {
-				byte.is_ascii_hexdigit()
-			}
-		}) {
-		return None;
-	}
-	Some(value.to_ascii_uppercase())
+pub(crate) fn normalize_address(value: &str) -> Option<Address> {
+	Address::parse(value).ok()
 }
 
-pub(crate) fn parse_address(value: &str) -> Result<String, String> {
-	normalize_address(value)
-		.ok_or_else(|| format!("expected a Bluetooth MAC address (XX:XX:XX:XX:XX:XX): {value}"))
+pub(crate) fn parse_address(value: &str) -> Result<Address, AddressError> {
+	Address::parse(value)
 }
 
-pub(crate) fn controller_addresses(info: &str) -> std::collections::BTreeSet<String> {
+pub(crate) fn controller_addresses(info: &str) -> std::collections::BTreeSet<Address> {
 	info.lines()
 		.filter_map(|line| {
 			let address = line
@@ -118,7 +223,9 @@ mod tests {
 	#[test]
 	fn normalizes_only_valid_bluetooth_addresses() {
 		assert_eq!(
-			normalize_address("aa:bb:cc:dd:ee:ff").as_deref(),
+			normalize_address("aa:bb:cc:dd:ee:ff")
+				.as_ref()
+				.map(Address::as_str),
 			Some("AA:BB:CC:DD:EE:FF")
 		);
 		for value in [
@@ -130,6 +237,21 @@ mod tests {
 		] {
 			assert_eq!(normalize_address(value), None, "{value:?}");
 		}
+	}
+
+	#[test]
+	fn address_errors_identify_the_invalid_component() {
+		assert_eq!(
+			Address::parse("AA:BB:CC:DD:EE").unwrap_err().kind,
+			AddressErrorKind::Length
+		);
+		assert_eq!(
+			Address::parse("AA-BB:CC:DD:EE:FF").unwrap_err().kind,
+			AddressErrorKind::Separator { index: 2 }
+		);
+		let error = Address::parse("AA:BB:CC:DD:EE:FG").unwrap_err();
+		assert_eq!(error.kind, AddressErrorKind::HexDigit { index: 16 });
+		assert!(error.to_string().contains("non-hexadecimal character"));
 	}
 
 	#[test]

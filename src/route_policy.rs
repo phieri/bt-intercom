@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::bluez::Address;
 use crate::groups::TalkGroup;
 use crate::pipewire::{Headset, Link, MONO_CHANNEL, Port};
 
@@ -16,14 +17,14 @@ pub(crate) fn channels_compatible(output: &Port, input: &Port) -> bool {
 /// A headset is never linked to itself; mono ports are compatible with every
 /// channel on the opposite endpoint.
 #[cfg(test)]
-pub(crate) fn desired_links(headsets: &BTreeMap<String, Headset>) -> BTreeSet<Link> {
+pub(crate) fn desired_links(headsets: &BTreeMap<Address, Headset>) -> BTreeSet<Link> {
 	desired_links_with_policy(headsets, None, None)
 }
 
 fn desired_links_with_policy(
-	headsets: &BTreeMap<String, Headset>,
-	allowed_pairs: Option<&BTreeMap<String, BTreeSet<String>>>,
-	active_sources: Option<&BTreeSet<String>>,
+	headsets: &BTreeMap<Address, Headset>,
+	allowed_pairs: Option<&BTreeMap<Address, BTreeSet<Address>>>,
+	active_sources: Option<&BTreeSet<Address>>,
 ) -> BTreeSet<Link> {
 	let mut desired = BTreeSet::new();
 	for (source_address, source) in headsets {
@@ -51,7 +52,7 @@ fn desired_links_with_policy(
 	desired
 }
 
-fn group_pairs(groups: &[TalkGroup]) -> BTreeMap<String, BTreeSet<String>> {
+fn group_pairs(groups: &[TalkGroup]) -> BTreeMap<Address, BTreeSet<Address>> {
 	let mut pairs = BTreeMap::new();
 	for group in groups {
 		for source in &group.members {
@@ -69,7 +70,7 @@ fn group_pairs(groups: &[TalkGroup]) -> BTreeMap<String, BTreeSet<String>> {
 /// An empty group list retains the original all-to-all behavior.
 #[cfg(test)]
 pub(crate) fn desired_links_in_groups(
-	headsets: &BTreeMap<String, Headset>,
+	headsets: &BTreeMap<Address, Headset>,
 	groups: &[TalkGroup],
 ) -> BTreeSet<Link> {
 	if groups.is_empty() {
@@ -83,8 +84,8 @@ pub(crate) fn desired_links_in_groups(
 ///
 /// With no configured groups, the `None` entry represents the shared floor.
 pub(crate) fn desired_links_by_group(
-	headsets: &BTreeMap<String, Headset>,
-	group_sources: &BTreeMap<Option<String>, BTreeSet<String>>,
+	headsets: &BTreeMap<Address, Headset>,
+	group_sources: &BTreeMap<Option<String>, BTreeSet<Address>>,
 	groups: &[TalkGroup],
 ) -> BTreeSet<Link> {
 	if groups.is_empty() {
@@ -108,6 +109,10 @@ pub(crate) fn desired_links_by_group(
 mod tests {
 	use super::*;
 
+	fn address(value: &str) -> Address {
+		Address::parse(value).unwrap()
+	}
+
 	fn headset(source: u64, sink: u64) -> Headset {
 		Headset {
 			sources: vec![Port {
@@ -123,18 +128,21 @@ mod tests {
 		}
 	}
 
-	fn headsets() -> BTreeMap<String, Headset> {
+	fn headsets() -> BTreeMap<Address, Headset> {
 		BTreeMap::from([
-			("A".into(), headset(1, 2)),
-			("B".into(), headset(3, 4)),
-			("C".into(), headset(5, 6)),
+			(address("AA:BB:CC:DD:EE:01"), headset(1, 2)),
+			(address("AA:BB:CC:DD:EE:02"), headset(3, 4)),
+			(address("AA:BB:CC:DD:EE:03"), headset(5, 6)),
 		])
 	}
 
 	fn group(name: &str, members: &[&str]) -> TalkGroup {
 		TalkGroup {
 			name: name.into(),
-			members: members.iter().map(|member| (*member).into()).collect(),
+			members: members
+				.iter()
+				.map(|member| crate::bluez::parse_address(member).unwrap())
+				.collect(),
 		}
 	}
 
@@ -169,15 +177,18 @@ mod tests {
 	#[test]
 	fn group_policy_limits_peers_and_active_sources_per_group() {
 		let headsets = headsets();
-		let groups = [group("North", &["A", "B"]), group("South", &["B", "C"])];
+		let groups = [
+			group("North", &["AA:BB:CC:DD:EE:01", "AA:BB:CC:DD:EE:02"]),
+			group("South", &["AA:BB:CC:DD:EE:02", "AA:BB:CC:DD:EE:03"]),
+		];
 		assert_eq!(
 			desired_links_in_groups(&headsets, &groups),
 			[(1, 4), (3, 2), (3, 6), (5, 4)].into()
 		);
 
 		let floors = BTreeMap::from([
-			(Some("North".into()), ["A".into()].into()),
-			(Some("South".into()), ["C".into()].into()),
+			(Some("North".into()), [address("AA:BB:CC:DD:EE:01")].into()),
+			(Some("South".into()), [address("AA:BB:CC:DD:EE:03")].into()),
 		]);
 		assert_eq!(
 			desired_links_by_group(&headsets, &floors, &groups),
@@ -186,7 +197,7 @@ mod tests {
 		assert_eq!(
 			desired_links_by_group(
 				&headsets,
-				&BTreeMap::from([(None, ["A".into()].into())]),
+				&BTreeMap::from([(None, [address("AA:BB:CC:DD:EE:01")].into())]),
 				&[]
 			),
 			[(1, 4), (1, 6)].into()

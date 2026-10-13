@@ -2,17 +2,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::bluez::Address;
 use crate::pipewire::Headset;
 use crate::route_policy::channels_compatible;
 
 pub struct RoutingStatus {
-	counts: BTreeMap<String, (usize, usize)>,
-	peers: BTreeSet<(String, String)>,
+	counts: BTreeMap<Address, (usize, usize)>,
+	peers: BTreeSet<(Address, Address)>,
 	total: usize,
 }
 
 impl RoutingStatus {
-	pub fn new(headsets: &BTreeMap<String, Headset>, links: &BTreeSet<(u64, u64)>) -> Self {
+	pub fn new(headsets: &BTreeMap<Address, Headset>, links: &BTreeSet<(u64, u64)>) -> Self {
 		let mut status = Self {
 			counts: BTreeMap::new(),
 			peers: BTreeSet::new(),
@@ -47,7 +48,7 @@ impl RoutingStatus {
 	}
 
 	/// Observed outgoing and incoming channel-link counts, respectively.
-	pub fn counts(&self, address: &str) -> (usize, usize) {
+	pub fn counts(&self, address: &Address) -> (usize, usize) {
 		self.counts.get(address).copied().unwrap_or_default()
 	}
 
@@ -55,11 +56,11 @@ impl RoutingStatus {
 		self.total
 	}
 
-	pub fn has_active_source_route(&self, address: &str) -> bool {
+	pub fn has_active_source_route(&self, address: &Address) -> bool {
 		self.counts(address).0 > 0
 	}
 
-	pub fn has_active_intercom_connection(&self, address: &str) -> bool {
+	pub fn has_active_intercom_connection(&self, address: &Address) -> bool {
 		self.peers.iter().any(|(source, sink)| {
 			source == address && self.peers.contains(&(sink.clone(), source.clone()))
 		})
@@ -71,6 +72,10 @@ mod tests {
 	use super::*;
 	use crate::pipewire::Port;
 
+	fn address(value: &str) -> Address {
+		Address::parse(value).unwrap()
+	}
+
 	fn port(id: u64, channel: &str) -> Port {
 		Port {
 			id,
@@ -79,24 +84,24 @@ mod tests {
 		}
 	}
 
-	fn headsets() -> BTreeMap<String, Headset> {
+	fn headsets() -> BTreeMap<Address, Headset> {
 		BTreeMap::from([
 			(
-				"A".into(),
+				address("AA:BB:CC:DD:EE:01"),
 				Headset {
 					sources: vec![port(1, "FL")],
 					sinks: vec![port(2, "FL")],
 				},
 			),
 			(
-				"B".into(),
+				address("AA:BB:CC:DD:EE:02"),
 				Headset {
 					sources: vec![port(3, "MONO")],
 					sinks: vec![port(4, "FL"), port(5, "FR")],
 				},
 			),
 			(
-				"C".into(),
+				address("AA:BB:CC:DD:EE:03"),
 				Headset {
 					sources: vec![port(6, "MONO")],
 					sinks: vec![port(7, "MONO")],
@@ -112,21 +117,21 @@ mod tests {
 			&[(1, 2), (1, 5), (1, 99), (99, 2), (1, 4), (3, 2)].into(),
 		);
 		assert_eq!(status.total_links(), 2);
-		assert_eq!(status.counts("A"), (1, 1));
-		assert_eq!(status.counts("B"), (1, 1));
-		assert_eq!(status.counts("missing"), (0, 0));
-		assert!(status.has_active_source_route("A"));
-		assert!(status.has_active_intercom_connection("A"));
-		assert!(!status.has_active_source_route("C"));
-		assert!(!status.has_active_intercom_connection("missing"));
+		assert_eq!(status.counts(&address("AA:BB:CC:DD:EE:01")), (1, 1));
+		assert_eq!(status.counts(&address("AA:BB:CC:DD:EE:02")), (1, 1));
+		assert_eq!(status.counts(&address("AA:BB:CC:DD:EE:04")), (0, 0));
+		assert!(status.has_active_source_route(&address("AA:BB:CC:DD:EE:01")));
+		assert!(status.has_active_intercom_connection(&address("AA:BB:CC:DD:EE:01")));
+		assert!(!status.has_active_source_route(&address("AA:BB:CC:DD:EE:03")));
+		assert!(!status.has_active_intercom_connection(&address("AA:BB:CC:DD:EE:04")));
 	}
 
 	#[test]
 	fn duplex_readiness_requires_a_common_peer_and_observed_links() {
 		let status = RoutingStatus::new(&headsets(), &[(1, 4), (6, 2)].into());
-		assert_eq!(status.counts("A"), (1, 1));
-		assert!(status.has_active_source_route("A"));
-		assert!(!status.has_active_intercom_connection("A"));
+		assert_eq!(status.counts(&address("AA:BB:CC:DD:EE:01")), (1, 1));
+		assert!(status.has_active_source_route(&address("AA:BB:CC:DD:EE:01")));
+		assert!(!status.has_active_intercom_connection(&address("AA:BB:CC:DD:EE:01")));
 		assert_eq!(
 			RoutingStatus::new(&headsets(), &BTreeSet::new()).total_links(),
 			0
@@ -136,9 +141,13 @@ mod tests {
 	#[test]
 	fn repeated_port_metadata_does_not_inflate_counts() {
 		let mut headsets = headsets();
-		headsets.get_mut("A").unwrap().sources.push(port(1, "FL"));
+		headsets
+			.get_mut(&address("AA:BB:CC:DD:EE:01"))
+			.unwrap()
+			.sources
+			.push(port(1, "FL"));
 		let status = RoutingStatus::new(&headsets, &[(1, 4)].into());
 		assert_eq!(status.total_links(), 1);
-		assert_eq!(status.counts("A"), (1, 0));
+		assert_eq!(status.counts(&address("AA:BB:CC:DD:EE:01")), (1, 0));
 	}
 }

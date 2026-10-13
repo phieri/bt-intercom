@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use crate::bluez::Address;
 use crate::groups::{TalkGroup, normalize_name, save};
 
 pub(crate) struct GroupEditor {
@@ -53,7 +54,7 @@ impl GroupEditor {
 		true
 	}
 
-	pub(crate) fn toggle_member(&mut self, index: usize, address: String) -> bool {
+	pub(crate) fn toggle_member(&mut self, index: usize, address: Address) -> bool {
 		let Some(group) = self.groups.get_mut(index) else {
 			return false;
 		};

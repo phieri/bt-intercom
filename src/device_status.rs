@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
+use crate::bluez::Address;
 use crate::bluez::{
 	FAIR_RSSI, GOOD_RSSI, STRONG_RSSI, bluetooth_name, device_flag, signal_strength,
 };
@@ -152,14 +153,14 @@ impl<'a> StatusPresentation<'a> {
 }
 
 pub(crate) struct StatusUpdate {
-	pub statuses: BTreeMap<String, HeadsetStatus>,
+	pub statuses: BTreeMap<Address, HeadsetStatus>,
 	pub error: Option<String>,
 }
 
 /// Dashboard routing is already sampled by the session; only the standalone
 /// control panel needs an additional PipeWire inspection.
 pub(crate) fn start_polling(
-	allowed: BTreeSet<String>,
+	allowed: BTreeSet<Address>,
 	include_audio: bool,
 	interval: Duration,
 	session_stopped: Arc<AtomicBool>,
@@ -186,7 +187,7 @@ pub(crate) fn start_polling(
 }
 
 fn poll_status(
-	allowed: &BTreeSet<String>,
+	allowed: &BTreeSet<Address>,
 	include_audio: bool,
 	stopped: &AtomicBool,
 	mut execute: impl FnMut(&[&str]) -> Result<String, String>,
@@ -286,27 +287,43 @@ mod tests {
 
 	#[test]
 	fn each_device_is_queried_once_and_failures_remain_unknown() {
-		let allowed = BTreeSet::from(["A".into(), "B".into()]);
+		let first = "AA:BB:CC:DD:EE:01";
+		let second = "AA:BB:CC:DD:EE:02";
+		let allowed = BTreeSet::from([first.into(), second.into()]);
 		for include_audio in [false, true] {
 			let mut calls = Vec::new();
 			let update = poll_status(&allowed, include_audio, &AtomicBool::new(false), |args| {
 				calls.push(args.join(" "));
 				match args {
 					["pw-dump"] => Ok("[]".into()),
-					["bluetoothctl", "info", "A"] => Ok("Connected: yes\nAlias: Headset".into()),
+					["bluetoothctl", "info", address] if *address == first => {
+						Ok("Connected: yes\nAlias: Headset".into())
+					}
 					_ => Err("device unavailable".into()),
 				}
 			})
 			.unwrap();
 			let expected = if include_audio {
-				vec!["pw-dump", "bluetoothctl info A", "bluetoothctl info B"]
+				vec![
+					"pw-dump",
+					"bluetoothctl info AA:BB:CC:DD:EE:01",
+					"bluetoothctl info AA:BB:CC:DD:EE:02",
+				]
 			} else {
-				vec!["bluetoothctl info A", "bluetoothctl info B"]
+				vec![
+					"bluetoothctl info AA:BB:CC:DD:EE:01",
+					"bluetoothctl info AA:BB:CC:DD:EE:02",
+				]
 			};
 			assert_eq!(calls, expected);
-			assert_eq!(update.statuses["A"].connected, Some(true));
-			assert_eq!(update.statuses["B"].connected, None);
-			assert!(update.error.unwrap().contains("B: device unavailable"));
+			assert_eq!(update.statuses[first].connected, Some(true));
+			assert_eq!(update.statuses[second].connected, None);
+			assert!(
+				update
+					.error
+					.unwrap()
+					.contains(&format!("{second}: device unavailable"))
+			);
 		}
 	}
 
@@ -314,12 +331,19 @@ mod tests {
 	fn cancellation_discards_partial_updates_and_stops_commands() {
 		let stopped = AtomicBool::new(false);
 		let mut calls = 0;
+		let first = "AA:BB:CC:DD:EE:01";
+		let second = "AA:BB:CC:DD:EE:02";
 		assert!(
-			poll_status(&["A".into(), "B".into()].into(), false, &stopped, |_| {
-				calls += 1;
-				stopped.store(true, Ordering::SeqCst);
-				Ok("Connected: yes".into())
-			})
+			poll_status(
+				&[first.into(), second.into()].into(),
+				false,
+				&stopped,
+				|_| {
+					calls += 1;
+					stopped.store(true, Ordering::SeqCst);
+					Ok("Connected: yes".into())
+				}
+			)
 			.is_none()
 		);
 		assert_eq!(calls, 1);
@@ -333,8 +357,9 @@ mod tests {
 
 	#[test]
 	fn audio_errors_do_not_hide_bluetooth_status() {
+		let address = "AA:BB:CC:DD:EE:01";
 		let update = poll_status(
-			&["A".into()].into(),
+			&[address.into()].into(),
 			true,
 			&AtomicBool::new(false),
 			|args| {
@@ -346,8 +371,8 @@ mod tests {
 			},
 		)
 		.unwrap();
-		assert_eq!(update.statuses["A"].connected, Some(false));
-		assert!(!update.statuses["A"].duplex);
+		assert_eq!(update.statuses[address].connected, Some(false));
+		assert!(!update.statuses[address].duplex);
 		assert_eq!(update.error.as_deref(), Some("PipeWire unavailable"));
 	}
 
