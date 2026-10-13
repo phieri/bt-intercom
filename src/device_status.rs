@@ -378,14 +378,12 @@ mod tests {
 		assert_eq!(unknown.rssi_label(), "—");
 		assert_eq!(unknown.dashboard_signal(), "unknown");
 
-		let disconnected = StatusPresentation::new(
-			Some(&HeadsetStatus {
-				connected: Some(false),
-				rssi: Some(-40),
-				..HeadsetStatus::default()
-			}),
-			Some(false),
-		);
+		let disconnected_status = HeadsetStatus {
+			connected: Some(false),
+			rssi: Some(-40),
+			..HeadsetStatus::default()
+		};
+		let disconnected = StatusPresentation::new(Some(&disconnected_status), Some(false));
 		assert_eq!(disconnected.dashboard_signal(), "unknown");
 		assert_eq!(disconnected.rssi_label(), "-40 dBm");
 		assert_eq!(SignalQuality::from_rssi(Some(-60)), SignalQuality::Strong);

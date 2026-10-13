@@ -85,10 +85,8 @@ impl Dashboard {
 		for address in allowed {
 			let bluetooth = self.state.get(address);
 			let headset = headsets.get(address);
-			let presentation = StatusPresentation::new(
-				bluetooth,
-				headset.map(Headset::has_duplex_audio),
-			);
+			let presentation =
+				StatusPresentation::new(bluetooth, headset.map(Headset::has_duplex_audio));
 			let (tx, rx) = routes.counts(address);
 			let signal = presentation.dashboard_signal();
 			writeln!(
