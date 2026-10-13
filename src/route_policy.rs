@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Philip Eriksson. All rights reserved.
+
 //! Pure headset route selection, independent of PipeWire link ownership.
 
 use std::collections::{BTreeMap, BTreeSet};

@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Philip Eriksson. All rights reserved.
+
 use crate::bluez::{Address, parse_address};
 use crate::ptt::PttButton;
 use crate::runtime_config::parse_interval;
