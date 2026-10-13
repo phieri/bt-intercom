@@ -641,16 +641,16 @@ mod tests {
 		router.set_transport(Transport::ScoA2dp);
 		let sources = [address(A)].into();
 		assert!(!router.prepare_transport(&sources).unwrap());
-		assert!(router.coordinator.profile_changes.is_empty());
-		let started = router.coordinator.transition_started;
+		assert_eq!(router.coordinator.transition.profile_count(), 0);
+		let started = router.coordinator.transition.preparing_since();
 		assert!(!router.prepare_transport(&sources).unwrap());
-		assert_eq!(router.coordinator.transition_started, started);
+		assert_eq!(router.coordinator.transition.preparing_since(), started);
 		server
 			.objects
 			.borrow_mut()
 			.push(transport_fixture()[3].clone());
 		assert!(router.prepare_transport(&sources).unwrap());
-		assert!(router.coordinator.transition_started.is_none());
+		assert!(router.coordinator.transition.preparing_since().is_none());
 		router.update_sources(&sources).unwrap();
 		assert_eq!(server.links(), 2);
 
@@ -664,19 +664,19 @@ mod tests {
 			.unwrap()["info"]["params"]["Profile"] = json!([{"index":17}]);
 		assert!(!router.prepare_transport(&sources).unwrap());
 		assert_eq!(server.links(), 0);
-		let started = router.coordinator.transition_started;
+		let started = router.coordinator.transition.preparing_since();
 		assert!(!router.prepare_transport(&sources).unwrap());
-		assert_eq!(router.coordinator.transition_started, started);
+		assert_eq!(router.coordinator.transition.preparing_since(), started);
 		observe_profile(&server, 20, false);
 		assert!(router.prepare_transport(&sources).unwrap());
-		assert!(router.coordinator.transition_started.is_none());
+		assert!(router.coordinator.transition.preparing_since().is_none());
 
 		server
 			.objects
 			.borrow_mut()
 			.retain(|object| object["id"] != 13);
 		assert!(!router.prepare_transport(&sources).unwrap());
-		router.coordinator.transition_started = Some(Instant::now() - Duration::from_secs(31));
+		router.coordinator.transition.expire_preparation(Duration::from_secs(31));
 		assert!(
 			router
 				.prepare_transport(&sources)
@@ -696,8 +696,8 @@ mod tests {
 		assert!(!router.prepare_transport(&sources).unwrap());
 		server.objects.borrow_mut()[6]["info"]["params"]["Profile"] = json!([{"index":41}]);
 		assert!(!router.prepare_transport(&sources).unwrap());
-		assert!(router.coordinator.profile_changes.is_empty());
-		router.coordinator.transition_started = Some(Instant::now() - Duration::from_secs(31));
+		assert_eq!(router.coordinator.transition.profile_count(), 0);
+		router.coordinator.transition.expire_preparation(Duration::from_secs(31));
 		assert!(
 			router
 				.prepare_transport(&sources)
