@@ -8,7 +8,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
-use crate::bluez::{bluetooth_name, device_flag, signal_strength};
+use crate::bluez::{
+	FAIR_RSSI, GOOD_RSSI, STRONG_RSSI, bluetooth_name, device_flag, signal_strength,
+};
 use crate::process::{COMMAND_TIMEOUT, command_cancellable};
 use crate::router::{Headset, Router};
 use crate::worker::Worker;
@@ -28,6 +30,123 @@ impl HeadsetStatus {
 			connected: Some(device_flag(info, "Connected")),
 			duplex,
 			rssi: signal_strength(info),
+		}
+	}
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ConnectionState {
+	Connected,
+	Disconnected,
+	Unknown,
+}
+
+impl ConnectionState {
+	pub(crate) fn from_flag(connected: Option<bool>) -> Self {
+		match connected {
+			Some(true) => Self::Connected,
+			Some(false) => Self::Disconnected,
+			None => Self::Unknown,
+		}
+	}
+
+	pub(crate) fn dashboard_label(self) -> &'static str {
+		match self {
+			Self::Connected => "yes",
+			Self::Disconnected => "no",
+			Self::Unknown => "?",
+		}
+	}
+
+	pub(crate) fn panel_label(self) -> &'static str {
+		match self {
+			Self::Connected => "connected",
+			Self::Disconnected => "disconnected",
+			Self::Unknown => "unknown",
+		}
+	}
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SignalQuality {
+	Strong,
+	Good,
+	Fair,
+	Weak,
+	Unknown,
+}
+
+impl SignalQuality {
+	pub(crate) fn from_rssi(rssi: Option<i32>) -> Self {
+		match rssi {
+			Some(rssi) if rssi >= STRONG_RSSI => Self::Strong,
+			Some(rssi) if rssi >= GOOD_RSSI => Self::Good,
+			Some(rssi) if rssi >= FAIR_RSSI => Self::Fair,
+			Some(_) => Self::Weak,
+			None => Self::Unknown,
+		}
+	}
+
+	pub(crate) fn label(self) -> &'static str {
+		match self {
+			Self::Strong => "strong",
+			Self::Good => "good",
+			Self::Fair => "fair",
+			Self::Weak => "weak",
+			Self::Unknown => "unknown",
+		}
+	}
+}
+
+pub(crate) struct StatusPresentation<'a> {
+	pub(crate) name: Option<&'a str>,
+	pub(crate) connection: ConnectionState,
+	pub(crate) duplex: Option<bool>,
+	pub(crate) rssi: Option<i32>,
+}
+
+impl<'a> StatusPresentation<'a> {
+	pub(crate) fn new(status: Option<&'a HeadsetStatus>, duplex: Option<bool>) -> Self {
+		Self {
+			name: status.and_then(|status| status.name.as_deref()),
+			connection: ConnectionState::from_flag(status.and_then(|status| status.connected)),
+			duplex,
+			rssi: status.and_then(|status| status.rssi),
+		}
+	}
+
+	pub(crate) fn name_or(&self, fallback: &'a str) -> &'a str {
+		self.name.unwrap_or(fallback)
+	}
+
+	pub(crate) fn dashboard_duplex_label(&self) -> &'static str {
+		match self.duplex {
+			Some(true) => "yes",
+			Some(false) => "no",
+			None => "?",
+		}
+	}
+
+	pub(crate) fn panel_duplex_label(&self) -> &'static str {
+		if self.duplex == Some(true) {
+			"ready"
+		} else {
+			"unavailable"
+		}
+	}
+
+	pub(crate) fn rssi_label(&self) -> String {
+		self.rssi
+			.map_or_else(|| "—".to_string(), |rssi| format!("{rssi} dBm"))
+	}
+
+	pub(crate) fn dashboard_signal(&self) -> String {
+		match (self.connection, self.rssi) {
+			(ConnectionState::Connected, Some(rssi)) => format!(
+				"{rssi} dBm ({})",
+				SignalQuality::from_rssi(Some(rssi)).label()
+			),
+			_ => "unknown".to_string(),
 		}
 	}
 }
