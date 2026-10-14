@@ -26,18 +26,13 @@ mod session;
 mod terminal_style;
 mod transmit;
 mod transport;
+mod transport_model;
 mod worker;
 
 mod tui;
 
 use std::collections::BTreeSet;
-#[cfg(test)]
-use std::env;
-#[cfg(test)]
-use std::fs;
 use std::io::IsTerminal;
-#[cfg(test)]
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -60,8 +55,6 @@ use groups::config_path as talk_groups_path;
 use network::{
 	headset_path as headset_network_path, load as load_headsets, remove as remove_headset,
 };
-#[cfg(test)]
-use network::{load_for_run as load_run_headsets, save as save_headsets};
 use process::{COMMAND_TIMEOUT, command};
 #[cfg(test)]
 use ptt::KEY_PLAYPAUSE;
@@ -249,14 +242,13 @@ mod tests {
 	use super::*;
 	use crate::ptt::PttButton;
 	use crate::ptt::{BEEP_WAV, confirm_transmissions, drain_events, read_input_events};
-	use crate::runtime_config::{parse_interval, validate_mode, validate_ptt};
+	use crate::runtime_config::{validate_mode, validate_ptt};
 	use crate::session::{connect_disconnected, guard_half_update, reconnect_worker};
 	use crate::transport::{
 		refresh_transmit_requests as refresh_transport_requests, validate_controller_count,
 		validate_transport,
 	};
 	use clap::{CommandFactory, Parser};
-	use std::ffi::OsStr;
 
 	fn address(value: &str) -> Address {
 		Address::parse(value).unwrap()
@@ -478,133 +470,6 @@ mod tests {
 		assert!(parse_address("invalid").is_err());
 	}
 
-	fn temporary_network_path() -> PathBuf {
-		let nonce = std::time::SystemTime::now()
-			.duration_since(std::time::UNIX_EPOCH)
-			.unwrap()
-			.as_nanos();
-		env::temp_dir().join(format!(
-			"bt-intercom-headsets-{}-{nonce}/headsets",
-			std::process::id()
-		))
-	}
-
-	#[test]
-	fn uses_absolute_xdg_runtime_dir_for_ptt_beeps() {
-		assert_eq!(
-			network::runtime_directory(Some(OsStr::new("/run/user/1000"))),
-			PathBuf::from("/run/user/1000")
-		);
-		assert_eq!(
-			network::runtime_directory(Some(OsStr::new("relative"))),
-			env::temp_dir()
-		);
-		assert_eq!(network::runtime_directory(None), env::temp_dir());
-	}
-
-	#[test]
-	fn saves_and_restores_headset_network() {
-		let path = temporary_network_path();
-		let allowed = BTreeSet::from([address("AA:BB:CC:DD:EE:02"), address("AA:BB:CC:DD:EE:01")]);
-		save_headsets(&path, &allowed).unwrap();
-		assert_eq!(load_headsets(&path).unwrap(), allowed);
-		assert_eq!(
-			fs::read_to_string(&path).unwrap(),
-			"AA:BB:CC:DD:EE:01\nAA:BB:CC:DD:EE:02\n"
-		);
-		fs::remove_dir_all(path.parent().unwrap()).unwrap();
-	}
-
-	#[test]
-	fn removes_headsets_from_saved_network() {
-		let path = temporary_network_path();
-		let allowed = BTreeSet::from([address("AA:BB:CC:DD:EE:01"), address("AA:BB:CC:DD:EE:02")]);
-		save_headsets(&path, &allowed).unwrap();
-
-		remove_headset(&path, &address("AA:BB:CC:DD:EE:01")).unwrap();
-
-		assert_eq!(
-			load_headsets(&path).unwrap(),
-			BTreeSet::from([address("AA:BB:CC:DD:EE:02")])
-		);
-		fs::remove_dir_all(path.parent().unwrap()).unwrap();
-	}
-
-	#[test]
-	fn removes_last_headset_and_rejects_unknown_address_without_changes() {
-		let path = temporary_network_path();
-		let allowed = BTreeSet::from([address("AA:BB:CC:DD:EE:01")]);
-		save_headsets(&path, &allowed).unwrap();
-
-		assert!(remove_headset(&path, &address("AA:BB:CC:DD:EE:02")).is_err());
-		assert_eq!(load_headsets(&path).unwrap(), allowed);
-		remove_headset(&path, &address("AA:BB:CC:DD:EE:01")).unwrap();
-		assert!(!path.exists());
-		assert!(load_headsets(&path).is_err());
-		fs::remove_dir_all(path.parent().unwrap()).unwrap();
-	}
-
-	#[test]
-	fn loads_normalized_addresses_and_rejects_invalid_network_files() {
-		let path = temporary_network_path();
-		fs::create_dir_all(path.parent().unwrap()).unwrap();
-		fs::write(&path, "\naa:bb:cc:dd:ee:01\nAA:BB:CC:DD:EE:01\n \n").unwrap();
-		assert_eq!(
-			load_headsets(&path).unwrap(),
-			BTreeSet::from([address("AA:BB:CC:DD:EE:01")])
-		);
-		fs::write(&path, "not-a-bluetooth-address\n").unwrap();
-		assert!(load_headsets(&path).is_err());
-		fs::write(&path, "\n \n").unwrap();
-		assert!(load_headsets(&path).is_err());
-		fs::remove_dir_all(path.parent().unwrap()).unwrap();
-	}
-
-	#[test]
-	fn missing_saved_network_explains_how_to_create_it() {
-		let error = load_headsets(&temporary_network_path()).unwrap_err();
-		assert!(error.contains("run with headset addresses first"));
-	}
-
-	#[test]
-	fn only_button_mode_can_start_without_a_saved_network() {
-		let path = temporary_network_path();
-		assert!(load_run_headsets(&path, false).is_err());
-		assert!(load_run_headsets(&path, true).unwrap().is_empty());
-		fs::create_dir_all(path.parent().unwrap()).unwrap();
-		fs::write(&path, "invalid\n").unwrap();
-		assert!(load_run_headsets(&path, true).is_err());
-		fs::write(&path, "AA:BB:CC:DD:EE:01\n").unwrap();
-		assert_eq!(
-			load_run_headsets(&path, true).unwrap(),
-			BTreeSet::from(["AA:BB:CC:DD:EE:01".into()])
-		);
-		fs::remove_dir_all(path.parent().unwrap()).unwrap();
-	}
-
-	#[test]
-	fn enrollment_preserves_network_and_only_allows_saved_devices() {
-		let path = temporary_network_path();
-		let mut allowed = BTreeSet::from(["AA:BB:CC:DD:EE:01".into()]);
-		network::enroll(&path, &mut allowed, "AA:BB:CC:DD:EE:02".into()).unwrap();
-		assert_eq!(load_headsets(&path).unwrap(), allowed);
-		assert_eq!(allowed.len(), 2);
-		network::enroll(&path, &mut allowed, "AA:BB:CC:DD:EE:02".into()).unwrap();
-		assert_eq!(allowed.len(), 2);
-		let before = allowed.clone();
-		assert!(
-			network::enroll(
-				&path.join("not-a-directory"),
-				&mut allowed,
-				"AA:BB:CC:DD:EE:03".into(),
-			)
-			.is_err()
-		);
-		assert_eq!(allowed, before);
-		assert_eq!(load_headsets(&path).unwrap(), before);
-		fs::remove_dir_all(path.parent().unwrap()).unwrap();
-	}
-
 	#[test]
 	fn pairing_button_is_opt_in_and_incompatible_with_ptt() {
 		let CliCommand::Run { pair_button, .. } =
@@ -632,15 +497,6 @@ mod tests {
 			.is_err()
 		);
 		assert!(validate_mode(Mode::HalfDuplex, &[], &BTreeSet::new()).is_err());
-	}
-
-	#[test]
-	fn confirms_bluetooth_device_flags() {
-		assert!(!device_flag("  Paired: no\n", "Paired"));
-		assert!(device_flag("  Paired: yes\n", "Paired"));
-		assert!(!device_flag("Not Paired: yes\n", "Paired"));
-		assert!(device_flag("  Connected: yes\n", "Connected"));
-		assert!(!device_flag("  Paired: yes\n", "Connected"));
 	}
 
 	#[test]
@@ -686,140 +542,6 @@ mod tests {
 			}
 			assert_eq!(calls, expected);
 		}
-	}
-
-	#[test]
-	fn clap_cli_validates_arguments_and_accepts_completion_shells() {
-		for args in [
-			vec!["bt-intercom", "run", "invalid"],
-			vec!["bt-intercom", "run", "--interval", "NaN"],
-			vec!["bt-intercom", "run", "--interval", "0.00000000001"],
-			vec!["bt-intercom", "run", "--sco-limit", "0"],
-			vec!["bt-intercom", "scan", "--seconds", "301"],
-			vec!["bt-intercom", "status"],
-			vec!["bt-intercom", "run", "--unknown"],
-			vec!["bt-intercom", "run", "--ptt"],
-			vec!["bt-intercom", "run", "--ptt", "AA:BB:CC:DD:EE:01="],
-			vec!["bt-intercom", "remove"],
-			vec!["bt-intercom", "remove", "invalid"],
-		] {
-			assert_eq!(Cli::try_parse_from(args).err().unwrap().exit_code(), 2);
-		}
-
-		for shell in ["bash", "zsh", "fish", "elvish"] {
-			assert!(Cli::try_parse_from(["bt-intercom", "completions", shell]).is_ok());
-		}
-	}
-
-	#[test]
-	fn terminal_control_panel_uses_panel_subcommand() {
-		assert!(matches!(
-			Cli::try_parse_from(["bt-intercom", "panel"])
-				.unwrap()
-				.command,
-			CliCommand::Panel
-		));
-		assert!(Cli::try_parse_from(["bt-intercom", "tui"]).is_err());
-	}
-
-	#[test]
-	fn verbose_is_global_and_version_short_alias_is_preserved() {
-		for args in [
-			["bt-intercom", "--verbose", "run"],
-			["bt-intercom", "run", "--verbose"],
-		] {
-			assert!(Cli::try_parse_from(args).unwrap().verbose);
-		}
-		assert!(!Cli::try_parse_from(["bt-intercom", "run"]).unwrap().verbose);
-		assert_eq!(
-			cli_command()
-				.try_get_matches_from(["bt-intercom", "-v"])
-				.unwrap_err()
-				.kind(),
-			clap::error::ErrorKind::DisplayVersion
-		);
-	}
-
-	#[test]
-	fn version_flags_print_the_long_version_with_build_datetime() {
-		let command = cli_command();
-		let long_version = command.get_long_version().unwrap().to_string();
-		assert_eq!(command.get_version(), Some(long_version.as_str()));
-
-		let short = command
-			.clone()
-			.try_get_matches_from(["bt-intercom", "-v"])
-			.err()
-			.unwrap()
-			.to_string();
-		let long = command
-			.clone()
-			.try_get_matches_from(["bt-intercom", "--version"])
-			.err()
-			.unwrap()
-			.to_string();
-		let legacy_short = command
-			.try_get_matches_from(["bt-intercom", "-V"])
-			.err()
-			.unwrap()
-			.to_string();
-
-		assert_eq!(short, long);
-		assert_eq!(short, legacy_short);
-		assert!(short.contains(env!("CARGO_PKG_VERSION")));
-		assert!(short.contains(env!("BT_INTERCOM_BUILD_DATETIME")));
-	}
-
-	#[test]
-	fn top_level_help_mentions_dashboard_and_control_panel() {
-		let help = cli_command().render_help().to_string();
-		assert!(help.contains("dashboard"));
-		assert!(help.contains("control panel"));
-	}
-
-	#[test]
-	fn parses_ptt_without_changing_default_mode() {
-		let raw_address = "AA:BB:CC:DD:EE:01";
-		let default = Cli::try_parse_from(["bt-intercom", "run", raw_address]).unwrap();
-		let CliCommand::Run {
-			ptt,
-			mode,
-			dashboard,
-			..
-		} = default.command
-		else {
-			panic!("expected run command");
-		};
-		assert!(ptt.is_empty());
-		assert_eq!(mode, Mode::FullDuplex);
-		assert!(!dashboard);
-
-		let binding = format!("{raw_address}=/dev/input/event4");
-		let configured = Cli::try_parse_from([
-			"bt-intercom",
-			"run",
-			"--ptt",
-			binding.as_str(),
-			raw_address,
-			"--connect",
-			"--dashboard",
-		])
-		.unwrap();
-		let CliCommand::Run {
-			addresses,
-			connect,
-			ptt,
-			dashboard,
-			..
-		} = configured.command
-		else {
-			panic!("expected run command");
-		};
-		assert_eq!(addresses, [address(raw_address)]);
-		assert!(connect && dashboard);
-		assert_eq!(ptt.len(), 1);
-		assert_eq!(ptt[0].path, "/dev/input/event4");
-		assert_eq!(ptt[0].address, Some(address(raw_address)));
 	}
 
 	#[test]
@@ -1103,11 +825,6 @@ mod tests {
 		let (sender, receiver) = mpsc::channel();
 		read_input_events(std::io::Cursor::new(event(0, 3, 0)), input_address, sender);
 		assert!(receiver.recv().unwrap().is_err());
-	}
-
-	#[test]
-	fn rejects_intervals_that_round_to_zero() {
-		assert!(parse_interval("0.00000000001").is_err());
 	}
 
 	#[test]

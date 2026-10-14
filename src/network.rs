@@ -126,3 +126,140 @@ pub(crate) fn enroll(
 	*allowed = enrolled;
 	Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use std::time::{SystemTime, UNIX_EPOCH};
+
+	fn address(value: &str) -> Address {
+		Address::parse(value).unwrap()
+	}
+
+	fn temporary_network_path() -> PathBuf {
+		let nonce = SystemTime::now()
+			.duration_since(UNIX_EPOCH)
+			.unwrap()
+			.as_nanos();
+		env::temp_dir().join(format!(
+			"bt-intercom-headsets-{}-{nonce}/headsets",
+			std::process::id()
+		))
+	}
+
+	#[test]
+	fn uses_absolute_xdg_runtime_dir_for_ptt_beeps() {
+		assert_eq!(
+			runtime_directory(Some(OsStr::new("/run/user/1000"))),
+			PathBuf::from("/run/user/1000")
+		);
+		assert_eq!(
+			runtime_directory(Some(OsStr::new("relative"))),
+			env::temp_dir()
+		);
+		assert_eq!(runtime_directory(None), env::temp_dir());
+	}
+
+	#[test]
+	fn saves_and_restores_headset_network() {
+		let path = temporary_network_path();
+		let allowed = BTreeSet::from([address("AA:BB:CC:DD:EE:02"), address("AA:BB:CC:DD:EE:01")]);
+		save(&path, &allowed).unwrap();
+		assert_eq!(load(&path).unwrap(), allowed);
+		assert_eq!(
+			fs::read_to_string(&path).unwrap(),
+			"AA:BB:CC:DD:EE:01\nAA:BB:CC:DD:EE:02\n"
+		);
+		fs::remove_dir_all(path.parent().unwrap()).unwrap();
+	}
+
+	#[test]
+	fn removes_headsets_from_saved_network() {
+		let path = temporary_network_path();
+		let allowed = BTreeSet::from([address("AA:BB:CC:DD:EE:01"), address("AA:BB:CC:DD:EE:02")]);
+		save(&path, &allowed).unwrap();
+
+		remove(&path, &address("AA:BB:CC:DD:EE:01")).unwrap();
+
+		assert_eq!(
+			load(&path).unwrap(),
+			BTreeSet::from([address("AA:BB:CC:DD:EE:02")])
+		);
+		fs::remove_dir_all(path.parent().unwrap()).unwrap();
+	}
+
+	#[test]
+	fn removes_last_headset_and_rejects_unknown_address_without_changes() {
+		let path = temporary_network_path();
+		let allowed = BTreeSet::from([address("AA:BB:CC:DD:EE:01")]);
+		save(&path, &allowed).unwrap();
+
+		assert!(remove(&path, &address("AA:BB:CC:DD:EE:02")).is_err());
+		assert_eq!(load(&path).unwrap(), allowed);
+		remove(&path, &address("AA:BB:CC:DD:EE:01")).unwrap();
+		assert!(!path.exists());
+		assert!(load(&path).is_err());
+		fs::remove_dir_all(path.parent().unwrap()).unwrap();
+	}
+
+	#[test]
+	fn loads_normalized_addresses_and_rejects_invalid_network_files() {
+		let path = temporary_network_path();
+		fs::create_dir_all(path.parent().unwrap()).unwrap();
+		fs::write(&path, "\naa:bb:cc:dd:ee:01\nAA:BB:CC:DD:EE:01\n \n").unwrap();
+		assert_eq!(
+			load(&path).unwrap(),
+			BTreeSet::from([address("AA:BB:CC:DD:EE:01")])
+		);
+		fs::write(&path, "not-a-bluetooth-address\n").unwrap();
+		assert!(load(&path).is_err());
+		fs::write(&path, "\n \n").unwrap();
+		assert!(load(&path).is_err());
+		fs::remove_dir_all(path.parent().unwrap()).unwrap();
+	}
+
+	#[test]
+	fn missing_saved_network_explains_how_to_create_it() {
+		let error = load(&temporary_network_path()).unwrap_err();
+		assert!(error.contains("run with headset addresses first"));
+	}
+
+	#[test]
+	fn only_button_mode_can_start_without_a_saved_network() {
+		let path = temporary_network_path();
+		assert!(load_for_run(&path, false).is_err());
+		assert!(load_for_run(&path, true).unwrap().is_empty());
+		fs::create_dir_all(path.parent().unwrap()).unwrap();
+		fs::write(&path, "invalid\n").unwrap();
+		assert!(load_for_run(&path, true).is_err());
+		fs::write(&path, "AA:BB:CC:DD:EE:01\n").unwrap();
+		assert_eq!(
+			load_for_run(&path, true).unwrap(),
+			BTreeSet::from(["AA:BB:CC:DD:EE:01".into()])
+		);
+		fs::remove_dir_all(path.parent().unwrap()).unwrap();
+	}
+
+	#[test]
+	fn enrollment_preserves_network_and_only_allows_saved_devices() {
+		let path = temporary_network_path();
+		let mut allowed = BTreeSet::from(["AA:BB:CC:DD:EE:01".into()]);
+		enroll(&path, &mut allowed, "AA:BB:CC:DD:EE:02".into()).unwrap();
+		assert_eq!(load(&path).unwrap(), allowed);
+		assert_eq!(allowed.len(), 2);
+		enroll(&path, &mut allowed, "AA:BB:CC:DD:EE:02".into()).unwrap();
+		assert_eq!(allowed.len(), 2);
+		let before = allowed.clone();
+		assert!(
+			enroll(
+				&path.join("not-a-directory"),
+				&mut allowed,
+				"AA:BB:CC:DD:EE:03".into(),
+			)
+			.is_err()
+		);
+		assert_eq!(allowed, before);
+		assert_eq!(load(&path).unwrap(), before);
+		fs::remove_dir_all(path.parent().unwrap()).unwrap();
+	}
+}

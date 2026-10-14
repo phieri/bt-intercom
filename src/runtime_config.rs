@@ -367,4 +367,9 @@ mod tests {
 				.all(|button| button.path.starts_with("input"))
 		);
 	}
+
+	#[test]
+	fn rejects_intervals_that_round_to_zero() {
+		assert!(parse_interval("0.00000000001").is_err());
+	}
 }

@@ -7,10 +7,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::Value;
 
 use crate::bluez::Address;
-use crate::transport::{Device, Transport, profile_matches};
+use crate::transport_model::{Device, ProfileFamily, Transport};
 
 pub(crate) const OWNER_PROPERTY: &str = "bt-intercom.owner";
-pub(crate) const HEADSET_PROFILE: &str = "headset-head-unit";
 pub(crate) const MONO_CHANNEL: &str = "MONO";
 /// A directed link, represented as `(output_port_id, input_port_id)`.
 pub(crate) type Link = (u64, u64);
@@ -218,7 +217,7 @@ impl Snapshot {
 				&& node
 					.profile
 					.as_deref()
-					.is_some_and(|p| profile_matches(p, HEADSET_PROFILE))
+					.is_some_and(|p| ProfileFamily::Hfp.matches(p))
 		})
 	}
 
@@ -246,10 +245,10 @@ impl Snapshot {
 			let Some(profile) = node.profile.as_deref() else {
 				continue;
 			};
-			if !profile_matches(profile, HEADSET_PROFILE)
+			if !ProfileFamily::Hfp.matches(profile)
 				&& !(transport == Transport::ScoA2dp
 					&& node.class.as_deref() == Some("Audio/Sink")
-					&& profile_matches(profile, "a2dp-sink"))
+					&& ProfileFamily::A2dp.matches(profile))
 			{
 				continue;
 			}
