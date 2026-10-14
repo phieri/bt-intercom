@@ -150,7 +150,13 @@ fn parse_ptt_binding(value: &str) -> Result<PttButton, String> {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use clap::FromArgMatches;
+	use crate::bluez::Address;
+	use crate::transmit::Mode;
+	use clap::{FromArgMatches, Parser};
+
+	fn address(value: &str) -> Address {
+		Address::parse(value).unwrap()
+	}
 
 	#[test]
 	fn validates_ptt_bindings() {
@@ -181,5 +187,139 @@ mod tests {
 			.try_get_matches_from(["bt-intercom", "run"])
 			.unwrap();
 		assert!(Cli::from_arg_matches(&matches).is_ok());
+	}
+
+	#[test]
+	fn clap_cli_validates_arguments_and_accepts_completion_shells() {
+		for args in [
+			vec!["bt-intercom", "run", "invalid"],
+			vec!["bt-intercom", "run", "--interval", "NaN"],
+			vec!["bt-intercom", "run", "--interval", "0.00000000001"],
+			vec!["bt-intercom", "run", "--sco-limit", "0"],
+			vec!["bt-intercom", "scan", "--seconds", "301"],
+			vec!["bt-intercom", "status"],
+			vec!["bt-intercom", "run", "--unknown"],
+			vec!["bt-intercom", "run", "--ptt"],
+			vec!["bt-intercom", "run", "--ptt", "AA:BB:CC:DD:EE:01="],
+			vec!["bt-intercom", "remove"],
+			vec!["bt-intercom", "remove", "invalid"],
+		] {
+			assert_eq!(Cli::try_parse_from(args).err().unwrap().exit_code(), 2);
+		}
+
+		for shell in ["bash", "zsh", "fish", "elvish"] {
+			assert!(Cli::try_parse_from(["bt-intercom", "completions", shell]).is_ok());
+		}
+	}
+
+	#[test]
+	fn terminal_control_panel_uses_panel_subcommand() {
+		assert!(matches!(
+			Cli::try_parse_from(["bt-intercom", "panel"])
+				.unwrap()
+				.command,
+			CliCommand::Panel
+		));
+		assert!(Cli::try_parse_from(["bt-intercom", "tui"]).is_err());
+	}
+
+	#[test]
+	fn verbose_is_global_and_version_short_alias_is_preserved() {
+		for args in [
+			["bt-intercom", "--verbose", "run"],
+			["bt-intercom", "run", "--verbose"],
+		] {
+			assert!(Cli::try_parse_from(args).unwrap().verbose);
+		}
+		assert!(!Cli::try_parse_from(["bt-intercom", "run"]).unwrap().verbose);
+		assert_eq!(
+			cli_command()
+				.try_get_matches_from(["bt-intercom", "-v"])
+				.unwrap_err()
+				.kind(),
+			clap::error::ErrorKind::DisplayVersion
+		);
+	}
+
+	#[test]
+	fn version_flags_print_the_long_version_with_build_datetime() {
+		let command = cli_command();
+		let long_version = command.get_long_version().unwrap().to_string();
+		assert_eq!(command.get_version(), Some(long_version.as_str()));
+
+		let short = command
+			.clone()
+			.try_get_matches_from(["bt-intercom", "-v"])
+			.err()
+			.unwrap()
+			.to_string();
+		let long = command
+			.clone()
+			.try_get_matches_from(["bt-intercom", "--version"])
+			.err()
+			.unwrap()
+			.to_string();
+		let legacy_short = command
+			.try_get_matches_from(["bt-intercom", "-V"])
+			.err()
+			.unwrap()
+			.to_string();
+
+		assert_eq!(short, long);
+		assert_eq!(short, legacy_short);
+		assert!(short.contains(env!("CARGO_PKG_VERSION")));
+		assert!(short.contains(env!("BT_INTERCOM_BUILD_DATETIME")));
+	}
+
+	#[test]
+	fn top_level_help_mentions_dashboard_and_control_panel() {
+		let help = cli_command().render_help().to_string();
+		assert!(help.contains("dashboard"));
+		assert!(help.contains("control panel"));
+	}
+
+	#[test]
+	fn parses_ptt_without_changing_default_mode() {
+		let raw_address = "AA:BB:CC:DD:EE:01";
+		let default = Cli::try_parse_from(["bt-intercom", "run", raw_address]).unwrap();
+		let CliCommand::Run {
+			ptt,
+			mode,
+			dashboard,
+			..
+		} = default.command
+		else {
+			panic!("expected run command");
+		};
+		assert!(ptt.is_empty());
+		assert_eq!(mode, Mode::FullDuplex);
+		assert!(!dashboard);
+
+		let binding = format!("{raw_address}=/dev/input/event4");
+		let configured = Cli::try_parse_from([
+			"bt-intercom",
+			"run",
+			"--ptt",
+			binding.as_str(),
+			raw_address,
+			"--connect",
+			"--dashboard",
+		])
+		.unwrap();
+		let CliCommand::Run {
+			addresses,
+			connect,
+			ptt,
+			dashboard,
+			..
+		} = configured.command
+		else {
+			panic!("expected run command");
+		};
+		assert_eq!(addresses, [address(raw_address)]);
+		assert!(connect && dashboard);
+		assert_eq!(ptt.len(), 1);
+		assert_eq!(ptt[0].path, "/dev/input/event4");
+		assert_eq!(ptt[0].address, Some(address(raw_address)));
 	}
 }

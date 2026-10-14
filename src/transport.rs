@@ -560,8 +560,6 @@ mod tests {
 	use super::*;
 	use serde_json::json;
 
-	const ADDRESS: &str = "AA:BB:CC:DD:EE:01";
-
 	fn address(value: &str) -> Address {
 		Address::parse(value).unwrap()
 	}
@@ -612,5 +610,4 @@ mod tests {
 		assert!(validate_source_capacity(&two, &devices, 2).is_ok());
 		assert!(validate_source_capacity(&three, &devices, 2).is_err());
 	}
-
 }
