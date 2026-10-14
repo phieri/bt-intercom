@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Philip Eriksson. All rights reserved.
+
 //! Metrics and readiness derived only from observed, valid inter-headset links.
 
 use std::collections::{BTreeMap, BTreeSet};

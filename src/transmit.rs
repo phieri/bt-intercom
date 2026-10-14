@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Philip Eriksson. All rights reserved.
+
 //! Timestamped, hardware-independent transmit policy.
 //!
 //! Full-duplex mappings start in PTT. Three distinct play/pause presses whose

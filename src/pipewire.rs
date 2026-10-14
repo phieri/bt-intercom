@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Philip Eriksson. All rights reserved.
+
 //! One typed view of each observed PipeWire dump, shared by routing and transport.
 
 use std::collections::{BTreeMap, BTreeSet};

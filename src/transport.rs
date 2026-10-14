@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Philip Eriksson. All rights reserved.
+
 //! Opt-in SCO microphone / A2DP receiver metadata and profile transitions.
 //!
 //! Profile changes are not restored on exit: restoring every HFP profile would

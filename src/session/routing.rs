@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Philip Eriksson. All rights reserved.
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::AtomicBool;
 

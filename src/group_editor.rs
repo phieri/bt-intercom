@@ -1,3 +1,5 @@
+// Copyright (C) 2026 Philip Eriksson. All rights reserved.
+
 //! Talk-group edits and persistence, independent of terminal presentation.
 
 use std::collections::BTreeSet;
