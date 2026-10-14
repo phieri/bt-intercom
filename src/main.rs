@@ -26,6 +26,7 @@ mod session;
 mod terminal_style;
 mod transmit;
 mod transport;
+mod transport_model;
 mod worker;
 
 mod tui;
