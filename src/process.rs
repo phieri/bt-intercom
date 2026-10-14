@@ -140,6 +140,15 @@ pub(crate) fn command_cancellable(
 		.inspect_err(|error| {
 			log::debug!("{name} stopped after {:?}: {error}", started.elapsed())
 		})?;
+	while !output.is_finished() || !error.is_finished() {
+		if started.elapsed() >= timeout {
+			kill_process_group(&mut child);
+			let _ = output.join();
+			let _ = error.join();
+			return Err(format!("{name} timed out while draining command output"));
+		}
+		thread::sleep(CHILD_POLL_INTERVAL);
+	}
 	let stdout = output
 		.join()
 		.map_err(|_| "stdout reader panicked".to_string())?
@@ -251,6 +260,20 @@ mod tests {
 			command(&["sh", "-c", "sleep 2 & wait"], Duration::from_millis(20))
 				.unwrap_err()
 				.contains("timed out")
+		);
+		assert!(start.elapsed() < Duration::from_secs(1));
+	}
+
+	#[test]
+	fn exited_child_cannot_leave_descendants_holding_output_pipes() {
+		let start = Instant::now();
+		assert!(
+			command(
+				&["sh", "-c", "sleep 30 & exit 0"],
+				Duration::from_millis(100)
+			)
+			.unwrap_err()
+			.contains("timed out while draining command output")
 		);
 		assert!(start.elapsed() < Duration::from_secs(1));
 	}

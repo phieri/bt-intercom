@@ -20,8 +20,8 @@ pub(crate) fn parse_interval(value: &str) -> Result<f64, String> {
 	if !interval.is_finite() || interval <= 0.0 || interval >= u64::MAX as f64 {
 		return Err("--interval must be a positive finite number".into());
 	}
-	if Duration::from_secs_f64(interval).is_zero() {
-		return Err("--interval must be at least one nanosecond".into());
+	if interval < 1.0 {
+		return Err("--interval must be at least 1 second".into());
 	}
 	Ok(interval)
 }
@@ -369,7 +369,8 @@ mod tests {
 	}
 
 	#[test]
-	fn rejects_intervals_that_round_to_zero() {
-		assert!(parse_interval("0.00000000001").is_err());
+	fn routing_interval_must_be_at_least_one_second() {
+		assert!(parse_interval("0.999").is_err());
+		assert_eq!(parse_interval("1").unwrap(), 1.0);
 	}
 }

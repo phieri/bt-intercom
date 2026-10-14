@@ -196,8 +196,9 @@ If `XDG_CONFIG_HOME` is unset or not an absolute path, they are saved under
 `~/.config/bt-intercom/headsets`. Later, run `bt-intercom run --connect` to
 restore them. `--connect` retries disconnected headsets every 30 seconds; omit
 it if another Bluetooth manager keeps them connected. Routing is polled every
-two seconds by default; change that with `--interval SECONDS`. Ctrl-C or SIGTERM
-closes links created by this process. Existing PipeWire links are not modified.
+two seconds by default; change that with `--interval SECONDS` (minimum: 1 second).
+Ctrl-C or SIGTERM closes links created by this process. Existing PipeWire links
+are not modified.
 Shutdown also cancels and joins background workers, including idle headset
 button readers. `--sco-limit N` sets the maximum SCO/eSCO capacity budget per
 controller (default: 1). In `sco-a2dp` transport, it limits simultaneous talkers

@@ -73,7 +73,7 @@ pub(crate) enum CliCommand {
 	Run {
 		#[arg(value_parser = parse_address)]
 		addresses: Vec<Address>,
-		/// Routing update interval in seconds.
+		/// Routing update interval in seconds (minimum: 1).
 		#[arg(long, default_value_t = 2.0, value_parser = parse_interval)]
 		interval: f64,
 		/// Reconnect disconnected headsets every 30 seconds.
