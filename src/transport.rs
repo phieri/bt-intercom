@@ -93,6 +93,19 @@ struct PendingProfile {
 	requested_at: Instant,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ProfileChange {
+	address: Address,
+	family: ProfileFamily,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum ProfilePlan {
+	Wait,
+	Change(Vec<ProfileChange>),
+	Ready,
+}
+
 enum TransitionPhase {
 	Idle,
 	Preparing {
@@ -357,55 +370,22 @@ impl Coordinator {
 			return Ok(false);
 		}
 
-		if self.demote_receivers(sources, io, &snapshot, &devices)? {
-			return Ok(false);
-		}
-		self.promote_sources(sources, io, &devices)?;
-		Ok(self.sources_ready(sources, &headsets, &devices))
-	}
-
-	fn demote_receivers<F, C>(
-		&mut self,
-		sources: &BTreeSet<Address>,
-		io: &mut TransitionIo<'_, F, C>,
-		snapshot: &Snapshot,
-		devices: &BTreeMap<Address, Device>,
-	) -> Result<bool, String>
-	where
-		F: FnMut(&[&str]) -> Result<String, String>,
-		C: FnMut(),
-	{
-		let mut demoting = false;
-		for (address, device) in devices {
-			if !sources.contains(address) {
-				if !device.is_profile(ProfileFamily::A2dp) {
-					self.change_profile(address, device, ProfileFamily::A2dp, sources, io)?;
-					demoting = true;
-				} else if snapshot.has_hfp_node(device.id) {
-					demoting = true;
+		match plan_profile_changes(sources, &snapshot, &devices) {
+			ProfilePlan::Wait => Ok(false),
+			ProfilePlan::Ready => Ok(self.sources_ready(sources, &headsets, &devices)),
+			ProfilePlan::Change(changes) => {
+				for change in changes {
+					self.change_profile(
+						&change.address,
+						&devices[&change.address],
+						change.family,
+						sources,
+						io,
+					)?;
 				}
+				Ok(false)
 			}
 		}
-		Ok(demoting)
-	}
-
-	fn promote_sources<F, C>(
-		&mut self,
-		sources: &BTreeSet<Address>,
-		io: &mut TransitionIo<'_, F, C>,
-		devices: &BTreeMap<Address, Device>,
-	) -> Result<(), String>
-	where
-		F: FnMut(&[&str]) -> Result<String, String>,
-		C: FnMut(),
-	{
-		for address in sources {
-			let device = &devices[address];
-			if !device.is_profile(ProfileFamily::Hfp) {
-				self.change_profile(address, device, ProfileFamily::Hfp, sources, io)?;
-			}
-		}
-		Ok(())
 	}
 
 	fn sources_ready(
@@ -510,6 +490,47 @@ impl Coordinator {
 	}
 }
 
+fn plan_profile_changes(
+	sources: &BTreeSet<Address>,
+	snapshot: &Snapshot,
+	devices: &BTreeMap<Address, Device>,
+) -> ProfilePlan {
+	let demotions: Vec<_> = devices
+		.iter()
+		.filter(|(address, device)| {
+			!sources.contains(*address) && !device.is_profile(ProfileFamily::A2dp)
+		})
+		.map(|(address, _)| ProfileChange {
+			address: address.clone(),
+			family: ProfileFamily::A2dp,
+		})
+		.collect();
+	if !demotions.is_empty() {
+		return ProfilePlan::Change(demotions);
+	}
+	if devices
+		.iter()
+		.any(|(address, device)| !sources.contains(address) && snapshot.has_hfp_node(device.id))
+	{
+		return ProfilePlan::Wait;
+	}
+	let promotions: Vec<_> = sources
+		.iter()
+		.filter_map(|address| {
+			let device = &devices[address];
+			(!device.is_profile(ProfileFamily::Hfp)).then(|| ProfileChange {
+				address: address.clone(),
+				family: ProfileFamily::Hfp,
+			})
+		})
+		.collect();
+	if promotions.is_empty() {
+		ProfilePlan::Ready
+	} else {
+		ProfilePlan::Change(promotions)
+	}
+}
+
 fn validate_source_capacity(
 	sources: &BTreeSet<Address>,
 	devices: &BTreeMap<Address, Device>,
@@ -582,6 +603,53 @@ mod tests {
 		.unwrap()
 	}
 
+	fn snapshot_with_profiles(
+		profiles: &[(&str, u64, bool)],
+	) -> (Snapshot, BTreeMap<Address, Device>) {
+		let mut objects = Vec::new();
+		let mut allowed = BTreeSet::new();
+		for (index, (raw_address, current, hfp_node)) in profiles.iter().enumerate() {
+			let address = address(raw_address);
+			let id = (index as u64 + 1) * 10;
+			allowed.insert(address.clone());
+			objects.push(json!({
+				"id": id,
+				"type": "PipeWire:Interface:Device",
+				"info": {
+					"props": {
+						"api.bluez5.address": address.as_str(),
+						"api.bluez5.path": format!(
+							"/org/bluez/hci0/dev_{}",
+							address.as_str().replace(':', "_")
+						),
+						"object.serial": id + 1000
+					},
+					"params": {
+						"EnumProfile": [
+							{"index": 17, "name": "headset-head-unit", "available": "yes"},
+							{"index": 41, "name": "a2dp-sink-sbc", "available": "yes"}
+						],
+						"Profile": [{"index": current}]
+					}
+				}
+			}));
+			if *hfp_node {
+				objects.push(json!({
+					"id": id + 1,
+					"type": "PipeWire:Interface:Node",
+					"info": {"props": {
+						"device.id": id,
+						"media.class": "Audio/Sink",
+						"api.bluez5.profile": "headset-head-unit"
+					}}
+				}));
+			}
+		}
+		let snapshot = Snapshot::parse(&json!(objects)).unwrap();
+		let devices = snapshot.transport_devices(&allowed).unwrap();
+		(snapshot, devices)
+	}
+
 	#[test]
 	fn source_capacity_obeys_per_controller_limit() {
 		let addresses = [
@@ -609,5 +677,43 @@ mod tests {
 		);
 		assert!(validate_source_capacity(&two, &devices, 2).is_ok());
 		assert!(validate_source_capacity(&three, &devices, 2).is_err());
+	}
+
+	#[test]
+	fn profile_planning_demotes_receivers_before_promoting_sources() {
+		let source = address("AA:BB:CC:DD:EE:01");
+		let receiver = address("AA:BB:CC:DD:EE:02");
+		let (snapshot, devices) =
+			snapshot_with_profiles(&[(source.as_str(), 41, false), (receiver.as_str(), 17, true)]);
+		assert_eq!(
+			plan_profile_changes(&[source.clone()].into(), &snapshot, &devices),
+			ProfilePlan::Change(vec![ProfileChange {
+				address: receiver,
+				family: ProfileFamily::A2dp,
+			}])
+		);
+	}
+
+	#[test]
+	fn profile_planning_waits_for_stale_receiver_nodes_before_promotion() {
+		let source = address("AA:BB:CC:DD:EE:01");
+		let receiver = address("AA:BB:CC:DD:EE:02");
+		let sources = [source.clone()].into();
+		let (snapshot, devices) =
+			snapshot_with_profiles(&[(source.as_str(), 41, false), (receiver.as_str(), 41, true)]);
+		assert_eq!(
+			plan_profile_changes(&sources, &snapshot, &devices),
+			ProfilePlan::Wait
+		);
+
+		let (snapshot, devices) =
+			snapshot_with_profiles(&[(source.as_str(), 41, false), (receiver.as_str(), 41, false)]);
+		assert_eq!(
+			plan_profile_changes(&sources, &snapshot, &devices),
+			ProfilePlan::Change(vec![ProfileChange {
+				address: source,
+				family: ProfileFamily::Hfp,
+			}])
+		);
 	}
 }
