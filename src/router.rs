@@ -350,8 +350,10 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 		&mut self,
 	) -> Result<(BTreeMap<Address, Headset>, BTreeSet<Link>), String> {
 		let snapshot = self.snapshot()?;
-		let (headsets, _) = snapshot.topology(&self.allowed, self.coordinator.transport);
-		Ok((headsets, snapshot.owned_links(&self.owned.owner)))
+		Ok((
+			snapshot.headsets(&self.allowed, self.coordinator.transport),
+			snapshot.owned_links(&self.owned.owner),
+		))
 	}
 
 	fn snapshot(&mut self) -> Result<Snapshot, String> {

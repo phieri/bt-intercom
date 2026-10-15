@@ -416,19 +416,28 @@ fn event_loop(
 	app: &mut ControlPanel,
 	status_rx: &Receiver<StatusUpdate>,
 ) -> Result<(), String> {
+	let mut redraw = true;
+	let mut last_render = Instant::now();
 	loop {
 		while let Ok(update) = status_rx.try_recv() {
 			app.apply_status_update(update);
+			redraw = true;
 		}
-		terminal
-			.draw(|frame| app.render(frame))
-			.map_err(|error| error.to_string())?;
+		if redraw || last_render.elapsed() >= Duration::from_secs(1) {
+			terminal
+				.draw(|frame| app.render(frame))
+				.map_err(|error| error.to_string())?;
+			redraw = false;
+			last_render = Instant::now();
+		}
 		if event::poll(Duration::from_millis(100)).map_err(|error| error.to_string())?
 			&& let Event::Key(key) = event::read().map_err(|error| error.to_string())?
 			&& key.kind == KeyEventKind::Press
-			&& app.handle_key(key.code)
 		{
-			return Ok(());
+			if app.handle_key(key.code) {
+				return Ok(());
+			}
+			redraw = true;
 		}
 	}
 }

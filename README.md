@@ -195,8 +195,10 @@ Addresses are saved in `${XDG_CONFIG_HOME:-~/.config}/bt-intercom/headsets`.
 If `XDG_CONFIG_HOME` is unset or not an absolute path, they are saved under
 `~/.config/bt-intercom/headsets`. Later, run `bt-intercom run --connect` to
 restore them. `--connect` retries disconnected headsets every 30 seconds; omit
-it if another Bluetooth manager keeps them connected. Routing is polled every
-two seconds by default; change that with `--interval SECONDS` (minimum: 1 second).
+it if another Bluetooth manager keeps them connected. Reconnection checks and
+attempts run for up to two headsets concurrently, so a slow connection does not
+block every other headset. Routing is polled every two seconds by default;
+change that with `--interval SECONDS` (minimum: 1 second).
 Ctrl-C or SIGTERM closes links created by this process. Existing PipeWire links
 are not modified.
 Shutdown also cancels and joins background workers, including idle headset
