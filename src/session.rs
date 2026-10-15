@@ -30,6 +30,9 @@ use crate::worker::Worker;
 mod routing;
 use routing::RoutingCoordinator;
 
+const ROUTE_CHANGE_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+const MAX_CONCURRENT_RECONNECTS: usize = 2;
+
 #[cfg(test)]
 type Execute = Box<dyn FnMut(&[&str]) -> Result<String, String>>;
 #[cfg(test)]
@@ -57,21 +60,32 @@ pub(crate) fn guard_half_update<T>(
 pub(crate) fn connect_disconnected(
 	allowed: &BTreeSet<Address>,
 	stopped: &AtomicBool,
-	mut execute: impl FnMut(&[&str], Duration) -> Result<String, String>,
+	execute: impl Fn(&[&str], Duration) -> Result<String, String> + Sync,
 ) {
-	for device in allowed {
+	let devices: Vec<_> = allowed.iter().collect();
+	for batch in devices.chunks(MAX_CONCURRENT_RECONNECTS) {
+		thread::scope(|scope| {
+			for device in batch {
+				let execute = &execute;
+				scope.spawn(move || {
+					if stopped.load(Ordering::SeqCst) {
+						return;
+					}
+					let connected = execute(&["bluetoothctl", "info", device], COMMAND_TIMEOUT)
+						.is_ok_and(|info| bluez::device_flag(&info, "Connected"));
+					if !connected
+						&& !stopped.load(Ordering::SeqCst)
+						&& let Err(error) = execute(
+							&["bluetoothctl", "--timeout", "30", "connect", device],
+							Duration::from_secs(35),
+						) {
+						log::warn!("Could not connect {device}: {error}");
+					}
+				});
+			}
+		});
 		if stopped.load(Ordering::SeqCst) {
 			break;
-		}
-		let connected = execute(&["bluetoothctl", "info", device], COMMAND_TIMEOUT)
-			.is_ok_and(|info| bluez::device_flag(&info, "Connected"));
-		if !connected
-			&& !stopped.load(Ordering::SeqCst)
-			&& let Err(error) = execute(
-				&["bluetoothctl", "--timeout", "30", "connect", device],
-				Duration::from_secs(35),
-			) {
-			log::warn!("Could not connect {device}: {error}");
 		}
 	}
 }
@@ -82,11 +96,11 @@ pub(crate) fn reconnect_worker(
 	stopped: Arc<AtomicBool>,
 	shutdown: Receiver<()>,
 	retry: Duration,
-	mut execute: impl FnMut(&[&str], Duration) -> Result<String, String>,
+	execute: impl Fn(&[&str], Duration) -> Result<String, String> + Sync,
 ) {
 	loop {
 		let devices = allowed.lock().unwrap().clone();
-		connect_disconnected(&devices, &stopped, &mut execute);
+		connect_disconnected(&devices, &stopped, &execute);
 		if stopped.load(Ordering::SeqCst) {
 			break;
 		}
@@ -112,6 +126,7 @@ pub(crate) struct Session {
 	beep: Option<PttBeep>,
 	last_error: Option<String>,
 	last_update: Option<Instant>,
+	update_interval: Duration,
 	redraw: bool,
 }
 
@@ -123,6 +138,7 @@ impl Session {
 	}
 
 	fn new(config: RunConfig, stopped: Arc<AtomicBool>) -> Self {
+		let update_interval = config.interval;
 		let routing = RoutingCoordinator::new(&config, &stopped);
 		let mut transmit = Transmit::new(
 			config.mode,
@@ -147,6 +163,7 @@ impl Session {
 			beep: None,
 			last_error: None,
 			last_update: None,
+			update_interval,
 			redraw: true,
 		}
 	}
@@ -266,7 +283,7 @@ impl Session {
 		self.poll_events()?;
 		if self
 			.last_update
-			.is_none_or(|updated| updated.elapsed() >= self.config.interval)
+			.is_none_or(|updated| updated.elapsed() >= self.update_interval)
 		{
 			self.update_routes()?;
 		}
@@ -314,11 +331,17 @@ impl Session {
 			&self.stopped,
 		)?;
 		if outcome.invalidated {
-			self.last_update = None;
+			self.last_update = Some(Instant::now());
+			self.update_interval = ROUTE_CHANGE_RETRY_INTERVAL;
 			return Ok(());
 		}
 		self.report_update(outcome.update, outcome.config_error, outcome.inspect_error);
-		self.last_update = (!outcome.changed).then(Instant::now);
+		self.last_update = Some(Instant::now());
+		self.update_interval = if outcome.changed {
+			ROUTE_CHANGE_RETRY_INTERVAL
+		} else {
+			self.config.interval
+		};
 		Ok(())
 	}
 
@@ -506,7 +529,19 @@ mod tests {
 		assert!(session.transmit.sources().is_empty());
 		assert!(session.transmit.pending.is_empty());
 		assert!(session.routing.links.is_empty());
-		assert!(session.last_update.is_none());
+		assert!(session.last_update.is_some());
+		assert_eq!(session.update_interval, ROUTE_CHANGE_RETRY_INTERVAL);
+	}
+
+	#[test]
+	fn changed_routes_wait_for_the_retry_interval_before_another_snapshot() {
+		let mut session = Session::new(config(), Arc::new(AtomicBool::new(false)));
+		session.last_update = Some(Instant::now());
+		session.update_interval = ROUTE_CHANGE_RETRY_INTERVAL;
+		let execute: Execute = Box::new(|_| panic!("route retry should be throttled"));
+		session.routing.router = Router::with_executor(session.config.allowed.clone(), execute);
+
+		session.tick().unwrap();
 	}
 
 	#[test]

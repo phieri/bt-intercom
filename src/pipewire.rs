@@ -226,6 +226,14 @@ impl Snapshot {
 		allowed: &BTreeSet<Address>,
 		transport: Transport,
 	) -> (BTreeMap<Address, Headset>, BTreeSet<Link>) {
+		(self.headsets(allowed, transport), self.links.clone())
+	}
+
+	pub(crate) fn headsets(
+		&self,
+		allowed: &BTreeSet<Address>,
+		transport: Transport,
+	) -> BTreeMap<Address, Headset> {
 		let mut headsets: BTreeMap<_, _> = self
 			.devices
 			.values()
@@ -263,7 +271,7 @@ impl Snapshot {
 				channel: port.channel.clone(),
 			});
 		}
-		(headsets, self.links.clone())
+		headsets
 	}
 
 	pub(crate) fn owned_links(&self, owner: &str) -> BTreeSet<Link> {

@@ -508,9 +508,9 @@ mod tests {
 			(Ok("Connected: no\n"), true),
 			(Err("bluetoothctl info failed"), true),
 		] {
-			let mut calls = Vec::new();
+			let calls = Mutex::new(Vec::new());
 			connect_disconnected(&allowed, &AtomicBool::new(false), |args, timeout| {
-				calls.push((
+				calls.lock().unwrap().push((
 					args.iter().map(|arg| arg.to_string()).collect::<Vec<_>>(),
 					timeout,
 				));
@@ -540,7 +540,7 @@ mod tests {
 					Duration::from_secs(35),
 				));
 			}
-			assert_eq!(calls, expected);
+			assert_eq!(*calls.lock().unwrap(), expected);
 		}
 	}
 
@@ -830,15 +830,47 @@ mod tests {
 	#[test]
 	fn connection_cancellation_skips_remaining_devices() {
 		let stopped = AtomicBool::new(false);
-		let allowed = ["AA:BB:CC:DD:EE:01".into(), "AA:BB:CC:DD:EE:02".into()].into();
-		let mut calls = 0;
+		let allowed = [
+			"AA:BB:CC:DD:EE:01".into(),
+			"AA:BB:CC:DD:EE:02".into(),
+			"AA:BB:CC:DD:EE:03".into(),
+			"AA:BB:CC:DD:EE:04".into(),
+		]
+		.into();
+		let calls = Mutex::new(0);
 		connect_disconnected(&allowed, &stopped, |args, _| {
 			assert_eq!(args[1], "info");
-			calls += 1;
+			*calls.lock().unwrap() += 1;
 			stopped.store(true, Ordering::SeqCst);
 			Err("cancelled".into())
 		});
-		assert_eq!(calls, 1);
+		assert!(calls.lock().unwrap().le(&2));
+	}
+
+	#[test]
+	fn reconnect_checks_run_with_bounded_concurrency() {
+		use std::sync::atomic::AtomicUsize;
+
+		let allowed = [
+			"AA:BB:CC:DD:EE:01".into(),
+			"AA:BB:CC:DD:EE:02".into(),
+			"AA:BB:CC:DD:EE:03".into(),
+		]
+		.into();
+		let active = AtomicUsize::new(0);
+		let maximum = AtomicUsize::new(0);
+		connect_disconnected(&allowed, &AtomicBool::new(false), |args, _| {
+			if args[1] == "info" {
+				return Ok("Connected: no\n".into());
+			}
+			assert!(args.contains(&"connect"));
+			let current = active.fetch_add(1, Ordering::SeqCst) + 1;
+			maximum.fetch_max(current, Ordering::SeqCst);
+			thread::sleep(Duration::from_millis(20));
+			active.fetch_sub(1, Ordering::SeqCst);
+			Ok(String::new())
+		});
+		assert_eq!(maximum.load(Ordering::SeqCst), 2);
 	}
 
 	#[test]
@@ -870,8 +902,9 @@ mod tests {
 		let stopped = Arc::new(AtomicBool::new(false));
 		let cancelled = Arc::clone(&stopped);
 		let (_shutdown, receiver) = mpsc::channel();
-		let mut calls = Vec::new();
+		let calls = Mutex::new(Vec::new());
 		reconnect_worker(devices, stopped, receiver, Duration::ZERO, |args, _| {
+			let mut calls = calls.lock().unwrap();
 			calls.push(args[2].to_string());
 			if calls.len() == 1 {
 				updated.lock().unwrap().insert("AA:BB:CC:DD:EE:02".into());
@@ -880,13 +913,8 @@ mod tests {
 			}
 			Ok("Connected: yes\n".into())
 		});
-		assert_eq!(
-			calls,
-			[
-				"AA:BB:CC:DD:EE:01",
-				"AA:BB:CC:DD:EE:01",
-				"AA:BB:CC:DD:EE:02"
-			]
-		);
+		let calls = calls.lock().unwrap();
+		assert_eq!(calls[0], "AA:BB:CC:DD:EE:01");
+		assert!(calls.contains(&"AA:BB:CC:DD:EE:02".to_string()));
 	}
 }
