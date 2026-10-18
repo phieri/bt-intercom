@@ -237,6 +237,11 @@ mod tests {
 		let (headsets, _) = crate::router::topology(&objects, &allowed).unwrap();
 		let links = BTreeSet::from([(3, 6), (3, 99), (99, 6)]);
 		let routes = RoutingStatus::new(&headsets, &links);
+		let mut transmit = Transmit::new(Mode::HalfDuplex, allowed.iter().cloned());
+		let now = std::time::Instant::now();
+		for address in &allowed {
+			transmit.event(address, true, now);
+		}
 		let source = Address::from("AA:BB:CC:DD:EE:01");
 		assert!(routes.has_active_source_route(&source));
 		assert!(!routes.has_active_intercom_connection(&source));
@@ -253,7 +258,7 @@ mod tests {
 				&allowed,
 				&headsets,
 				&links,
-				&Transmit::new(Mode::HalfDuplex, []),
+				&transmit,
 				RunStatus {
 					mode: Mode::HalfDuplex,
 				},
@@ -270,6 +275,14 @@ mod tests {
 		assert!(
 			text.lines()
 				.any(|line| line.contains("EE:02") && line.contains("0/1"))
+		);
+		assert!(
+			text.lines()
+				.any(|line| line.contains("EE:01") && line.contains("has floor"))
+		);
+		assert!(
+			text.lines()
+				.any(|line| line.contains("EE:02") && line.contains("queued #2"))
 		);
 	}
 
@@ -386,6 +399,6 @@ mod tests {
 			)
 			.unwrap();
 		let text = String::from_utf8(output).unwrap();
-		assert!(text.contains("Alex's headset AA:BB:CC:DD:EE:01"));
+		assert!(text.contains("Alex's headset   AA:BB:CC:DD:EE:01"));
 	}
 }
