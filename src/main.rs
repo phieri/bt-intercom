@@ -148,14 +148,12 @@ fn run(action: CliCommand) -> Result<(), String> {
 			let (headsets, _) = router.inspect()?;
 			let transport_devices = router.transport_devices()?;
 			for address in &router.allowed {
-				let name = command(&["bluetoothctl", "info", address], COMMAND_TIMEOUT)
-					.ok()
-					.and_then(|info| bluetooth_name(&info));
-				let identity =
-					name.map_or_else(|| address.to_string(), |name| format!("{name} ({address})"));
+				let info = command(&["bluetoothctl", "info", address], COMMAND_TIMEOUT);
+				let (identity, bluetooth) = bluetooth_summary(address, &info);
+				println!("{identity}: Bluetooth {bluetooth}");
 				match headsets.get(address) {
 					Some(headset) => println!(
-						"{identity}: {} ({} microphone ports, {} speaker ports)",
+						"  PipeWire: {} ({} microphone ports, {} speaker ports)",
 						if headset.has_duplex_audio() {
 							"duplex ready"
 						} else {
@@ -164,7 +162,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 						headset.sources.len(),
 						headset.sinks.len()
 					),
-					None => println!("{identity}: not found in PipeWire"),
+					None => println!("  PipeWire: headset not found"),
 				}
 				if let Some(device) = transport_devices.get(address) {
 					println!(
@@ -207,6 +205,28 @@ fn run(action: CliCommand) -> Result<(), String> {
 		CliCommand::Completions { .. } => unreachable!("completions are handled before run"),
 	}
 	Ok(())
+}
+
+fn bluetooth_summary(address: &Address, info: &Result<String, String>) -> (String, String) {
+	match info {
+		Ok(info) => {
+			let identity = bluetooth_name(info)
+				.map_or_else(|| address.to_string(), |name| format!("{name} ({address})"));
+			let connected = match bluez::property(info, "Connected") {
+				Some("yes") => "connected",
+				Some("no") => "disconnected",
+				_ => "unknown (BlueZ did not report connection state)",
+			};
+			(identity, connected.to_string())
+		}
+		Err(error) => {
+			let error = error
+				.chars()
+				.filter(|character| !character.is_control())
+				.collect::<String>();
+			(address.to_string(), format!("status query failed: {error}"))
+		}
+	}
 }
 
 /// Reports command-line errors and exits unsuccessfully.
@@ -252,6 +272,37 @@ mod tests {
 
 	fn address(value: &str) -> Address {
 		Address::parse(value).unwrap()
+	}
+
+	#[test]
+	fn status_summary_distinguishes_connection_state_from_query_failure() {
+		let address = address("AA:BB:CC:DD:EE:01");
+		assert_eq!(
+			bluetooth_summary(
+				&address,
+				&Ok("Alias: Dispatch headset\nConnected: yes\n".into())
+			),
+			(
+				"Dispatch headset (AA:BB:CC:DD:EE:01)".into(),
+				"connected".into()
+			)
+		);
+		assert_eq!(
+			bluetooth_summary(
+				&address,
+				&Ok("Alias: Dispatch headset\nConnected: no\n".into())
+			)
+			.1,
+			"disconnected"
+		);
+		assert_eq!(
+			bluetooth_summary(&address, &Ok("Alias: Dispatch headset\n".into())).1,
+			"unknown (BlueZ did not report connection state)"
+		);
+		assert_eq!(
+			bluetooth_summary(&address, &Err("bluetoothctl unavailable\n".into())).1,
+			"status query failed: bluetoothctl unavailable"
+		);
 	}
 
 	#[test]

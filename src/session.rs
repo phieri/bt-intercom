@@ -397,7 +397,7 @@ impl Session {
 					&self.routing.links,
 					RunStatus {
 						mode: self.config.mode,
-						transmitting: self.input.is_none() || !self.transmit.sources().is_empty(),
+						transmit: &self.transmit,
 					},
 					self.last_error.as_deref(),
 					&mut output,
