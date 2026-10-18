@@ -13,7 +13,7 @@ use crate::bluez::Address;
 use crate::device_status::{HeadsetStatus, StatusPresentation, StatusUpdate, start_polling};
 use crate::router::Headset;
 use crate::routing_status::RoutingStatus;
-use crate::transmit::Mode;
+use crate::transmit::{Mode, Transmit};
 use crate::worker::Worker;
 
 /// Collects Bluetooth status updates and draws the current routing state.
@@ -28,7 +28,6 @@ pub struct Dashboard {
 
 pub struct RunStatus {
 	pub mode: Mode,
-	pub transmitting: bool,
 }
 
 impl Dashboard {
@@ -60,6 +59,7 @@ impl Dashboard {
 		allowed: &BTreeSet<Address>,
 		headsets: &BTreeMap<Address, Headset>,
 		links: &BTreeSet<(u64, u64)>,
+		transmit: &Transmit,
 		status: RunStatus,
 		error: Option<&str>,
 		output: &mut impl Write,
@@ -67,44 +67,38 @@ impl Dashboard {
 		let routes = RoutingStatus::new(headsets, links);
 		writeln!(
 			output,
-			"bt-intercom | {} | {} | {} owned active links",
+			"bt-intercom | {} | {} owned active links",
 			match status.mode {
 				Mode::HalfDuplex => "half-duplex",
 				Mode::FullDuplex => "full-duplex",
 			},
-			if status.transmitting {
-				"transmitting"
-			} else {
-				"muted"
-			},
 			routes.total_links()
 		)?;
-		writeln!(
-			output,
-			"HEADSET NAME       ADDRESS             CONNECTED  DUPLEX  TX/RX LINKS  SIGNAL"
-		)?;
+		writeln!(output, "HEADSET NAME      ADDRESS             CONNECTED  DUPLEX  TX/RX  TX / FLOOR       SIGNAL")?;
 		for address in allowed {
 			let bluetooth = self.state.get(address);
 			let headset = headsets.get(address);
 			let presentation =
 				StatusPresentation::new(bluetooth, headset.map(Headset::has_duplex_audio));
 			let (tx, rx) = routes.counts(address);
+			let transmit_state = transmit.dashboard_state(address);
 			let signal = presentation.dashboard_signal();
 			writeln!(
 				output,
-				"{:<18} {address}  {:<9}  {:<6}  {tx:>2}/{rx:<2}         {signal}",
+				"{:<16} {address}  {:<9}  {:<6}  {tx:>2}/{rx:<2}  {:<15} {signal}",
 				presentation
 					.name_or("—")
 					.chars()
-					.take(18)
+					.take(16)
 					.collect::<String>(),
 				presentation.connection.dashboard_label(),
-				presentation.dashboard_duplex_label()
+				presentation.dashboard_duplex_label(),
+				transmit_state
 			)?;
 		}
 		writeln!(
 			output,
-			"\nLinks represent routing, not measured speech; RSSI is shown only if BlueZ reports it."
+			"\nTX / FLOOR is per headset; links represent routing, not measured speech. RSSI is shown only if BlueZ reports it."
 		)?;
 		if let Some(error) = error {
 			writeln!(
@@ -163,9 +157,9 @@ mod tests {
 				&BTreeSet::new(),
 				&BTreeMap::new(),
 				&BTreeSet::new(),
+				&Transmit::new(Mode::FullDuplex, []),
 				RunStatus {
 					mode: Mode::FullDuplex,
-					transmitting: false,
 				},
 				None,
 				&mut output,
@@ -210,9 +204,9 @@ mod tests {
 				&allowed,
 				&headsets,
 				&BTreeSet::from([(3, 4)]),
+				&Transmit::new(Mode::HalfDuplex, []),
 				RunStatus {
 					mode: Mode::HalfDuplex,
-					transmitting: false,
 				},
 				None,
 				&mut output,
@@ -220,8 +214,8 @@ mod tests {
 			.unwrap();
 		let text = String::from_utf8(output).unwrap();
 		assert!(!text.contains('\u{1b}'));
-		assert!(text.contains("half-duplex | muted | 0 owned active links"));
-		assert!(text.contains("HEADSET NAME       ADDRESS             CONNECTED"));
+		assert!(text.contains("half-duplex | 0 owned active links"));
+		assert!(text.contains("HEADSET NAME      ADDRESS             CONNECTED"));
 		assert!(!text.contains("PAIRED"));
 		assert!(text.contains("AA:BB:CC:DD:EE:01  ?"));
 		assert!(text.contains("no"));
@@ -259,9 +253,9 @@ mod tests {
 				&allowed,
 				&headsets,
 				&links,
+				&Transmit::new(Mode::HalfDuplex, []),
 				RunStatus {
 					mode: Mode::HalfDuplex,
-					transmitting: true,
 				},
 				None,
 				&mut output,
@@ -309,7 +303,7 @@ mod tests {
 					HeadsetStatus {
 						name: None,
 						connected: Some(true),
-						duplex: false,
+						duplex: Some(false),
 						rssi: Some(*rssi),
 					},
 				)
@@ -319,7 +313,7 @@ mod tests {
 				HeadsetStatus {
 					name: None,
 					connected: Some(false),
-					duplex: false,
+					duplex: Some(false),
 					rssi: Some(-40),
 				},
 			)])
@@ -338,9 +332,9 @@ mod tests {
 				&allowed,
 				&BTreeMap::new(),
 				&BTreeSet::new(),
+				&Transmit::new(Mode::FullDuplex, []),
 				RunStatus {
 					mode: Mode::FullDuplex,
-					transmitting: false,
 				},
 				None,
 				&mut output,
@@ -370,7 +364,7 @@ mod tests {
 				HeadsetStatus {
 					name: Some("Alex's headset".into()),
 					connected: Some(true),
-					duplex: false,
+					duplex: Some(false),
 					rssi: None,
 				},
 			)]),
@@ -383,15 +377,15 @@ mod tests {
 				&allowed,
 				&BTreeMap::new(),
 				&BTreeSet::new(),
+				&Transmit::new(Mode::FullDuplex, []),
 				RunStatus {
 					mode: Mode::FullDuplex,
-					transmitting: false,
 				},
 				None,
 				&mut output,
 			)
 			.unwrap();
 		let text = String::from_utf8(output).unwrap();
-		assert!(text.contains("Alex's headset     AA:BB:CC:DD:EE:01"));
+		assert!(text.contains("Alex's headset AA:BB:CC:DD:EE:01"));
 	}
 }

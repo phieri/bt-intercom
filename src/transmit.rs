@@ -210,6 +210,31 @@ impl Transmit {
 	pub fn group_sources(&self) -> &BTreeMap<Option<String>, BTreeSet<Address>> {
 		&self.group_sources
 	}
+
+	pub(crate) fn dashboard_state(&self, address: &Address) -> String {
+		if self.mode == Mode::FullDuplex {
+			return match self.buttons.get(address) {
+				None => "always open".into(),
+				Some(button) if button.open => "always open".into(),
+				Some(button) if button.requested => "PTT held".into(),
+				Some(_) => "muted".into(),
+			};
+		}
+		if !self.groups.is_empty() && self.memberships(address).is_empty() {
+			return "unassigned".into();
+		}
+		let queue_position = self
+			.request_order
+			.iter()
+			.position(|queued| queued == address)
+			.map(|position| position + 1);
+		match (self.active.contains(address), queue_position) {
+			(true, Some(position)) => format!("floor + wait #{position}"),
+			(true, None) => "has floor".into(),
+			(false, Some(position)) => format!("queued #{position}"),
+			(false, None) => "idle".into(),
+		}
+	}
 }
 
 #[cfg(test)]
@@ -262,6 +287,23 @@ mod tests {
 		release(&mut t, "c", now, 50);
 		assert!(t.sources().is_empty());
 		assert!(t.pending.is_empty());
+	}
+
+	#[test]
+	fn dashboard_state_shows_per_headset_ptt_floor_and_queue() {
+		let (mut full, now) = setup(Mode::FullDuplex);
+		assert_eq!(full.dashboard_state(&address("a")), "muted");
+		press(&mut full, "a", now, 0);
+		assert_eq!(full.dashboard_state(&address("a")), "PTT held");
+		assert_eq!(full.dashboard_state(&address("b")), "muted");
+
+		let (mut half, now) = setup(Mode::HalfDuplex);
+		press(&mut half, "b", now, 0);
+		press(&mut half, "a", now, 10);
+		assert_eq!(half.dashboard_state(&address("b")), "has floor");
+		assert_eq!(half.dashboard_state(&address("a")), "queued #2");
+		release(&mut half, "b", now, 20);
+		assert_eq!(half.dashboard_state(&address("a")), "has floor");
 	}
 
 	#[test]

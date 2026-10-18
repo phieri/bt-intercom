@@ -39,6 +39,7 @@ struct ControlPanel {
 	selected_headset: usize,
 	focus: Focus,
 	new_group_name: Option<String>,
+	confirm_last_group_removal: bool,
 	status_error: Option<String>,
 	last_updated: Option<Instant>,
 	palette: Palette,
@@ -56,6 +57,7 @@ impl ControlPanel {
 			selected_headset: 0,
 			focus: Focus::Groups,
 			new_group_name: None,
+			confirm_last_group_removal: false,
 			status_error: None,
 			last_updated: None,
 			palette: Palette::detect(std::io::stdout().is_terminal()),
@@ -64,7 +66,6 @@ impl ControlPanel {
 
 	fn apply_status_update(&mut self, update: StatusUpdate) {
 		self.status = update.statuses;
-		self.group_editor.error = None;
 		self.status_error = update.error;
 		self.last_updated = Some(Instant::now());
 	}
@@ -83,17 +84,23 @@ impl ControlPanel {
 	}
 
 	fn remove_selected_group(&mut self) {
-		if let Some(index) = self
-			.selected_group
-			.filter(|index| *index < self.group_editor.groups.len())
-			.filter(|index| self.group_editor.remove(*index))
-		{
-			self.selected_group = if self.group_editor.groups.is_empty() {
-				None
-			} else {
-				Some(index.min(self.group_editor.groups.len() - 1))
-			};
+		if self.group_editor.groups.len() == 1 && self.selected_group == Some(0) {
+			self.confirm_last_group_removal = true;
+			return;
 		}
+		if let Some(index) = self.selected_group.filter(|index| {
+			*index < self.group_editor.groups.len() && self.group_editor.remove(*index)
+		}) {
+			self.finish_group_removal(index);
+		}
+	}
+
+	fn finish_group_removal(&mut self, index: usize) {
+		self.selected_group = if self.group_editor.groups.is_empty() {
+			None
+		} else {
+			Some(index.min(self.group_editor.groups.len() - 1))
+		};
 	}
 
 	fn toggle_selected_member(&mut self) {
@@ -133,6 +140,22 @@ impl ControlPanel {
 	}
 
 	fn handle_key(&mut self, code: KeyCode) -> bool {
+		self.group_editor.error = None;
+		if self.confirm_last_group_removal {
+			match code {
+				KeyCode::Char('y' | 'Y') | KeyCode::Enter => {
+					self.confirm_last_group_removal = false;
+					if self.group_editor.remove(0) {
+						self.finish_group_removal(0);
+					}
+				}
+				KeyCode::Char('n' | 'N') | KeyCode::Esc => {
+					self.confirm_last_group_removal = false;
+				}
+				_ => {}
+			}
+			return false;
+		}
 		if let Some(name) = self.new_group_name.as_mut() {
 			match code {
 				KeyCode::Esc => self.new_group_name = None,
@@ -171,10 +194,7 @@ impl ControlPanel {
 			.iter()
 			.map(|address| {
 				let status = self.status.get(address);
-				let presentation = StatusPresentation::new(
-					status,
-					Some(status.is_some_and(|status| status.duplex)),
-				);
+				let presentation = StatusPresentation::new(status, status.and_then(|s| s.duplex));
 				let connection_meaning = match presentation.connection {
 					ConnectionState::Connected => Meaning::Success,
 					ConnectionState::Disconnected => Meaning::Error,
@@ -222,10 +242,7 @@ impl ControlPanel {
 					.and_then(|index| self.group_editor.groups.get(index))
 					.is_some_and(|group| group.members.contains(address));
 				let status = self.status.get(address);
-				let presentation = StatusPresentation::new(
-					status,
-					Some(status.is_some_and(|status| status.duplex)),
-				);
+				let presentation = StatusPresentation::new(status, status.and_then(|s| s.duplex));
 				let name = presentation.name_or(address.as_str());
 				ListItem::new(Line::from(vec![
 					Span::styled(
@@ -337,7 +354,10 @@ impl ControlPanel {
 		member_state.select((!self.allowed.is_empty()).then_some(self.selected_headset));
 		frame.render_stateful_widget(members_list, lower[1], &mut member_state);
 
-		let hint = self
+		let hint = if self.confirm_last_group_removal {
+			"Removing the last group restores all-to-all routing. Press y/Enter to confirm or n/Esc to cancel"
+		} else {
+			self
 			.group_editor
 			.persistence_error
 			.as_deref()
@@ -353,7 +373,8 @@ impl ControlPanel {
 				} else {
 					"Tab switch pane | ↑/↓ select | n add | d delete | Space toggle member | q quit"
 				}
-			});
+			})
+		};
 		let refreshed = self.last_updated.map_or_else(
 			|| "waiting for status".to_string(),
 			|updated| format!("status updated {}s ago", updated.elapsed().as_secs()),
@@ -474,7 +495,7 @@ mod tests {
 	}
 
 	#[test]
-	fn status_updates_clear_transient_errors_but_keep_save_errors() {
+	fn status_updates_keep_action_errors_until_the_next_key_but_keep_save_errors() {
 		let path = std::env::temp_dir()
 			.join(format!("bt-intercom-tui-errors-{}", std::process::id()))
 			.join("talk-groups.json");
@@ -492,5 +513,35 @@ mod tests {
 			panel.group_editor.persistence_error.as_deref(),
 			Some("save failed")
 		);
+		assert_eq!(
+			panel.group_editor.error.as_deref(),
+			Some("transient action error")
+		);
+		panel.handle_key(KeyCode::Char('x'));
+		assert!(panel.group_editor.error.is_none());
+	}
+
+	#[test]
+	fn deleting_the_final_group_requires_confirmation() {
+		let path = std::env::temp_dir()
+			.join(format!("bt-intercom-tui-confirm-{}", std::process::id()))
+			.join("talk-groups.json");
+		let _ = std::fs::remove_dir_all(path.parent().unwrap());
+		let mut panel = ControlPanel::new(BTreeSet::new(), path.clone()).unwrap();
+		assert!(panel.group_editor.add("Dispatch"));
+
+		panel.handle_key(KeyCode::Char('d'));
+		assert!(panel.confirm_last_group_removal);
+		assert_eq!(panel.group_editor.groups.len(), 1);
+
+		panel.handle_key(KeyCode::Esc);
+		assert!(!panel.confirm_last_group_removal);
+		assert_eq!(panel.group_editor.groups.len(), 1);
+
+		panel.handle_key(KeyCode::Char('d'));
+		panel.handle_key(KeyCode::Char('y'));
+		assert!(panel.group_editor.groups.is_empty());
+		assert!(load(&path).unwrap().is_empty());
+		let _ = std::fs::remove_dir_all(path.parent().unwrap());
 	}
 }

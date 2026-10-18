@@ -20,12 +20,12 @@ use crate::worker::Worker;
 pub(crate) struct HeadsetStatus {
 	pub name: Option<String>,
 	pub connected: Option<bool>,
-	pub duplex: bool,
+	pub duplex: Option<bool>,
 	pub rssi: Option<i32>,
 }
 
 impl HeadsetStatus {
-	fn from_info(info: &str, duplex: bool) -> Self {
+	fn from_info(info: &str, duplex: Option<bool>) -> Self {
 		Self {
 			name: bluetooth_name(info),
 			connected: Some(device_flag(info, "Connected")),
@@ -129,10 +129,10 @@ impl<'a> StatusPresentation<'a> {
 	}
 
 	pub(crate) fn panel_duplex_label(&self) -> &'static str {
-		if self.duplex == Some(true) {
-			"ready"
-		} else {
-			"unavailable"
+		match self.duplex {
+			Some(true) => "ready",
+			Some(false) => "unavailable",
+			None => "unknown",
 		}
 	}
 
@@ -196,24 +196,25 @@ fn poll_status(
 		return None;
 	}
 	let mut errors = Vec::new();
-	let headsets = if include_audio {
+	let (headsets, audio_checked) = if include_audio {
 		let mut router = Router::with_executor(allowed.clone(), &mut execute);
 		match router.inspect() {
-			Ok((headsets, _)) => headsets,
+			Ok((headsets, _)) => (headsets, true),
 			Err(error) => {
 				errors.push(error);
-				BTreeMap::new()
+				(BTreeMap::new(), false)
 			}
 		}
 	} else {
-		BTreeMap::new()
+		(BTreeMap::new(), false)
 	};
 	let mut statuses = BTreeMap::new();
 	for address in allowed {
 		if stopped.load(Ordering::SeqCst) {
 			return None;
 		}
-		let duplex = headsets.get(address).is_some_and(Headset::has_duplex_audio);
+		let duplex = audio_checked
+			.then(|| headsets.get(address).is_some_and(Headset::has_duplex_audio));
 		let status = match execute(&["bluetoothctl", "info", address]) {
 			Ok(info) => HeadsetStatus::from_info(&info, duplex),
 			Err(error) => {
@@ -262,17 +263,17 @@ mod tests {
 		assert_eq!(
 			HeadsetStatus::from_info(
 				"Name: Generic headset\nAlias: Alex's headset\nPaired: yes\nConnected: yes\nRSSI: -67 (0xffffffbd)\n",
-				true
+				Some(true)
 			),
 			HeadsetStatus {
 				name: Some("Alex's headset".into()),
 				connected: Some(true),
-				duplex: true,
+				duplex: Some(true),
 				rssi: Some(-67)
 			}
 		);
 		assert_eq!(
-			HeadsetStatus::from_info("RSSI: unavailable\n", false).rssi,
+			HeadsetStatus::from_info("RSSI: unavailable\n", Some(false)).rssi,
 			None
 		);
 		assert_eq!(
@@ -318,6 +319,10 @@ mod tests {
 			assert_eq!(calls, expected);
 			assert_eq!(update.statuses[first].connected, Some(true));
 			assert_eq!(update.statuses[second].connected, None);
+			assert_eq!(
+				update.statuses[first].duplex,
+				include_audio.then_some(false)
+			);
 			assert!(
 				update
 					.error
@@ -372,7 +377,7 @@ mod tests {
 		)
 		.unwrap();
 		assert_eq!(update.statuses[address].connected, Some(false));
-		assert!(!update.statuses[address].duplex);
+		assert_eq!(update.statuses[address].duplex, None);
 		assert_eq!(update.error.as_deref(), Some("PipeWire unavailable"));
 	}
 
@@ -381,10 +386,10 @@ mod tests {
 		let status = HeadsetStatus {
 			name: Some("Dispatch headset".into()),
 			connected: Some(true),
-			duplex: true,
+			duplex: Some(true),
 			rssi: Some(-67),
 		};
-		let presentation = StatusPresentation::new(Some(&status), Some(status.duplex));
+		let presentation = StatusPresentation::new(Some(&status), status.duplex);
 
 		assert_eq!(presentation.name_or("fallback"), "Dispatch headset");
 		assert_eq!(presentation.connection.dashboard_label(), "yes");
@@ -399,7 +404,7 @@ mod tests {
 		assert_eq!(unknown.connection.dashboard_label(), "?");
 		assert_eq!(unknown.connection.panel_label(), "unknown");
 		assert_eq!(unknown.dashboard_duplex_label(), "?");
-		assert_eq!(unknown.panel_duplex_label(), "unavailable");
+		assert_eq!(unknown.panel_duplex_label(), "unknown");
 		assert_eq!(unknown.rssi_label(), "—");
 		assert_eq!(unknown.dashboard_signal(), "unknown");
 

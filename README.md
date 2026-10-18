@@ -173,14 +173,16 @@ Run `pair` in an interactive shell. At the BlueZ `KeyboardDisplay` prompt, enter
 the printed `pair ADDRESS` command, answer any PIN or confirmation prompts, then
 type `quit`; the program verifies pairing, trusts and connects the device. If a
 headset is incompatible with the agent, pair it through the desktop's Bluetooth
-UI or `bluetoothctl`. Verify PipeWire exposes duplex audio:
+UI or `bluetoothctl`. Check Bluetooth connection and PipeWire duplex availability:
 
 ```sh
 bt-intercom status AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02
 ```
 
-`status` reports each headset's name/address and microphone and speaker ports;
-it does not connect devices or create routes. Pair and trust only devices you
+`status` reports each headset's Bluetooth connection state, name/address, and
+PipeWire microphone and speaker ports. A failed Bluetooth query is reported
+separately from an unknown connection state; the command does not connect devices
+or create routes. Pair and trust only devices you
 have permission to connect; friends or coworkers can pair their headsets with
 the host. BlueZ stores pairing credentials; this program stores only headset
 addresses.
@@ -304,8 +306,9 @@ cancels name entry or quits the panel. Group settings are saved to
 picked up by a running `bt-intercom run` process on its next routing update.
 A headset's microphone is routed only to other headsets sharing at least one
 group with it. Headsets not assigned to a group are not routed when any groups
-exist. With no groups, routing remains all-to-all. The panel is included in the
-standard CLI and cross-compiled packages.
+exist. With no groups, routing remains all-to-all. Removing the final group
+requires confirmation because it restores all-to-all routing. The panel is
+included in the standard CLI and cross-compiled packages.
 
 ### Duplex modes and push-to-talk
 
@@ -482,8 +485,8 @@ retry succeeds.
 ### Dashboard and user service
 
 Add `--dashboard` to `run` for a live terminal view of the selected half- or
-full-duplex mode, Bluetooth status, duplex availability, owned route counts and
-optional RSSI. Because the dashboard runs inside `run`, it reflects that
+full-duplex mode, per-headset PTT/floor and queue state, Bluetooth status, duplex
+availability, owned route counts and optional RSSI. Because the dashboard runs inside `run`, it reflects that
 process's mode directly without inter-process communication. It requires an
 interactive terminal on stderr and is not intended for a service. Route counts
 show observed, channel-compatible links between different configured headsets,
