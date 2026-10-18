@@ -395,9 +395,9 @@ impl Session {
 					&self.routing.router.allowed,
 					&self.routing.headsets,
 					&self.routing.links,
-					&self.transmit,
 					RunStatus {
 						mode: self.config.mode,
+						transmit: &self.transmit,
 					},
 					self.last_error.as_deref(),
 					&mut output,

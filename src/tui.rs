@@ -357,23 +357,22 @@ impl ControlPanel {
 		let hint = if self.confirm_last_group_removal {
 			"Removing the last group restores all-to-all routing. Press y/Enter to confirm or n/Esc to cancel"
 		} else {
-			self
-			.group_editor
-			.persistence_error
-			.as_deref()
-			.or(self.group_editor.error.as_deref())
-			.or(self.status_error.as_deref())
-			.unwrap_or({
-				if let Some(name) = &self.new_group_name {
-					if name.is_empty() {
-						"Type a group name, Enter to save, Esc to cancel"
+			self.group_editor
+				.persistence_error
+				.as_deref()
+				.or(self.group_editor.error.as_deref())
+				.or(self.status_error.as_deref())
+				.unwrap_or({
+					if let Some(name) = &self.new_group_name {
+						if name.is_empty() {
+							"Type a group name, Enter to save, Esc to cancel"
+						} else {
+							"Continue typing, Enter to save, Esc to cancel"
+						}
 					} else {
-						"Continue typing, Enter to save, Esc to cancel"
+						"Tab switch pane | ↑/↓ select | n add | d delete | Space toggle member | q quit"
 					}
-				} else {
-					"Tab switch pane | ↑/↓ select | n add | d delete | Space toggle member | q quit"
-				}
-			})
+				})
 		};
 		let refreshed = self.last_updated.map_or_else(
 			|| "waiting for status".to_string(),
@@ -489,6 +488,8 @@ mod tests {
 
 		panel.handle_key(KeyCode::Tab);
 		panel.handle_key(KeyCode::Char('d'));
+		assert!(panel.confirm_last_group_removal);
+		panel.handle_key(KeyCode::Enter);
 		assert!(panel.group_editor.groups.is_empty());
 		assert!(load(&path).unwrap().is_empty());
 		let _ = std::fs::remove_dir_all(path.parent().unwrap());
@@ -508,14 +509,13 @@ mod tests {
 			error: None,
 		});
 
-		assert!(panel.group_editor.error.is_none());
-		assert_eq!(
-			panel.group_editor.persistence_error.as_deref(),
-			Some("save failed")
-		);
 		assert_eq!(
 			panel.group_editor.error.as_deref(),
 			Some("transient action error")
+		);
+		assert_eq!(
+			panel.group_editor.persistence_error.as_deref(),
+			Some("save failed")
 		);
 		panel.handle_key(KeyCode::Char('x'));
 		assert!(panel.group_editor.error.is_none());
@@ -529,6 +529,8 @@ mod tests {
 		let _ = std::fs::remove_dir_all(path.parent().unwrap());
 		let mut panel = ControlPanel::new(BTreeSet::new(), path.clone()).unwrap();
 		assert!(panel.group_editor.add("Dispatch"));
+		panel.focus = Focus::Groups;
+		panel.selected_group = Some(0);
 
 		panel.handle_key(KeyCode::Char('d'));
 		assert!(panel.confirm_last_group_removal);

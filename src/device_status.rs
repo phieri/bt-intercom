@@ -213,8 +213,8 @@ fn poll_status(
 		if stopped.load(Ordering::SeqCst) {
 			return None;
 		}
-		let duplex = audio_checked
-			.then(|| headsets.get(address).is_some_and(Headset::has_duplex_audio));
+		let duplex =
+			audio_checked.then(|| headsets.get(address).is_some_and(Headset::has_duplex_audio));
 		let status = match execute(&["bluetoothctl", "info", address]) {
 			Ok(info) => HeadsetStatus::from_info(&info, duplex),
 			Err(error) => {

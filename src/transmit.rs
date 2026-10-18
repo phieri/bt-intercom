@@ -223,16 +223,18 @@ impl Transmit {
 		if !self.groups.is_empty() && self.memberships(address).is_empty() {
 			return "unassigned".into();
 		}
-		let queue_position = self
-			.request_order
-			.iter()
-			.position(|queued| queued == address)
-			.map(|position| position + 1);
-		match (self.active.contains(address), queue_position) {
-			(true, Some(position)) => format!("floor + wait #{position}"),
-			(true, None) => "has floor".into(),
-			(false, Some(position)) => format!("queued #{position}"),
-			(false, None) => "idle".into(),
+		let waiting = self.queues.iter().any(|(group, queue)| {
+			queue.contains(address)
+				&& !self
+					.group_sources
+					.get(group)
+					.is_some_and(|sources| sources.contains(address))
+		});
+		match (self.active.contains(address), waiting) {
+			(true, true) => "floor + waiting".into(),
+			(true, false) => "has floor".into(),
+			(false, true) => "queued".into(),
+			(false, false) => "idle".into(),
 		}
 	}
 }
@@ -301,7 +303,7 @@ mod tests {
 		press(&mut half, "b", now, 0);
 		press(&mut half, "a", now, 10);
 		assert_eq!(half.dashboard_state(&address("b")), "has floor");
-		assert_eq!(half.dashboard_state(&address("a")), "queued #2");
+		assert_eq!(half.dashboard_state(&address("a")), "queued");
 		release(&mut half, "b", now, 20);
 		assert_eq!(half.dashboard_state(&address("a")), "has floor");
 	}

@@ -26,8 +26,9 @@ pub struct Dashboard {
 	worker: Option<Worker>,
 }
 
-pub struct RunStatus {
+pub struct RunStatus<'a> {
 	pub mode: Mode,
+	pub transmit: &'a Transmit,
 }
 
 impl Dashboard {
@@ -59,8 +60,7 @@ impl Dashboard {
 		allowed: &BTreeSet<Address>,
 		headsets: &BTreeMap<Address, Headset>,
 		links: &BTreeSet<(u64, u64)>,
-		transmit: &Transmit,
-		status: RunStatus,
+		status: RunStatus<'_>,
 		error: Option<&str>,
 		output: &mut impl Write,
 	) -> io::Result<()> {
@@ -74,14 +74,17 @@ impl Dashboard {
 			},
 			routes.total_links()
 		)?;
-		writeln!(output, "HEADSET NAME      ADDRESS             CONNECTED  DUPLEX  TX/RX  TX / FLOOR       SIGNAL")?;
+		writeln!(
+			output,
+			"HEADSET NAME      ADDRESS             CONNECTED  DUPLEX  TX/RX  TX / FLOOR       SIGNAL"
+		)?;
 		for address in allowed {
 			let bluetooth = self.state.get(address);
 			let headset = headsets.get(address);
 			let presentation =
 				StatusPresentation::new(bluetooth, headset.map(Headset::has_duplex_audio));
 			let (tx, rx) = routes.counts(address);
-			let transmit_state = transmit.dashboard_state(address);
+			let transmit_state = status.transmit.dashboard_state(address);
 			let signal = presentation.dashboard_signal();
 			writeln!(
 				output,
@@ -157,9 +160,9 @@ mod tests {
 				&BTreeSet::new(),
 				&BTreeMap::new(),
 				&BTreeSet::new(),
-				&Transmit::new(Mode::FullDuplex, []),
 				RunStatus {
 					mode: Mode::FullDuplex,
+					transmit: &Transmit::new(Mode::FullDuplex, []),
 				},
 				None,
 				&mut output,
@@ -204,9 +207,9 @@ mod tests {
 				&allowed,
 				&headsets,
 				&BTreeSet::from([(3, 4)]),
-				&Transmit::new(Mode::HalfDuplex, []),
 				RunStatus {
 					mode: Mode::HalfDuplex,
+					transmit: &Transmit::new(Mode::HalfDuplex, []),
 				},
 				None,
 				&mut output,
@@ -258,9 +261,9 @@ mod tests {
 				&allowed,
 				&headsets,
 				&links,
-				&transmit,
 				RunStatus {
 					mode: Mode::HalfDuplex,
+					transmit: &transmit,
 				},
 				None,
 				&mut output,
@@ -282,7 +285,7 @@ mod tests {
 		);
 		assert!(
 			text.lines()
-				.any(|line| line.contains("EE:02") && line.contains("queued #2"))
+				.any(|line| line.contains("EE:02") && line.contains("queued"))
 		);
 	}
 
@@ -345,9 +348,9 @@ mod tests {
 				&allowed,
 				&BTreeMap::new(),
 				&BTreeSet::new(),
-				&Transmit::new(Mode::FullDuplex, []),
 				RunStatus {
 					mode: Mode::FullDuplex,
+					transmit: &Transmit::new(Mode::FullDuplex, []),
 				},
 				None,
 				&mut output,
@@ -390,9 +393,9 @@ mod tests {
 				&allowed,
 				&BTreeMap::new(),
 				&BTreeSet::new(),
-				&Transmit::new(Mode::FullDuplex, []),
 				RunStatus {
 					mode: Mode::FullDuplex,
+					transmit: &Transmit::new(Mode::FullDuplex, []),
 				},
 				None,
 				&mut output,

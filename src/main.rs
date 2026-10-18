@@ -220,7 +220,10 @@ fn bluetooth_summary(address: &Address, info: &Result<String, String>) -> (Strin
 			(identity, connected.to_string())
 		}
 		Err(error) => {
-			let error = error.chars().filter(|character| !character.is_control()).collect::<String>();
+			let error = error
+				.chars()
+				.filter(|character| !character.is_control())
+				.collect::<String>();
 			(address.to_string(), format!("status query failed: {error}"))
 		}
 	}
@@ -285,7 +288,11 @@ mod tests {
 			)
 		);
 		assert_eq!(
-			bluetooth_summary(&address, &Ok("Alias: Dispatch headset\nConnected: no\n".into())).1,
+			bluetooth_summary(
+				&address,
+				&Ok("Alias: Dispatch headset\nConnected: no\n".into())
+			)
+			.1,
 			"disconnected"
 		);
 		assert_eq!(

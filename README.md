@@ -182,8 +182,8 @@ bt-intercom status AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02
 `status` reports each headset's Bluetooth connection state, name/address, and
 PipeWire microphone and speaker ports. A failed Bluetooth query is reported
 separately from an unknown connection state; the command does not connect devices
-or create routes. Pair and trust only devices you
-have permission to connect; friends or coworkers can pair their headsets with
+or create routes. Pair and trust only devices you have permission to connect;
+friends or coworkers can pair their headsets with
 the host. BlueZ stores pairing credentials; this program stores only headset
 addresses.
 
@@ -486,8 +486,9 @@ retry succeeds.
 
 Add `--dashboard` to `run` for a live terminal view of the selected half- or
 full-duplex mode, per-headset PTT/floor and queue state, Bluetooth status, duplex
-availability, owned route counts and optional RSSI. Because the dashboard runs inside `run`, it reflects that
-process's mode directly without inter-process communication. It requires an
+availability, owned route counts and optional RSSI. Because the dashboard runs
+inside `run`, it reflects that process's mode directly without inter-process
+communication. It requires an
 interactive terminal on stderr and is not intended for a service. Route counts
 show observed, channel-compatible links between different configured headsets,
 not measured speech or audio quality. Transmit confirmations use the same
