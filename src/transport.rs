@@ -14,6 +14,8 @@ use crate::transmit::{Mode, Transmit};
 use crate::transport_model::ProfileFamily;
 
 pub use crate::transport_model::{Device, Transport};
+mod profile_plan;
+use profile_plan::{ProfileAction, ProfilePlan, plan_profile_changes};
 
 pub(crate) fn validate_controller_count(
 	mode: Mode,
@@ -91,19 +93,6 @@ struct PendingProfile {
 	device: Device,
 	index: u64,
 	requested_at: Instant,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-struct ProfileChange {
-	address: Address,
-	family: ProfileFamily,
-}
-
-#[derive(Debug, PartialEq, Eq)]
-enum ProfilePlan {
-	Wait,
-	Change(Vec<ProfileChange>),
-	Ready,
 }
 
 enum TransitionPhase {
@@ -373,15 +362,10 @@ impl Coordinator {
 		match plan_profile_changes(sources, &snapshot, &devices) {
 			ProfilePlan::Wait => Ok(false),
 			ProfilePlan::Ready => Ok(self.sources_ready(sources, &headsets, &devices)),
-			ProfilePlan::Change(changes) => {
-				for change in changes {
-					self.change_profile(
-						&change.address,
-						&devices[&change.address],
-						change.family,
-						sources,
-						io,
-					)?;
+			ProfilePlan::Apply(actions) => {
+				for action in actions {
+					let ProfileAction::SelectProfile { address, family } = action;
+					self.change_profile(&address, &devices[&address], family, sources, io)?;
 				}
 				Ok(false)
 			}
@@ -487,47 +471,6 @@ impl Coordinator {
 		self.transition
 			.record_profile(address.clone(), current.clone(), index);
 		Ok(())
-	}
-}
-
-fn plan_profile_changes(
-	sources: &BTreeSet<Address>,
-	snapshot: &Snapshot,
-	devices: &BTreeMap<Address, Device>,
-) -> ProfilePlan {
-	let demotions: Vec<_> = devices
-		.iter()
-		.filter(|(address, device)| {
-			!sources.contains(*address) && !device.is_profile(ProfileFamily::A2dp)
-		})
-		.map(|(address, _)| ProfileChange {
-			address: address.clone(),
-			family: ProfileFamily::A2dp,
-		})
-		.collect();
-	if !demotions.is_empty() {
-		return ProfilePlan::Change(demotions);
-	}
-	if devices
-		.iter()
-		.any(|(address, device)| !sources.contains(address) && snapshot.has_hfp_node(device.id))
-	{
-		return ProfilePlan::Wait;
-	}
-	let promotions: Vec<_> = sources
-		.iter()
-		.filter_map(|address| {
-			let device = &devices[address];
-			(!device.is_profile(ProfileFamily::Hfp)).then(|| ProfileChange {
-				address: address.clone(),
-				family: ProfileFamily::Hfp,
-			})
-		})
-		.collect();
-	if promotions.is_empty() {
-		ProfilePlan::Ready
-	} else {
-		ProfilePlan::Change(promotions)
 	}
 }
 
@@ -687,7 +630,7 @@ mod tests {
 			snapshot_with_profiles(&[(source.as_str(), 41, false), (receiver.as_str(), 17, true)]);
 		assert_eq!(
 			plan_profile_changes(&[source.clone()].into(), &snapshot, &devices),
-			ProfilePlan::Change(vec![ProfileChange {
+			ProfilePlan::Apply(vec![ProfileAction::SelectProfile {
 				address: receiver,
 				family: ProfileFamily::A2dp,
 			}])
@@ -710,7 +653,7 @@ mod tests {
 			snapshot_with_profiles(&[(source.as_str(), 41, false), (receiver.as_str(), 41, false)]);
 		assert_eq!(
 			plan_profile_changes(&sources, &snapshot, &devices),
-			ProfilePlan::Change(vec![ProfileChange {
+			ProfilePlan::Apply(vec![ProfileAction::SelectProfile {
 				address: source,
 				family: ProfileFamily::Hfp,
 			}])
