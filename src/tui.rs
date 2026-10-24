@@ -143,7 +143,9 @@ impl ControlPanel {
 			.group_editor
 			.groups
 			.iter()
-			.map(|group| ListItem::new(group.name.as_str()))
+			.map(|group| {
+				ListItem::new(format!("{} ({} headsets)", group.name, group.members.len()))
+			})
 			.collect();
 		let group_title = if self.new_group_name.is_some() {
 			format!(
@@ -208,7 +210,7 @@ impl ControlPanel {
 							"Continue typing, Enter to save, Esc to cancel"
 						}
 					} else {
-						"Tab switch pane | ↑/↓ select | n add | d delete | Space toggle member | q quit"
+						"Tab switch pane | ↑/↓ select | Home/End first/last | n add | d delete | Space toggle | q quit"
 					}
 				})
 		};
@@ -385,6 +387,34 @@ mod tests {
 		panel.handle_key(KeyCode::Char('y'));
 		assert!(panel.group_editor.groups.is_empty());
 		assert!(load(&path).unwrap().is_empty());
+		let _ = std::fs::remove_dir_all(path.parent().unwrap());
+	}
+
+	#[test]
+	fn home_and_end_select_the_first_and_last_items_in_each_pane() {
+		let path = std::env::temp_dir()
+			.join(format!("bt-intercom-tui-edges-{}", std::process::id()))
+			.join("talk-groups.json");
+		let _ = std::fs::remove_dir_all(path.parent().unwrap());
+		let addresses = [
+			Address::parse("AA:BB:CC:DD:EE:01").unwrap(),
+			Address::parse("AA:BB:CC:DD:EE:02").unwrap(),
+		]
+		.into();
+		let mut panel = ControlPanel::new(addresses, path.clone()).unwrap();
+		assert!(panel.group_editor.add("Dispatch"));
+		assert!(panel.group_editor.add("Stage"));
+		panel.selected_group = Some(0);
+		panel.handle_key(KeyCode::End);
+		assert_eq!(panel.selected_group, Some(1));
+		panel.handle_key(KeyCode::Home);
+		assert_eq!(panel.selected_group, Some(0));
+
+		panel.focus = Focus::Members;
+		panel.handle_key(KeyCode::End);
+		assert_eq!(panel.selected_headset, 1);
+		panel.handle_key(KeyCode::Home);
+		assert_eq!(panel.selected_headset, 0);
 		let _ = std::fs::remove_dir_all(path.parent().unwrap());
 	}
 }

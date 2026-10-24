@@ -32,7 +32,7 @@ mod worker;
 mod tui;
 
 use std::collections::BTreeSet;
-use std::io::IsTerminal;
+use std::io::{self, IsTerminal};
 use std::process::{Command, Stdio};
 #[cfg(test)]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -68,8 +68,11 @@ use transport::Transport;
 
 /// Opens an interactive BlueZ agent session to pair the specified device.
 fn pair_command(device: &str) -> Result<(), String> {
-	eprintln!("At the Bluetooth prompt, enter: pair {device}");
-	eprintln!("Answer any PIN/confirmation prompts, then enter: quit");
+	if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+		return Err("pair requires an interactive terminal; run it from a terminal session".into());
+	}
+	eprintln!("At the bluetoothctl prompt, enter: pair {device}");
+	eprintln!("Follow any PIN/confirmation prompts; when pairing finishes, enter: quit");
 	let mut child = Command::new("bluetoothctl")
 		.args(["--agent", "KeyboardDisplay"])
 		.stdin(Stdio::inherit())
