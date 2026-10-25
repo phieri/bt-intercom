@@ -10,7 +10,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use crate::bluez::Address;
@@ -180,7 +180,14 @@ pub(crate) fn drain_events(
 #[cfg(test)]
 pub(crate) fn read_input_events<R: Read>(input: R, address: Address, sender: Sender<PttEvent>) {
 	let (_wake, receiver) = mpsc::channel();
-	read_events(input, address, sender, &AtomicBool::new(false), &receiver);
+	read_events(
+		input,
+		address,
+		sender,
+		&AtomicBool::new(false),
+		&receiver,
+		None,
+	);
 }
 
 pub(crate) struct PreparedInputs(Vec<(PttButton, File)>);
@@ -206,18 +213,19 @@ impl PreparedInputs {
 			.map(Self)
 	}
 
-	pub fn start(self, stopped: Arc<AtomicBool>) -> PttInput {
+	pub fn start(self, stopped: Arc<AtomicBool>, session_wake: SyncSender<()>) -> PttInput {
 		let (sender, events) = mpsc::channel();
 		let workers = self
 			.0
 			.into_iter()
 			.map(|(button, file)| {
 				let sender = sender.clone();
+				let session_wake = session_wake.clone();
 				Worker::spawn(Arc::clone(&stopped), move |stopped, wake| {
 					let Some(address) = button.address else {
 						return;
 					};
-					read_events(file, address, sender, &stopped, &wake);
+					read_events(file, address, sender, &stopped, &wake, Some(&session_wake));
 				})
 			})
 			.collect();
@@ -249,6 +257,7 @@ pub(crate) fn read_events<R: Read>(
 	sender: Sender<PttEvent>,
 	stopped: &AtomicBool,
 	wake: &Receiver<()>,
+	session_wake: Option<&SyncSender<()>>,
 ) {
 	let mut pressed = false;
 	let offset = std::mem::size_of::<libc::timeval>();
@@ -258,9 +267,13 @@ pub(crate) fn read_events<R: Read>(
 		match input.read(&mut event[filled..]) {
 			Ok(0) => {
 				if !stopped.load(Ordering::SeqCst) {
-					let _ = sender.send(Err(format!(
-						"PTT input for {address} closed: unexpected end of input"
-					)));
+					send_event(
+						&sender,
+						session_wake,
+						Err(format!(
+							"PTT input for {address} closed: unexpected end of input"
+						)),
+					);
 				}
 				return;
 			}
@@ -277,7 +290,11 @@ pub(crate) fn read_events<R: Read>(
 			}
 			Err(error) => {
 				if !stopped.load(Ordering::SeqCst) {
-					let _ = sender.send(Err(format!("PTT input for {address} closed: {error}")));
+					send_event(
+						&sender,
+						session_wake,
+						Err(format!("PTT input for {address} closed: {error}")),
+					);
 				}
 				return;
 			}
@@ -294,19 +311,33 @@ pub(crate) fn read_events<R: Read>(
 		let event_key = u16::from_ne_bytes([event[offset + 2], event[offset + 3]]);
 		let value = i32::from_ne_bytes(event[offset + 4..offset + 8].try_into().unwrap());
 		if event_type == 0 && event_key == 3 {
-			let _ = sender.send(Err(format!("PTT input for {address} lost button events")));
+			send_event(
+				&sender,
+				session_wake,
+				Err(format!("PTT input for {address} lost button events")),
+			);
 			return;
 		}
 		if event_type == 1 && event_key == KEY_PLAYPAUSE && (value == 0 || value == 1) {
 			let next = value == 1;
 			if next != pressed {
 				pressed = next;
-				if sender.send(Ok((address.clone(), pressed, at))).is_err() {
+				if !send_event(&sender, session_wake, Ok((address.clone(), pressed, at))) {
 					return;
 				}
 			}
 		}
 	}
+}
+
+fn send_event(sender: &Sender<PttEvent>, wake: Option<&SyncSender<()>>, event: PttEvent) -> bool {
+	if sender.send(event).is_err() {
+		return false;
+	}
+	if let Some(wake) = wake {
+		let _ = wake.try_send(());
+	}
+	true
 }
 
 #[cfg(test)]
@@ -315,10 +346,18 @@ mod tests {
 	use std::io::Write;
 	use std::os::unix::net::UnixStream;
 
-	fn reader() -> (UnixStream, Receiver<PttEvent>, Worker) {
+	fn reader() -> (
+		UnixStream,
+		Receiver<PttEvent>,
+		Receiver<()>,
+		SyncSender<()>,
+		Worker,
+	) {
 		let (input, output) = UnixStream::pair().unwrap();
 		input.set_nonblocking(true).unwrap();
 		let (sender, events) = mpsc::channel();
+		let (session_wake, session_events) = mpsc::sync_channel(1);
+		let worker_wake = session_wake.clone();
 		let worker = Worker::spawn(Arc::new(AtomicBool::new(false)), move |stopped, wake| {
 			read_events(
 				input,
@@ -326,9 +365,10 @@ mod tests {
 				sender,
 				&stopped,
 				&wake,
+				Some(&worker_wake),
 			);
 		});
-		(output, events, worker)
+		(output, events, session_events, session_wake, worker)
 	}
 
 	fn record(pressed: bool) -> Vec<u8> {
@@ -342,7 +382,7 @@ mod tests {
 	#[test]
 	fn idle_and_partial_readers_are_joined_on_cancellation() {
 		for prefix in [0, 1, record(true).len() - 1] {
-			let (mut writer, events, mut worker) = reader();
+			let (mut writer, events, _, _, mut worker) = reader();
 			writer.write_all(&record(true)[..prefix]).unwrap();
 			assert!(matches!(
 				events.recv_timeout(Duration::from_millis(50)),
@@ -360,7 +400,7 @@ mod tests {
 
 	#[test]
 	fn split_records_survive_would_block_without_losing_transitions() {
-		let (mut writer, events, worker) = reader();
+		let (mut writer, events, session_events, _, worker) = reader();
 		for pressed in [true, false] {
 			let record = record(pressed);
 			writer.write_all(&record[..3]).unwrap();
@@ -375,8 +415,31 @@ mod tests {
 				.unwrap();
 			assert_eq!(address.as_str(), "AA:BB:CC:DD:EE:01");
 			assert_eq!(actual, pressed);
+			session_events.recv_timeout(Duration::from_secs(1)).unwrap();
 		}
 		drop(worker);
 		assert!(events.recv().is_err());
+	}
+
+	#[test]
+	fn ptt_wake_notifications_coalesce_while_events_remain_queued() {
+		let (mut writer, events, session_events, wake_sender, worker) = reader();
+		wake_sender.try_send(()).unwrap();
+		writer.write_all(&record(true)).unwrap();
+		writer.write_all(&record(false)).unwrap();
+
+		for expected in [true, false] {
+			let (_, pressed, _) = events
+				.recv_timeout(Duration::from_secs(1))
+				.unwrap()
+				.unwrap();
+			assert_eq!(pressed, expected);
+		}
+		drop(worker);
+		assert!(session_events.try_recv().is_ok());
+		assert!(matches!(
+			session_events.try_recv(),
+			Err(mpsc::TryRecvError::Empty)
+		));
 	}
 }

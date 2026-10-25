@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -81,6 +81,7 @@ impl PairButton {
 		mut allowed: BTreeSet<Address>,
 		cancelled: Arc<AtomicBool>,
 		network_path: PathBuf,
+		session_wake: SyncSender<()>,
 	) -> Self {
 		let (sender, events) = mpsc::channel();
 		let worker = Worker::spawn(cancelled, move |stopped, wake| {
@@ -120,6 +121,7 @@ impl PairButton {
 					if sender.send(result).is_err() {
 						break;
 					}
+					let _ = session_wake.try_send(());
 					// Ignore presses during pairing; require a fresh stable release.
 					button = Button::new(pin.is_low(), Instant::now());
 				}
