@@ -128,6 +128,22 @@ impl ControlPanel {
 		}
 	}
 
+	fn move_selection_to_edge(&mut self, end: bool) {
+		match self.focus {
+			Focus::Groups if !self.group_editor.groups.is_empty() => {
+				self.selected_group = Some(if end {
+					self.group_editor.groups.len() - 1
+				} else {
+					0
+				});
+			}
+			Focus::Members if !self.allowed.is_empty() => {
+				self.selected_headset = if end { self.allowed.len() - 1 } else { 0 };
+			}
+			_ => {}
+		}
+	}
+
 	pub(super) fn handle_key(&mut self, code: KeyCode) -> bool {
 		self.group_editor.error = None;
 		if self.confirm_last_group_removal {
@@ -167,6 +183,8 @@ impl ControlPanel {
 			}
 			KeyCode::Up => self.move_selection(false),
 			KeyCode::Down => self.move_selection(true),
+			KeyCode::Home => self.move_selection_to_edge(false),
+			KeyCode::End => self.move_selection_to_edge(true),
 			KeyCode::Char('n') if self.focus == Focus::Groups => {
 				self.new_group_name = Some(String::new());
 				self.group_editor.error = None;

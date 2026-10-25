@@ -155,6 +155,38 @@ can build natively with Cargo.
 
 ## Usage
 
+### Quick start
+
+With two HFP/HSP headsets, scan for devices, pair each headset in an
+interactive terminal, check audio readiness, then start the intercom:
+
+```sh
+bt-intercom scan
+bt-intercom pair AA:BB:CC:DD:EE:01
+bt-intercom pair AA:BB:CC:DD:EE:02
+bt-intercom status AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02
+bt-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 --connect
+```
+
+Replace the example addresses with those reported by your scan. If status says
+duplex audio is unavailable, check the PipeWire profile and Bluetooth connection
+before running; see [Requirements](#requirements) and
+[Troubleshooting](#troubleshooting). Run `bt-intercom --help` or
+`bt-intercom run --help` for options.
+
+### Troubleshooting
+
+- `pair` needs an interactive terminal. At the `bluetoothctl` prompt, enter the
+  printed `pair ADDRESS` command, handle any PIN or confirmation prompt, then
+  enter `quit`. For headless pairing, see
+  [Raspberry Pi headless pairing button](#raspberry-pi-headless-pairing-button).
+- If `status` reports Bluetooth disconnected, use `run --connect` or connect the
+  headset with BlueZ. If duplex audio is unavailable, check that the headset is
+  connected and using its HFP/HSP headset profile in PipeWire.
+- Full-duplex needs at least two SCO/eSCO audio slots across the Bluetooth
+  controllers. See the [controller capacity guidance](#requirements) or use
+  half-duplex with PTT when the hardware has less capacity.
+
 Show the installed version and UTC build datetime:
 
 ```sh
@@ -299,9 +331,10 @@ bt-intercom panel
 
 The panel shows Bluetooth connection and signal status plus PipeWire duplex
 availability. Use `Tab` to switch between the talk-group and member lists,
-arrow keys to select, `n` to create a group, `d` to remove the selected group,
-and `Space` to toggle headset membership. Enter saves a new group name; Esc
-cancels name entry or quits the panel. Group settings are saved to
+arrow keys to move, `Home`/`End` to jump to the first/last item, `n` to create a
+group, `d` to remove the selected group, and `Space` to toggle headset membership.
+The group list shows each group's current member count. Enter saves a new group
+name; Esc cancels name entry or quits the panel. Group settings are saved to
 `${XDG_CONFIG_HOME:-~/.config}/bt-intercom/talk-groups.json`; changes are
 picked up by a running `bt-intercom run` process on its next routing update.
 A headset's microphone is routed only to other headsets sharing at least one

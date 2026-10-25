@@ -22,6 +22,7 @@ use clap_complete::Shell;
 		env!("BT_INTERCOM_BUILD_DATETIME")
 	),
 	about = "A Bluetooth headset intercom for Linux",
+	after_help = "Quick start (with two HFP/HSP headsets):\n  bt-intercom scan\n  bt-intercom pair ADDRESS\n  bt-intercom status ADDRESS_1 ADDRESS_2\n  bt-intercom run ADDRESS_1 ADDRESS_2\n\nRun `bt-intercom <command> --help` for options; `pair` and `panel` need an interactive terminal.",
 	arg_required_else_help = true
 )]
 pub(crate) struct Cli {
@@ -276,6 +277,8 @@ mod tests {
 		let help = cli_command().render_help().to_string();
 		assert!(help.contains("dashboard"));
 		assert!(help.contains("control panel"));
+		assert!(help.contains("Quick start"));
+		assert!(help.contains("bt-intercom status ADDRESS_1 ADDRESS_2"));
 	}
 
 	#[test]
