@@ -5,8 +5,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread;
+use std::sync::mpsc::{Receiver, SyncSender};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use crossterm::cursor::MoveTo;
@@ -69,6 +69,8 @@ pub(crate) struct Session {
 	connector: Option<Worker>,
 	reconnect_devices: Arc<Mutex<BTreeSet<Address>>>,
 	beep: Option<PttBeep>,
+	wake: Receiver<()>,
+	wake_sender: SyncSender<()>,
 	last_error: Option<String>,
 	last_update: Option<Instant>,
 	update_interval: Duration,
@@ -83,6 +85,7 @@ impl Session {
 	}
 
 	fn new(config: RunConfig, stopped: Arc<AtomicBool>) -> Self {
+		let (wake_sender, wake) = mpsc::sync_channel(1);
 		let update_interval = config.interval;
 		let routing = RoutingCoordinator::new(&config, &stopped);
 		let mut transmit = Transmit::new(
@@ -106,6 +109,8 @@ impl Session {
 			connector: None,
 			reconnect_devices,
 			beep: None,
+			wake,
+			wake_sender,
 			last_error: None,
 			last_update: None,
 			update_interval,
@@ -156,8 +161,12 @@ impl Session {
 			None
 		};
 		let signal = Arc::clone(&self.stopped);
-		ctrlc::set_handler(move || signal.store(true, Ordering::SeqCst))
-			.map_err(|error| error.to_string())?;
+		let wake = self.wake_sender.clone();
+		ctrlc::set_handler(move || {
+			signal.store(true, Ordering::SeqCst);
+			let _ = wake.try_send(());
+		})
+		.map_err(|error| error.to_string())?;
 		if self.config.explicit_network {
 			network::save(&self.config.network_path, &self.config.allowed)?;
 		}
@@ -169,7 +178,7 @@ impl Session {
 			}
 		};
 		if !self.config.buttons.is_empty() {
-			self.input = Some(inputs.start(Arc::clone(&self.stopped)));
+			self.input = Some(inputs.start(Arc::clone(&self.stopped), self.wake_sender.clone()));
 			match self.config.mode {
 				Mode::HalfDuplex => log::info!(
 					"Half-duplex: Hold play/pause to request the FIFO floor; release to cancel or relinquish. Double beep confirms a ready route."
@@ -185,6 +194,7 @@ impl Session {
 				self.config.allowed.clone(),
 				Arc::clone(&self.stopped),
 				self.config.network_path.clone(),
+				self.wake_sender.clone(),
 			)
 		});
 		if self.config.dashboard {
@@ -219,7 +229,9 @@ impl Session {
 				}
 				return Err(error);
 			}
-			thread::sleep(Duration::from_millis(100).min(self.config.interval));
+			let _ = self
+				.wake
+				.recv_timeout(Duration::from_millis(100).min(self.config.interval));
 		}
 		Ok(())
 	}
