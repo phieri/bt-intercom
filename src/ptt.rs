@@ -435,11 +435,11 @@ mod tests {
 				.unwrap();
 			assert_eq!(pressed, expected);
 		}
+		drop(worker);
 		assert!(session_events.try_recv().is_ok());
 		assert!(matches!(
 			session_events.try_recv(),
 			Err(mpsc::TryRecvError::Empty)
 		));
-		drop(worker);
 	}
 }
