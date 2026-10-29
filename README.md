@@ -116,8 +116,8 @@ terminal.
 requirements, an AppArmor profile, and a systemd user unit. The packages install
 the profile at `/etc/apparmor.d/usr.bin.bt-intercom`; AppArmor must be enabled
 on the host for it to be enforced. The profile allows the default configuration
-and runtime paths, PipeWire and BlueZ access, read access to PTT input
-devices. Custom `XDG_CONFIG_HOME`
+and runtime paths, PipeWire and BlueZ access, and read access to PTT input
+devices and their sysfs identity for `--ptt auto`. Custom `XDG_CONFIG_HOME`
 paths may need a local profile adjustment.
 Custom `TMPDIR` paths may also need an adjustment for temporary PTT audio.
 Install `cargo-deb` and
