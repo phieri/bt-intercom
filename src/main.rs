@@ -13,7 +13,6 @@ mod device_status;
 mod group_editor;
 mod groups;
 mod network;
-mod pair_button;
 mod pipewire;
 mod process;
 mod ptt;
@@ -198,7 +197,6 @@ fn run(action: CliCommand) -> Result<(), String> {
 			interval,
 			no_connect,
 			sco_limit,
-			pair_button,
 			ptt: buttons,
 			mode,
 			transport,
@@ -210,7 +208,6 @@ fn run(action: CliCommand) -> Result<(), String> {
 					interval,
 					connect: !no_connect,
 					sco_limit,
-					pair_button,
 					buttons,
 					mode,
 					transport,
@@ -567,31 +564,7 @@ mod tests {
 		}
 
 		#[test]
-		fn pairing_button_is_opt_in_and_incompatible_with_ptt() {
-			let CliCommand::Run { pair_button, .. } =
-				Cli::try_parse_from(["bt-intercom", "run"]).unwrap().command
-			else {
-				panic!("expected run");
-			};
-			assert!(!pair_button);
-			let CliCommand::Run { pair_button, .. } =
-				Cli::try_parse_from(["bt-intercom", "run", "--pair-button"])
-					.unwrap()
-					.command
-			else {
-				panic!("expected run");
-			};
-			assert!(pair_button);
-			assert!(
-				Cli::try_parse_from([
-					"bt-intercom",
-					"run",
-					"--pair-button",
-					"--ptt",
-					"AA:BB:CC:DD:EE:01=/dev/input/event4",
-				])
-				.is_err()
-			);
+		fn half_duplex_requires_ptt_mappings() {
 			assert!(validate_mode(Mode::HalfDuplex, &[], &BTreeSet::new()).is_err());
 		}
 
@@ -989,7 +962,7 @@ mod tests {
 			let (attempt, attempts) = mpsc::channel();
 			let worker = thread::spawn(move || {
 				reconnect_worker(
-					Arc::new(Mutex::new(["AA:BB:CC:DD:EE:01".into()].into())),
+					["AA:BB:CC:DD:EE:01".into()].into(),
 					Arc::new(AtomicBool::new(false)),
 					receiver,
 					Duration::from_millis(10),
@@ -1003,29 +976,6 @@ mod tests {
 			attempts.recv_timeout(Duration::from_secs(5)).unwrap();
 			shutdown.send(()).unwrap();
 			worker.join().unwrap();
-		}
-
-		#[test]
-		fn reconnect_worker_picks_up_newly_enrolled_devices() {
-			let devices = Arc::new(Mutex::new(BTreeSet::from(["AA:BB:CC:DD:EE:01".into()])));
-			let updated = Arc::clone(&devices);
-			let stopped = Arc::new(AtomicBool::new(false));
-			let cancelled = Arc::clone(&stopped);
-			let (_shutdown, receiver) = mpsc::channel();
-			let calls = Mutex::new(Vec::new());
-			reconnect_worker(devices, stopped, receiver, Duration::ZERO, |args, _| {
-				let mut calls = calls.lock().unwrap();
-				calls.push(args[2].to_string());
-				if calls.len() == 1 {
-					updated.lock().unwrap().insert("AA:BB:CC:DD:EE:02".into());
-				} else if args[2] == "AA:BB:CC:DD:EE:02" {
-					cancelled.store(true, Ordering::SeqCst);
-				}
-				Ok("Connected: yes\n".into())
-			});
-			let calls = calls.lock().unwrap();
-			assert_eq!(calls[0], "AA:BB:CC:DD:EE:01");
-			assert!(calls.contains(&"AA:BB:CC:DD:EE:02".to_string()));
 		}
 	}
 }

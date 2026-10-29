@@ -34,7 +34,6 @@ Show each headset's Bluetooth name, duplex audio availability, and port counts.
 .BI run " [ADDRESS ...]"
 Run the intercom. Explicit addresses are saved for future runs; if omitted, the
 previously saved network is restored.
-With --pair-button, a missing saved network starts empty for headless enrollment.
 .TP
 .BI completions " SHELL"
 Write shell completion definitions to standard output. Supported shells include
@@ -67,32 +66,8 @@ Automatic connection uses BlueZ's default controller; multi-controller deploymen
 adapter-aware Bluetooth manager or manual select/connect in the same
 bluetoothctl session.
 .TP
-.B run --pair-button
-Enable a Raspberry Pi headless pairing button on BCM GPIO17 (physical pin 11).
-With power off, wire a normally-open momentary button between pin 11 and GND
-(physical pin 9). The input uses the internal 3.3 V pull-up; never connect 5 V.
-Skips automatic PTT discovery and requires full-duplex without --ptt, GPIO
-device permissions for the PipeWire user, and a powered Bluetooth controller.
-Do not run with sudo.
-.PP
-Put only the intended headset in pairing mode, then press and release the button.
-A debounced press scans Bluetooth Classic for 15 seconds and pairs exactly one
-observed, unpaired HFP/HSP headset advertising a headset/handsfree UUID.
-Ambiguous discovery does not pair anything. Only Just Works headsets requiring
-no PIN or confirmation are supported; other headsets need interactive pairing.
-Just Works does not authenticate identity; use a trusted environment.
-Successful pairing is verified, trusted, saved, and added to the running network.
-Connection is attempted immediately; automatic reconnection retries new devices too.
-Duplex profiles and talk-group membership still need normal configuration.
-Existing audio routing continues during pairing. Holds, bounce, and presses
-during pairing do not repeat; a fresh release and press is required.
-Failures are logged; SIGINT/SIGTERM cancels pairing and releases the GPIO.
-Incomplete attempts remove the selected device's new bond for retry; cleanup
-failures log a manual recovery command. Fully paired and trusted headsets are
-saved even if shutdown interrupts the initial connection.
-.TP
 .BI run " --mode MODE"
-Select half-duplex (default, or full-duplex with --pair-button) or full-duplex.
+Select half-duplex (default) or full-duplex.
 Half-duplex uses a play/pause input mapping for every headset and grants one
 microphone at a time.
 .TP
@@ -134,8 +109,7 @@ links remain untouched; exclusivity applies only to this process's routes.
 In full-duplex, automatically matched or explicitly mapped headsets start in
 PTT mode. Press play/pause three times within one second to toggle that headset
 independently between PTT and always-open. Choices reset when the process exits
-or that headset loses duplex audio. With --pair-button, automatic matching is
-skipped and full-duplex starts with all microphones open.
+or that headset loses duplex audio.
 Losing duplex audio resets a mapped headset's request and always-open choice;
 release and press again after reconnecting.
 .TP
@@ -151,7 +125,7 @@ Enable debug diagnostics for subprocess execution and routing decisions.
 May be placed before or after a command. An explicit RUST_LOG setting
 overrides the default log level selected by this option.
 .TP
-.B -v, -V, --version
+.B -v, --version
 Show the program version and the UTC build datetime.
 .TP
 .SH CONFIGURATION

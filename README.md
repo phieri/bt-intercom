@@ -117,7 +117,7 @@ requirements, an AppArmor profile, and a systemd user unit. The packages install
 the profile at `/etc/apparmor.d/usr.bin.bt-intercom`; AppArmor must be enabled
 on the host for it to be enforced. The profile allows the default configuration
 and runtime paths, PipeWire and BlueZ access, read access to PTT input
-devices, and Raspberry Pi GPIO access (not `/dev/mem`). Custom `XDG_CONFIG_HOME`
+devices. Custom `XDG_CONFIG_HOME`
 paths may need a local profile adjustment.
 Custom `TMPDIR` paths may also need an adjustment for temporary PTT audio.
 Install `cargo-deb` and
@@ -178,8 +178,7 @@ before running; see [Requirements](#requirements) and
 
 - `pair` needs an interactive terminal. At the `bluetoothctl` prompt, enter the
   printed `pair ADDRESS` command, handle any PIN or confirmation prompt, then
-  enter `quit`. For headless pairing, see
-  [Raspberry Pi headless pairing button](#raspberry-pi-headless-pairing-button).
+  enter `quit`.
 - If `status` reports Bluetooth disconnected, `run` connects headsets automatically; otherwise connect the
   headset with BlueZ. If duplex audio is unavailable, check that the headset is
   connected and using its HFP/HSP headset profile in PipeWire.
@@ -253,75 +252,6 @@ WAV file is created once at startup and reused for every beep. It is placed
 under `XDG_RUNTIME_DIR` when that is an absolute path, falling back to the
 system temporary directory otherwise, and is removed during shutdown.
 
-### Raspberry Pi headless pairing button
-
-On a supported Raspberry Pi, `run --pair-button` enables a normally-open
-momentary button on **BCM GPIO17, physical header pin 11**. It skips automatic
-PTT matching and leaves full-duplex microphones open. With the Pi powered
-off, wire the button between pin 11 and **GND, physical pin 9**. The input uses
-the internal 3.3 V pull-up, so pressing the button pulls it low; no external
-pull-up is needed. Never connect it to 5 V. Reserve GPIO17 for this button;
-do not use it with a HAT, overlay, or another GPIO application.
-
-Run as your PipeWire user, with access to `/dev/gpiomem` (older Pis),
-`/dev/gpiomem0` (Pi 5), and `/dev/gpiochip*`. Raspberry Pi OS normally grants
-this through the `gpio` group. If necessary:
-
-```sh
-sudo usermod -aG gpio "$USER"
-```
-
-Log out and back in for group membership to take effect. Ensure Bluetooth is
-powered on and BlueZ permits this user to pair/trust devices. Do **not** run the
-intercom with `sudo`.
-
-```sh
-bt-intercom run --pair-button
-```
-
-This can start without a saved network. Put **only the intended headset** in
-pairing mode, then press and release the button. Each debounced press scans
-Bluetooth Classic for 15 seconds and pairs only when exactly one observed,
-unpaired HFP/HSP headset is found. Existing network devices, already-paired
-devices, and playback-only A2DP devices are skipped; ambiguous discovery fails
-without pairing. Headsets must advertise a headset/handsfree service UUID during
-discovery and support **Just Works** pairing without a PIN or confirmation.
-Other headsets still need interactive `pair` or a Bluetooth UI.
-
-Successful pairing is verified, trusted, and saved in the normal headset network,
-then added to the running intercom without a restart. Connection is attempted
-immediately; automatic reconnection also retries newly enrolled headsets. Pairing runs in
-the background, leaving existing audio routing active. Beeps confirm an active
-intercom route, not pairing alone; one headset by itself has no intercom route.
-Failures are logged and can be retried with a fresh press. Holding the button,
-contact bounce, a button held at startup, and presses during pairing do not
-start repeated attempts. Ctrl-C/SIGTERM cancels pairing and releases the GPIO.
-Incomplete attempts remove the newly selected device's bond so it remains
-eligible for a retry; if cleanup fails, the log gives a manual recovery command.
-Headsets fully paired and trusted before shutdown are still saved for the next run.
-
-This option is disabled by default, errors clearly on unsupported boards or
-missing GPIO permissions, and requires full-duplex **without `--ptt`**. New
-headsets still require the duplex PipeWire profile; configured talk groups are
-unchanged, so add the new headset to a group when groups are in use.
-Just Works does not authenticate the headset's identity: pair only in a trusted
-environment and verify the enrolled address in the logs.
-
-For the packaged headless user service, use `systemctl --user edit bt-intercom`
-and add:
-
-```ini
-[Service]
-ExecStart=
-ExecStart=/usr/bin/bt-intercom run --pair-button
-```
-
-Then run `systemctl --user daemon-reload` and
-`systemctl --user restart bt-intercom`. For startup without a login, enable user
-lingering with `sudo loginctl enable-linger "$USER"` and ensure PipeWire and
-WirePlumber start in that user's session. Inspect pairing logs with
-`journalctl --user -u bt-intercom`.
-
 ### Terminal control panel and talk groups
 
 Start the terminal control panel after saving a headset network:
@@ -346,16 +276,16 @@ included in the standard CLI and cross-compiled packages.
 
 ### Duplex modes and push-to-talk
 
-`run` defaults to half-duplex (or full-duplex when `--pair-button` is given).
+`run` defaults to half-duplex.
 Select `--mode full-duplex` or `--mode half-duplex` explicitly to override.
-Unless `--pair-button` is enabled, `run` automatically matches a play/pause input
+`run` automatically matches a play/pause input
 device for each configured headset and starts each microphone in PTT mode. The
 headsets must be connected when `run` starts; startup fails if an input device
 cannot be matched uniquely. In full-duplex, each headset can independently
 switch between PTT and always-open by pressing the play/pause button three times
 within one second. Switching back to PTT mutes the microphone when the button is
 released. These choices reset when the process exits or that headset loses
-duplex audio. `--pair-button` skips automatic PTT matching.
+duplex audio.
 
 Map each headset to its own Linux input event device. PTT listens only for
 `KEY_PLAYPAUSE` press/release events (code 164), not call/answer buttons or
@@ -463,9 +393,7 @@ quit
 Repeat with another controller for the next headset. If a headset was already
 paired to the wrong adapter, remove that bond deliberately before re-pairing;
 the intercom never migrates bonds. Confirm controller paths and audio profiles
-with `pw-dump` and `wpctl status`. The GPIO pairing button uses BlueZ's default
-controller; it is not a multi-controller enrollment/load-balancing mechanism.
-Automatic reconnection also uses BlueZ's default controller. Pass `--no-connect` for multi-controller
+with `pw-dump` and `wpctl status`. Automatic reconnection uses BlueZ's default controller. Pass `--no-connect` for multi-controller
 deployments and use an adapter-aware Bluetooth manager to maintain connections,
 or reconnect manually after `select` in the same `bluetoothctl` session.
 Selections are process-local; selecting in one invocation does not configure
