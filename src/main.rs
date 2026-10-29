@@ -564,7 +564,7 @@ mod tests {
 		}
 
 		#[test]
-		fn half_duplex_requires_ptt_mappings() {
+		fn half_duplex_requires_ptt_mapping() {
 			assert!(validate_mode(Mode::HalfDuplex, &[], &BTreeSet::new()).is_err());
 		}
 

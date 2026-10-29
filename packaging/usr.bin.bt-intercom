@@ -32,4 +32,7 @@ profile bt-intercom /usr/bin/bt-intercom {
   /tmp/bt-intercom-ptt-*.wav rw,
 
   /dev/input/event[0-9]* r,
+  /proc/cpuinfo r,
+  /sys/firmware/devicetree/base/compatible r,
+  /sys/firmware/devicetree/base/model r,
 }

@@ -393,7 +393,8 @@ quit
 Repeat with another controller for the next headset. If a headset was already
 paired to the wrong adapter, remove that bond deliberately before re-pairing;
 the intercom never migrates bonds. Confirm controller paths and audio profiles
-with `pw-dump` and `wpctl status`. Automatic reconnection uses BlueZ's default controller. Pass `--no-connect` for multi-controller
+with `pw-dump` and `wpctl status`.
+Automatic reconnection also uses BlueZ's default controller. Pass `--no-connect` for multi-controller
 deployments and use an adapter-aware Bluetooth manager to maintain connections,
 or reconnect manually after `select` in the same `bluetoothctl` session.
 Selections are process-local; selecting in one invocation does not configure
