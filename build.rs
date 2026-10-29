@@ -11,8 +11,12 @@ fn main() {
 	println!("cargo:rerun-if-changed=Cargo.lock");
 	println!("cargo:rerun-if-changed=src");
 	let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo did not set OUT_DIR"));
-	fs::write(out_dir.join("ptt-beep.wav"), double_beep_wav())
-		.expect("could not write PTT beep WAV");
+	let beep_path = out_dir.join("ptt-beep.wav");
+	let beep = double_beep_wav();
+	// Leave an identical file untouched so it does not trigger needless rebuilds.
+	if fs::read(&beep_path).ok().as_deref() != Some(beep.as_slice()) {
+		fs::write(&beep_path, beep).expect("could not write PTT beep WAV");
+	}
 	println!(
 		"cargo:rustc-env=BT_INTERCOM_BUILD_DATETIME={}",
 		build_datetime()
