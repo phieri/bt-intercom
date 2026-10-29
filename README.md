@@ -19,10 +19,10 @@ For headset wearers, see the [headset user briefing](https://phieri.github.io/bt
   `pw-cli`, `pw-play`)
   and WirePlumber. Run as the same user as PipeWire, **not with `sudo`**.
 - At least two Bluetooth Classic headsets supporting HFP/HSP microphone and
-  speaker audio. The default `--transport hfp` uses the `headset-head-unit`
+  speaker audio. `--transport hfp` (the full-duplex default) uses the `headset-head-unit`
   profile and leaves profiles unchanged. Check devices with `wpctl status`;
   select the duplex profile with `wpctl set-profile DEVICE_ID PROFILE_INDEX`.
-  The opt-in `--transport sco-a2dp` also requires A2DP playback on every headset.
+  The half-duplex default `--transport sco-a2dp` also requires A2DP playback on every headset.
 
 ### Raspberry Pi hardware
 
@@ -165,7 +165,7 @@ bt-intercom scan
 bt-intercom pair AA:BB:CC:DD:EE:01
 bt-intercom pair AA:BB:CC:DD:EE:02
 bt-intercom status AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02
-bt-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 --connect
+bt-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02
 ```
 
 Replace the example addresses with those reported by your scan. If status says
@@ -180,7 +180,7 @@ before running; see [Requirements](#requirements) and
   printed `pair ADDRESS` command, handle any PIN or confirmation prompt, then
   enter `quit`. For headless pairing, see
   [Raspberry Pi headless pairing button](#raspberry-pi-headless-pairing-button).
-- If `status` reports Bluetooth disconnected, use `run --connect` or connect the
+- If `status` reports Bluetooth disconnected, `run` connects headsets automatically; otherwise connect the
   headset with BlueZ. If duplex audio is unavailable, check that the headset is
   connected and using its HFP/HSP headset profile in PipeWire.
 - Full-duplex needs at least two SCO/eSCO audio slots across the Bluetooth
@@ -222,14 +222,14 @@ addresses.
 Start the intercom with the paired addresses:
 
 ```sh
-bt-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 --connect
+bt-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02
 ```
 
 Addresses are saved in `${XDG_CONFIG_HOME:-~/.config}/bt-intercom/headsets`.
 If `XDG_CONFIG_HOME` is unset or not an absolute path, they are saved under
-`~/.config/bt-intercom/headsets`. Later, run `bt-intercom run --connect` to
-restore them. `--connect` retries disconnected headsets every 30 seconds; omit
-it if another Bluetooth manager keeps them connected. Reconnection checks and
+`~/.config/bt-intercom/headsets`. Later, run `bt-intercom run` to
+restore them. `run` connects disconnected headsets at startup and retries every 30 seconds;
+use `--no-connect` if another Bluetooth manager keeps them connected. Reconnection checks and
 attempts run for up to two headsets concurrently, so a slow connection does not
 block every other headset. Routing is polled every two seconds by default;
 change that with `--interval SECONDS` (minimum: 1 second).
@@ -276,7 +276,7 @@ powered on and BlueZ permits this user to pair/trust devices. Do **not** run the
 intercom with `sudo`.
 
 ```sh
-bt-intercom run --connect --pair-button
+bt-intercom run --pair-button
 ```
 
 This can start without a saved network. Put **only the intended headset** in
@@ -290,7 +290,7 @@ Other headsets still need interactive `pair` or a Bluetooth UI.
 
 Successful pairing is verified, trusted, and saved in the normal headset network,
 then added to the running intercom without a restart. Connection is attempted
-immediately; `--connect` also retries newly enrolled headsets. Pairing runs in
+immediately; automatic reconnection also retries newly enrolled headsets. Pairing runs in
 the background, leaving existing audio routing active. Beeps confirm an active
 intercom route, not pairing alone; one headset by itself has no intercom route.
 Failures are logged and can be retried with a fresh press. Holding the button,
@@ -313,7 +313,7 @@ and add:
 ```ini
 [Service]
 ExecStart=
-ExecStart=/usr/bin/bt-intercom run --connect --pair-button
+ExecStart=/usr/bin/bt-intercom run --pair-button
 ```
 
 Then run `systemctl --user daemon-reload` and
@@ -346,7 +346,8 @@ included in the standard CLI and cross-compiled packages.
 
 ### Duplex modes and push-to-talk
 
-Select `--mode full-duplex` (the default) or `--mode half-duplex` on `run`.
+`run` defaults to half-duplex (or full-duplex when `--pair-button` is given).
+Select `--mode full-duplex` or `--mode half-duplex` explicitly to override.
 Unless `--pair-button` is enabled, `run` automatically matches a play/pause input
 device for each configured headset and starts each microphone in PTT mode. The
 headsets must be connected when `run` starts; startup fails if an input device
@@ -374,8 +375,8 @@ The kernel labels each headset's button device with its Bluetooth address.
 In PTT mode, hold a headset's play/pause button to transmit from its microphone;
 release to mute it. A double beep confirms when its microphone route is active.
 
-For half-duplex, add `--mode half-duplex` to the command above. Button mappings
-are required for every headset. Hold play/pause to request a turn: if another
+Half-duplex is the default; `--mode half-duplex` is optional. Button mappings
+are matched automatically unless given for every headset. Hold play/pause to request a turn: if another
 headset is transmitting, your request waits in first-in, first-out order.
 Keep holding while queued and wait for the double beep before talking.
 Releasing the button cancels a queued request or ends your turn, allowing the
@@ -393,14 +394,14 @@ are reset; after reconnecting, release and press again to talk.
 
 ### SCO/A2DP half-duplex transport
 
-`--mode half-duplex` alone only gates PipeWire links: with the default HFP
-transport, listeners still need SCO/eSCO for their speakers. It does **not** solve
+`--transport hfp` with half-duplex only gates PipeWire links: with HFP, listeners still need SCO/eSCO for their speakers. It does **not** solve
 a shared controller's synchronous-link limit.
 
-For headsets sharing a controller, opt into profile switching:
+Half-duplex defaults to `--transport sco-a2dp` (full-duplex defaults to `hfp`),
+so no extra flags are needed. Explicit form:
 
 ```sh
-bt-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 --connect \
+bt-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 \
   --mode half-duplex --transport sco-a2dp \
   --ptt AA:BB:CC:DD:EE:01=/dev/input/event4 \
   --ptt AA:BB:CC:DD:EE:02=/dev/input/event5
@@ -464,7 +465,7 @@ paired to the wrong adapter, remove that bond deliberately before re-pairing;
 the intercom never migrates bonds. Confirm controller paths and audio profiles
 with `pw-dump` and `wpctl status`. The GPIO pairing button uses BlueZ's default
 controller; it is not a multi-controller enrollment/load-balancing mechanism.
-`--connect` also uses BlueZ's default controller. Omit it for multi-controller
+Automatic reconnection also uses BlueZ's default controller. Pass `--no-connect` for multi-controller
 deployments and use an adapter-aware Bluetooth manager to maintain connections,
 or reconnect manually after `select` in the same `bluetoothctl` session.
 Selections are process-local; selecting in one invocation does not configure
@@ -540,7 +541,7 @@ systemctl --user enable --now bt-intercom.service
 journalctl --user -u bt-intercom.service -f
 ```
 
-The unit uses `run --connect` and saved addresses; it does not enable PTT. The
+The unit uses `run` and saved addresses; it does not enable PTT. The
 user's PipeWire/WirePlumber session must be available. To start before login,
 enable lingering with `sudo loginctl enable-linger "$USER"` and configure
 WirePlumber's Bluetooth seat policy for headless use. Stop the unit to release
@@ -555,7 +556,7 @@ systemctl --user stop bt-intercom.service
 Bluetooth connection capacity and audio behavior depend on the adapter,
 firmware, OS and headset; simultaneous HFP/HSP connections are not guaranteed.
 The host needs no local microphone or speaker, but this is not a network
-intercom. Profile switching is opt-in with `--transport sco-a2dp`; there is no
+intercom. Profile switching is the half-duplex default (`--transport sco-a2dp`); there is no
 automatic bond migration, Auracast broadcast, echo cancellation or audio
 processing. Headsets need acoustic isolation to avoid
 feedback. Host tests use synthetic PipeWire graphs and do not verify Bluetooth

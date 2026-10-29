@@ -150,7 +150,7 @@ impl Session {
 			&& controllers.len() > 1
 		{
 			log::warn!(
-				"Multiple Bluetooth controllers detected: --connect addresses only BlueZ's default controller. Keep other controllers' headsets connected using an adapter-aware Bluetooth manager, or connect them in a bluetoothctl session after select CONTROLLER_MAC."
+				"Multiple Bluetooth controllers detected: automatic reconnection addresses only BlueZ's default controller (use --no-connect to disable it). Keep other controllers' headsets connected using an adapter-aware Bluetooth manager, or connect them in a bluetoothctl session after select CONTROLLER_MAC."
 			);
 		}
 		// Validate all device opens before starting any worker or saving the network.
