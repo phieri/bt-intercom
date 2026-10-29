@@ -17,7 +17,6 @@ use crate::bluez;
 use crate::bluez::Address;
 use crate::dashboard::{Dashboard, RunStatus};
 use crate::network;
-use crate::pair_button::PairButton;
 use crate::process::{COMMAND_TIMEOUT, command_cancellable};
 use crate::ptt::{PreparedInputs, PttBeep, PttInput, drain_events};
 use crate::router::Headset;
@@ -64,7 +63,6 @@ pub(crate) struct Session {
 	routing: RoutingCoordinator,
 	transmit: Transmit,
 	input: Option<PttInput>,
-	pairing: Option<PairButton>,
 	dashboard: Option<Dashboard>,
 	connector: Option<Worker>,
 	reconnect_devices: Arc<Mutex<BTreeSet<Address>>>,
@@ -104,7 +102,6 @@ impl Session {
 			routing,
 			transmit,
 			input: None,
-			pairing: None,
 			dashboard: None,
 			connector: None,
 			reconnect_devices,
@@ -155,11 +152,6 @@ impl Session {
 		}
 		// Validate all device opens before starting any worker or saving the network.
 		let inputs = PreparedInputs::open(&self.config.buttons)?;
-		let pairing_pin = if self.config.pair_button {
-			Some(PairButton::open()?)
-		} else {
-			None
-		};
 		let signal = Arc::clone(&self.stopped);
 		let wake = self.wake_sender.clone();
 		ctrlc::set_handler(move || {
@@ -188,15 +180,6 @@ impl Session {
 				),
 			}
 		}
-		self.pairing = pairing_pin.map(|pin| {
-			PairButton::start(
-				pin,
-				self.config.allowed.clone(),
-				Arc::clone(&self.stopped),
-				self.config.network_path.clone(),
-				self.wake_sender.clone(),
-			)
-		});
 		if self.config.dashboard {
 			self.dashboard = Some(Dashboard::start(
 				self.config.allowed.clone(),
@@ -248,28 +231,6 @@ impl Session {
 	}
 
 	fn poll_events(&mut self) -> Result<(), String> {
-		if let Some(pairing) = &self.pairing {
-			while let Ok(event) = pairing.events.try_recv() {
-				match event {
-					Ok(device) => {
-						self.routing.router.allowed.insert(device.clone());
-						*self.reconnect_devices.lock().unwrap() =
-							self.routing.router.allowed.clone();
-						if let Some(current) = &mut self.dashboard {
-							current.stop();
-							self.dashboard = Some(Dashboard::start(
-								self.routing.router.allowed.clone(),
-								Arc::clone(&self.stopped),
-							));
-						}
-						log::info!("Paired and saved {device}; added to the intercom");
-						self.last_update = None;
-						self.redraw = true;
-					}
-					Err(error) => log::warn!("Button pairing failed: {error}"),
-				}
-			}
-		}
 		if let Some(input) = &self.input
 			&& drain_events(&input.events, &mut self.transmit)?
 		{
@@ -370,7 +331,6 @@ impl Drop for Session {
 	fn drop(&mut self) {
 		self.stopped.store(true, Ordering::SeqCst);
 		self.routing.router.close();
-		self.pairing.take();
 		if let Some(input) = &mut self.input {
 			input.stop();
 		}
@@ -396,7 +356,6 @@ mod tests {
 			allowed: ["AA:BB:CC:DD:EE:01".into()].into(),
 			interval: Duration::from_millis(1),
 			connect: false,
-			pair_button: false,
 			buttons: vec![PttButton {
 				address: Some(Address::parse("AA:BB:CC:DD:EE:01").unwrap()),
 				path: "injected-input".into(),
@@ -518,7 +477,6 @@ mod tests {
 		assert!(session.input.is_none());
 		assert!(session.connector.is_none());
 		assert!(session.dashboard.is_none());
-		assert!(session.pairing.is_none());
 		assert!(!path.exists());
 	}
 }

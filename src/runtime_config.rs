@@ -68,7 +68,6 @@ pub(crate) struct RunOptions {
 	pub interval: f64,
 	pub connect: bool,
 	pub sco_limit: usize,
-	pub pair_button: bool,
 	pub buttons: Vec<PttButton>,
 	pub mode: Option<Mode>,
 	pub transport: Option<Transport>,
@@ -80,7 +79,6 @@ pub(crate) struct RunConfig {
 	pub interval: Duration,
 	pub connect: bool,
 	pub sco_limit: usize,
-	pub pair_button: bool,
 	pub buttons: Vec<PttButton>,
 	pub mode: Mode,
 	pub transport: Transport,
@@ -115,11 +113,7 @@ impl RunConfig {
 		network_path: PathBuf,
 		resolve_ptt: impl FnOnce(&mut Vec<PttButton>, &BTreeSet<Address>) -> Result<(), String>,
 	) -> Result<Self, String> {
-		let mode = options.mode.unwrap_or(if options.pair_button {
-			Mode::FullDuplex
-		} else {
-			Mode::HalfDuplex
-		});
+		let mode = options.mode.unwrap_or(Mode::HalfDuplex);
 		let transport = options.transport.unwrap_or(if mode == Mode::HalfDuplex {
 			Transport::ScoA2dp
 		} else {
@@ -133,16 +127,13 @@ impl RunConfig {
 		if options.dashboard && !interactive {
 			return Err("--dashboard requires an interactive terminal on stderr".into());
 		}
-		if options.pair_button && (mode != Mode::FullDuplex || !options.buttons.is_empty()) {
-			return Err("--pair-button requires full-duplex without --ptt".into());
-		}
 		let explicit_network = !options.addresses.is_empty();
 		let allowed = if explicit_network {
 			options.addresses.iter().cloned().collect()
 		} else {
-			network::load_for_run(&network_path, options.pair_button)?
+			network::load(&network_path)?
 		};
-		if !options.pair_button && options.buttons.is_empty() {
+		if options.buttons.is_empty() {
 			options.buttons.push(PttButton {
 				address: None,
 				path: crate::ptt_discovery::AUTO.into(),
@@ -162,7 +153,6 @@ impl RunConfig {
 			interval,
 			connect: options.connect,
 			sco_limit: options.sco_limit,
-			pair_button: options.pair_button,
 			buttons: options.buttons,
 			mode,
 			transport,
@@ -215,7 +205,6 @@ mod tests {
 			interval: 2.0,
 			connect: false,
 			sco_limit: 1,
-			pair_button: false,
 			buttons: vec![PttButton {
 				address: Some(A.into()),
 				path: "input".into(),
@@ -231,42 +220,24 @@ mod tests {
 		let fixture = Fixture::new();
 		let path = fixture.network();
 		network::save(&path, &[B.into()].into()).unwrap();
-		for invalid in 0..9 {
+		for invalid in 0..6 {
 			let mut options = options();
 			match invalid {
 				0 => options.transport = Some(Transport::ScoA2dp),
-				1 => {
-					options.mode = Some(Mode::HalfDuplex);
-					options.pair_button = true;
-					options.buttons.clear();
-				}
-				2 => {
-					options.dashboard = true;
-				}
-				3 => options.interval = f64::NAN,
-				4 => {
+				1 => options.dashboard = true,
+				2 => options.interval = f64::NAN,
+				3 => {
 					options.addresses.clear();
 					options.buttons.clear();
 					options.mode = Some(Mode::HalfDuplex);
 				}
-				5 => {
-					options.pair_button = true;
-					options.mode = Some(Mode::HalfDuplex);
-				}
-				6 => {
+				4 => {
 					options.buttons = vec![PttButton {
 						address: Some(B.into()),
 						path: "input".into(),
 					}]
 				}
-				7 => {
-					options.pair_button = true;
-					options.buttons = vec![PttButton {
-						address: Some(A.into()),
-						path: "input".into(),
-					}];
-				}
-				8 => options.sco_limit = 0,
+				5 => options.sco_limit = 0,
 				_ => unreachable!(),
 			}
 			assert!(
@@ -318,21 +289,9 @@ mod tests {
 	}
 
 	#[test]
-	fn enrollment_can_start_empty_but_saved_mapping_must_cover_network() {
+	fn saved_mapping_must_cover_network() {
 		let fixture = Fixture::new();
 		let path = fixture.network();
-		let mut enrollment = options();
-		enrollment.addresses.clear();
-		enrollment.pair_button = true;
-		enrollment.buttons.clear();
-		let config =
-			RunConfig::resolve_at_with_ptt(enrollment, true, path.clone(), |buttons, _| {
-				assert!(buttons.is_empty());
-				Ok(())
-			})
-			.unwrap();
-		assert!(config.allowed.is_empty());
-		assert!(!path.exists());
 		network::save(&path, &[A.into(), B.into()].into()).unwrap();
 		let mut saved = options();
 		saved.addresses.clear();
@@ -391,17 +350,6 @@ mod tests {
 		full.mode = Some(Mode::FullDuplex);
 		full.transport = None;
 		let config = RunConfig::resolve_at(full, true, fixture.network()).unwrap();
-		assert_eq!(config.transport, Transport::Hfp);
-
-		let mut pairing = options();
-		pairing.mode = None;
-		pairing.transport = None;
-		pairing.pair_button = true;
-		pairing.buttons.clear();
-		let config =
-			RunConfig::resolve_at_with_ptt(pairing, true, fixture.network(), |_, _| Ok(()))
-				.unwrap();
-		assert_eq!(config.mode, Mode::FullDuplex);
 		assert_eq!(config.transport, Transport::Hfp);
 	}
 

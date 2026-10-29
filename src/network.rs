@@ -107,26 +107,6 @@ pub(crate) fn load(path: &Path) -> Result<BTreeSet<Address>, String> {
 	Ok(allowed)
 }
 
-pub(crate) fn load_for_run(path: &Path, pair_button: bool) -> Result<BTreeSet<Address>, String> {
-	if pair_button && !path.try_exists().map_err(|error| error.to_string())? {
-		Ok(BTreeSet::new())
-	} else {
-		load(path)
-	}
-}
-
-pub(crate) fn enroll(
-	path: &Path,
-	allowed: &mut BTreeSet<Address>,
-	device: Address,
-) -> Result<(), String> {
-	let mut enrolled = allowed.clone();
-	enrolled.insert(device);
-	save(path, &enrolled)?;
-	*allowed = enrolled;
-	Ok(())
-}
-
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -222,44 +202,5 @@ mod tests {
 	fn missing_saved_network_explains_how_to_create_it() {
 		let error = load(&temporary_network_path()).unwrap_err();
 		assert!(error.contains("run with headset addresses first"));
-	}
-
-	#[test]
-	fn only_button_mode_can_start_without_a_saved_network() {
-		let path = temporary_network_path();
-		assert!(load_for_run(&path, false).is_err());
-		assert!(load_for_run(&path, true).unwrap().is_empty());
-		fs::create_dir_all(path.parent().unwrap()).unwrap();
-		fs::write(&path, "invalid\n").unwrap();
-		assert!(load_for_run(&path, true).is_err());
-		fs::write(&path, "AA:BB:CC:DD:EE:01\n").unwrap();
-		assert_eq!(
-			load_for_run(&path, true).unwrap(),
-			BTreeSet::from(["AA:BB:CC:DD:EE:01".into()])
-		);
-		fs::remove_dir_all(path.parent().unwrap()).unwrap();
-	}
-
-	#[test]
-	fn enrollment_preserves_network_and_only_allows_saved_devices() {
-		let path = temporary_network_path();
-		let mut allowed = BTreeSet::from(["AA:BB:CC:DD:EE:01".into()]);
-		enroll(&path, &mut allowed, "AA:BB:CC:DD:EE:02".into()).unwrap();
-		assert_eq!(load(&path).unwrap(), allowed);
-		assert_eq!(allowed.len(), 2);
-		enroll(&path, &mut allowed, "AA:BB:CC:DD:EE:02".into()).unwrap();
-		assert_eq!(allowed.len(), 2);
-		let before = allowed.clone();
-		assert!(
-			enroll(
-				&path.join("not-a-directory"),
-				&mut allowed,
-				"AA:BB:CC:DD:EE:03".into(),
-			)
-			.is_err()
-		);
-		assert_eq!(allowed, before);
-		assert_eq!(load(&path).unwrap(), before);
-		fs::remove_dir_all(path.parent().unwrap()).unwrap();
 	}
 }

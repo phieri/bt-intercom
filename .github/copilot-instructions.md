@@ -26,7 +26,6 @@ When a change affects those topics, update the README as well.
   network and talk groups.
 - `src/router.rs`: PipeWire discovery and managed audio links.
 - `src/transmit.rs`: transmit state and half-duplex floor/queue behavior.
-- `src/pair_button.rs`: Raspberry Pi GPIO pairing-button support.
 - `src/dashboard.rs`, `src/tui.rs`, `src/terminal_style.rs`: terminal status
   views and styling.
 - `src/atomic_file.rs`: atomic replacement for persisted files.
