@@ -36,8 +36,7 @@ pub(crate) struct Cli {
 pub(crate) fn cli_command() -> clap::Command {
 	Cli::command().disable_version_flag(true).arg(
 		clap::Arg::new("version")
-			.short('V')
-			.short_alias('v')
+			.short('v')
 			.long("version")
 			.action(clap::ArgAction::Version),
 	)
@@ -257,14 +256,8 @@ mod tests {
 			.err()
 			.unwrap()
 			.to_string();
-		let legacy_short = command
-			.try_get_matches_from(["bt-intercom", "-V"])
-			.err()
-			.unwrap()
-			.to_string();
 
 		assert_eq!(short, long);
-		assert_eq!(short, legacy_short);
 		assert!(short.contains(env!("CARGO_PKG_VERSION")));
 		assert!(short.contains(env!("BT_INTERCOM_BUILD_DATETIME")));
 	}

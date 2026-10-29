@@ -2,11 +2,11 @@
 
 //! Runtime session ownership, event processing, routing, and presentation.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::io::IsTerminal;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use crossterm::cursor::MoveTo;
@@ -65,7 +65,6 @@ pub(crate) struct Session {
 	input: Option<PttInput>,
 	dashboard: Option<Dashboard>,
 	connector: Option<Worker>,
-	reconnect_devices: Arc<Mutex<BTreeSet<Address>>>,
 	beep: Option<PttBeep>,
 	wake: Receiver<()>,
 	wake_sender: SyncSender<()>,
@@ -95,7 +94,6 @@ impl Session {
 		);
 		transmit.set_sco_limit(config.sco_limit);
 		transmit.set_groups(&config.groups);
-		let reconnect_devices = Arc::new(Mutex::new(config.allowed.clone()));
 		Self {
 			config,
 			stopped,
@@ -104,7 +102,6 @@ impl Session {
 			input: None,
 			dashboard: None,
 			connector: None,
-			reconnect_devices,
 			beep: None,
 			wake,
 			wake_sender,
@@ -187,7 +184,7 @@ impl Session {
 			));
 		}
 		if self.config.connect {
-			let devices = Arc::clone(&self.reconnect_devices);
+			let devices = self.config.allowed.clone();
 			self.connector = Some(Worker::spawn(
 				Arc::clone(&self.stopped),
 				move |stopped, wake| {
