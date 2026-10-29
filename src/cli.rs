@@ -84,16 +84,12 @@ pub(crate) enum CliCommand {
 		/// Increase only after verifying the controller, firmware, and headset capacity.
 		#[arg(long, default_value_t = 1, value_parser = parse_sco_limit)]
 		sco_limit: usize,
-		/// Pair one nearby Just Works headset on a Raspberry Pi GPIO17 button press.
-		/// Requires full-duplex without --ptt; wire physical pin 11 to ground.
-		#[arg(long, conflicts_with = "ptt")]
-		pair_button: bool,
 		/// Map a headset address to an evdev input path; repeat once per headset.
 		/// Defaults to matching every headset automatically. Use ADDRESS=auto, or a
 		/// lone `auto`, to request automatic discovery explicitly.
 		#[arg(long, value_name = "ADDRESS=/dev/input/eventX|auto", value_parser = parse_ptt_binding)]
 		ptt: Vec<PttButton>,
-		/// Transmit policy (default: half-duplex, or full-duplex with --pair-button).
+		/// Transmit policy (default: half-duplex).
 		/// Half-duplex uses PTT for every headset:
 		/// hold play/pause to request the FIFO floor; release to cancel/relinquish.
 		/// Full-duplex mappings start in PTT; three play/pause presses within

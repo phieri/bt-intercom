@@ -13,7 +13,6 @@ mod device_status;
 mod group_editor;
 mod groups;
 mod network;
-mod pair_button;
 mod pipewire;
 mod process;
 mod ptt;
@@ -198,7 +197,6 @@ fn run(action: CliCommand) -> Result<(), String> {
 			interval,
 			no_connect,
 			sco_limit,
-			pair_button,
 			ptt: buttons,
 			mode,
 			transport,
@@ -210,7 +208,6 @@ fn run(action: CliCommand) -> Result<(), String> {
 					interval,
 					connect: !no_connect,
 					sco_limit,
-					pair_button,
 					buttons,
 					mode,
 					transport,
@@ -567,31 +564,7 @@ mod tests {
 		}
 
 		#[test]
-		fn pairing_button_is_opt_in_and_incompatible_with_ptt() {
-			let CliCommand::Run { pair_button, .. } =
-				Cli::try_parse_from(["bt-intercom", "run"]).unwrap().command
-			else {
-				panic!("expected run");
-			};
-			assert!(!pair_button);
-			let CliCommand::Run { pair_button, .. } =
-				Cli::try_parse_from(["bt-intercom", "run", "--pair-button"])
-					.unwrap()
-					.command
-			else {
-				panic!("expected run");
-			};
-			assert!(pair_button);
-			assert!(
-				Cli::try_parse_from([
-					"bt-intercom",
-					"run",
-					"--pair-button",
-					"--ptt",
-					"AA:BB:CC:DD:EE:01=/dev/input/event4",
-				])
-				.is_err()
-			);
+		fn half_duplex_requires_ptt_mapping() {
 			assert!(validate_mode(Mode::HalfDuplex, &[], &BTreeSet::new()).is_err());
 		}
 
