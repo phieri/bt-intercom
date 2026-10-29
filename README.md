@@ -249,8 +249,9 @@ This does not disconnect or unpair it; restart a running intercom or service
 for the change to take effect. Removing the last address clears the saved
 network.
 Best-effort beeps confirm when an intercom route becomes active. Their temporary
-WAV file is created under `XDG_RUNTIME_DIR` when it is an absolute path, falling
-back to the system temporary directory otherwise; it is removed during shutdown.
+WAV file is created once at startup and reused for every beep. It is placed
+under `XDG_RUNTIME_DIR` when that is an absolute path, falling back to the
+system temporary directory otherwise, and is removed during shutdown.
 
 ### Raspberry Pi headless pairing button
 
