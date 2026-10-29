@@ -89,6 +89,33 @@ fn pair_command(device: &str) -> Result<(), String> {
 	}
 }
 
+/// Scans for devices, powering on the adapter first when it is off.
+fn scan_command(seconds: u64) -> Result<String, String> {
+	if let Ok(info) = command(&["bluetoothctl", "show"], COMMAND_TIMEOUT)
+		&& !info.contains("No default controller")
+		&& !device_flag(&info, "Powered")
+	{
+		{
+			eprintln!("Bluetooth adapter is powered off; powering it on");
+			command(&["bluetoothctl", "power", "on"], COMMAND_TIMEOUT)
+				.map_err(|error| format!("failed to power on the Bluetooth adapter: {error}"))?;
+		}
+	}
+	command(
+		&["bluetoothctl", "--timeout", &seconds.to_string(), "scan", "on"],
+		Duration::from_secs(seconds + 5),
+	)
+	.map_err(|error| {
+		if error.contains("NotReady") {
+			format!(
+				"{error}\nThe Bluetooth adapter is not ready. Check `rfkill list` and run `sudo rfkill unblock bluetooth`, then `bluetoothctl power on`; on a Raspberry Pi also confirm bluetooth.service is running and the UART/firmware (hciuart) has finished initializing"
+			)
+		} else {
+			error
+		}
+	})
+}
+
 /// Parses and validates one or more Bluetooth addresses.
 fn addresses(args: &[Address]) -> Result<BTreeSet<Address>, String> {
 	if args.is_empty() {
@@ -106,19 +133,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 			tui::run(allowed, talk_groups_path(&network_path)?)?;
 		}
 		CliCommand::Scan { seconds } => {
-			print!(
-				"{}",
-				command(
-					&[
-						"bluetoothctl",
-						"--timeout",
-						&seconds.to_string(),
-						"scan",
-						"on"
-					],
-					Duration::from_secs(seconds + 5)
-				)?
-			);
+			print!("{}", scan_command(seconds)?);
 		}
 		CliCommand::Pair { address: device } => {
 			pair_command(&device)?;
