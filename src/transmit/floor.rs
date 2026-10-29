@@ -1,3 +1,7 @@
+// Copyright (C) 2026 Philip Eriksson. All rights reserved.
+
+//! Floor allocation across talk groups under per-controller SCO limits.
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::bluez::Address;
