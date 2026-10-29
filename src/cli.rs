@@ -77,9 +77,9 @@ pub(crate) enum CliCommand {
 		/// Routing update interval in seconds (minimum: 1).
 		#[arg(long, default_value_t = 2.0, value_parser = parse_interval)]
 		interval: f64,
-		/// Reconnect disconnected headsets every 30 seconds.
+		/// Do not connect headsets at startup or reconnect them every 30 seconds.
 		#[arg(long)]
-		connect: bool,
+		no_connect: bool,
 		/// Maximum simultaneous SCO/eSCO links per Bluetooth controller (default: 1).
 		/// Increase only after verifying the controller, firmware, and headset capacity.
 		#[arg(long, default_value_t = 1, value_parser = parse_sco_limit)]
@@ -93,19 +93,21 @@ pub(crate) enum CliCommand {
 		/// lone `auto`, to request automatic discovery explicitly.
 		#[arg(long, value_name = "ADDRESS=/dev/input/eventX|auto", value_parser = parse_ptt_binding)]
 		ptt: Vec<PttButton>,
-		/// Transmit policy. Half-duplex requires --ptt for every headset:
+		/// Transmit policy (default: half-duplex, or full-duplex with --pair-button).
+		/// Half-duplex uses PTT for every headset:
 		/// hold play/pause to request the FIFO floor; release to cancel/relinquish.
 		/// Full-duplex mappings start in PTT; three play/pause presses within
 		/// 1 second (first to third, inclusive; release between presses) toggle
 		/// that headset independently between PTT and always open.
 		/// Without active mappings full-duplex is always open. Disconnected mapped
 		/// headsets reset to PTT and require a fresh press after reconnection.
-		#[arg(long, value_enum, default_value_t = Mode::FullDuplex)]
-		mode: Mode,
+		#[arg(long, value_enum)]
+		mode: Option<Mode>,
 		/// Audio transport: hfp leaves profiles unchanged; sco-a2dp switches
 		/// the talker to HFP and listeners to A2DP (requires half-duplex PTT).
-		#[arg(long, value_enum, default_value_t = Transport::Hfp)]
-		transport: Transport,
+		/// Default: sco-a2dp in half-duplex, hfp in full-duplex.
+		#[arg(long, value_enum)]
+		transport: Option<Transport>,
 		/// Show the live terminal dashboard.
 		#[arg(long)]
 		dashboard: bool,
@@ -152,7 +154,6 @@ fn parse_ptt_binding(value: &str) -> Result<PttButton, String> {
 mod tests {
 	use super::*;
 	use crate::bluez::Address;
-	use crate::transmit::Mode;
 	use clap::{FromArgMatches, Parser};
 
 	fn address(value: &str) -> Address {
@@ -295,7 +296,7 @@ mod tests {
 			panic!("expected run command");
 		};
 		assert!(ptt.is_empty());
-		assert_eq!(mode, Mode::FullDuplex);
+		assert_eq!(mode, None);
 		assert!(!dashboard);
 
 		let binding = format!("{raw_address}=/dev/input/event4");
@@ -305,13 +306,11 @@ mod tests {
 			"--ptt",
 			binding.as_str(),
 			raw_address,
-			"--connect",
 			"--dashboard",
 		])
 		.unwrap();
 		let CliCommand::Run {
 			addresses,
-			connect,
 			ptt,
 			dashboard,
 			..
@@ -320,9 +319,22 @@ mod tests {
 			panic!("expected run command");
 		};
 		assert_eq!(addresses, [address(raw_address)]);
-		assert!(connect && dashboard);
+		assert!(dashboard);
 		assert_eq!(ptt.len(), 1);
 		assert_eq!(ptt[0].path, "/dev/input/event4");
 		assert_eq!(ptt[0].address, Some(address(raw_address)));
+	}
+
+	#[test]
+	fn no_connect_opts_out_of_default_reconnection() {
+		let parse = |args: &[&str]| {
+			let CliCommand::Run { no_connect, .. } = Cli::try_parse_from(args).unwrap().command
+			else {
+				panic!("expected run command");
+			};
+			no_connect
+		};
+		assert!(!parse(&["bt-intercom", "run"]));
+		assert!(parse(&["bt-intercom", "run", "--no-connect"]));
 	}
 }

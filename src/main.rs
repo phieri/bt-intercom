@@ -196,7 +196,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 		CliCommand::Run {
 			addresses: devices,
 			interval,
-			connect,
+			no_connect,
 			sco_limit,
 			pair_button,
 			ptt: buttons,
@@ -208,7 +208,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 				runtime_config::RunOptions {
 					addresses: devices,
 					interval,
-					connect,
+					connect: !no_connect,
 					sco_limit,
 					pair_button,
 					buttons,
@@ -504,7 +504,7 @@ mod tests {
 			else {
 				panic!("expected run");
 			};
-			assert_eq!(transport, Transport::Hfp);
+			assert_eq!(transport, None);
 			let CliCommand::Run {
 				transport, mode, ..
 			} = Cli::try_parse_from([
@@ -520,8 +520,8 @@ mod tests {
 			else {
 				panic!("expected run");
 			};
-			assert!(validate_transport(mode, transport).is_ok());
-			assert!(validate_transport(Mode::FullDuplex, transport).is_err());
+			assert!(validate_transport(mode.unwrap(), transport.unwrap()).is_ok());
+			assert!(validate_transport(Mode::FullDuplex, transport.unwrap()).is_err());
 			assert!(validate_transport(Mode::HalfDuplex, Transport::Hfp).is_ok());
 			assert!(
 				Cli::try_parse_from(["bt-intercom", "run", "--transport", "auracast"]).is_err()
@@ -650,7 +650,7 @@ mod tests {
 				let CliCommand::Run { mode, .. } = cli.command else {
 					panic!("expected run");
 				};
-				assert_eq!(mode, expected);
+				assert_eq!(mode, Some(expected));
 			}
 			assert!(Cli::try_parse_from(["bt-intercom", "run", "--mode", "semi-duplex"]).is_err());
 			assert!(Cli::try_parse_from(["bt-intercom", "run", "--mode", "half"]).is_err());
