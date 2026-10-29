@@ -529,6 +529,9 @@ show observed, channel-compatible links between different configured headsets,
 not measured speech or audio quality. Transmit confirmations use the same
 route-readiness checks. Both terminal views show failed Bluetooth status queries
 as unknown and report the polling error; a later successful poll clears it.
+Battery and RSSI come from `bluetoothctl info`; BlueZ only reports them if the
+headset exposes them (battery via HFP may need `bluetoothd --experimental`, and
+RSSI for connected BR/EDR links is often absent). Missing values show as "—".
 
 An example full-duplex user service is in `examples/bt-intercom.service`. Pair
 and configure the headsets first, then install and enable it:
