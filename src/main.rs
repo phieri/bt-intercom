@@ -269,6 +269,19 @@ fn main() {
 		command => {
 			if let Err(error) = run(command) {
 				eprintln!("bt-intercom: {error}");
+				if error.contains("pw-") && error.contains("can't connect") {
+					// SAFETY: geteuid has no preconditions and cannot fail.
+					let root = unsafe { libc::geteuid() } == 0;
+					if root || std::env::var_os("SUDO_USER").is_some() {
+						eprintln!(
+							"hint: PipeWire runs per user; do not run bt-intercom with sudo or as root. Run it as the desktop/login user that owns the PipeWire session"
+						);
+					} else {
+						eprintln!(
+							"hint: cannot reach PipeWire; check `systemctl --user status pipewire wireplumber`. Over SSH or at boot, enable lingering with `sudo loginctl enable-linger \"$USER\"` and set XDG_RUNTIME_DIR=/run/user/$(id -u)"
+						);
+					}
+				}
 				std::process::exit(1);
 			}
 		}
