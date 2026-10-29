@@ -3,7 +3,7 @@
 //! Runtime session ownership, event processing, routing, and presentation.
 
 use std::collections::BTreeMap;
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{Arc, mpsc};
@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 
 use crossterm::cursor::MoveTo;
 use crossterm::execute;
-use crossterm::terminal::{Clear, ClearType};
 
 use crate::bluez;
 use crate::bluez::Address;
@@ -300,11 +299,7 @@ impl Session {
 		if self.redraw {
 			let stderr = std::io::stderr();
 			let interactive = stderr.is_terminal();
-			let mut output = stderr.lock();
-			if interactive {
-				execute!(output, Clear(ClearType::All), MoveTo(0, 0))
-					.map_err(|error| error.to_string())?;
-			}
+			let mut frame = Vec::new();
 			dashboard
 				.draw(
 					&self.routing.router.allowed,
@@ -315,9 +310,24 @@ impl Session {
 						transmit: &self.transmit,
 					},
 					self.last_error.as_deref(),
-					&mut output,
+					&mut frame,
 				)
 				.map_err(|error| error.to_string())?;
+			let mut output = stderr.lock();
+			if interactive {
+				// Overwrite in place and erase leftovers to avoid a blank frame.
+				execute!(output, MoveTo(0, 0)).map_err(|error| error.to_string())?;
+				let mut text = String::from_utf8_lossy(&frame).replace('\n', "\x1b[K\n");
+				text.push_str("\x1b[J");
+				output
+					.write_all(text.as_bytes())
+					.map_err(|error| error.to_string())?;
+			} else {
+				output
+					.write_all(&frame)
+					.map_err(|error| error.to_string())?;
+			}
+			output.flush().map_err(|error| error.to_string())?;
 			self.redraw = false;
 		}
 		Ok(())
