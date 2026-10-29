@@ -159,6 +159,19 @@ pub(crate) fn signal_strength(info: &str) -> Option<i32> {
 	property(info, "RSSI").and_then(|value| value.split_whitespace().next()?.parse().ok())
 }
 
+pub(crate) fn battery_percentage(info: &str) -> Option<u8> {
+	let value = property(info, "Battery Percentage")?;
+	let decimal = value
+		.split_once('(')
+		.and_then(|(_, rest)| rest.strip_suffix(')'))
+		.unwrap_or(value);
+	decimal
+		.trim()
+		.parse()
+		.ok()
+		.filter(|percent| *percent <= 100)
+}
+
 pub(crate) fn bluetooth_name(info: &str) -> Option<String> {
 	["Alias", "Name"].into_iter().find_map(|field| {
 		let name: String = property(info, field)?
@@ -252,6 +265,17 @@ mod tests {
 		let error = Address::parse("AA:BB:CC:DD:EE:FG").unwrap_err();
 		assert_eq!(error.kind, AddressErrorKind::HexDigit { index: 16 });
 		assert!(error.to_string().contains("non-hexadecimal character"));
+	}
+
+	#[test]
+	fn parses_optional_battery_percentage() {
+		assert_eq!(
+			battery_percentage("Battery Percentage: 0x50 (80)\n"),
+			Some(80)
+		);
+		assert_eq!(battery_percentage("Battery Percentage: 55\n"), Some(55));
+		assert_eq!(battery_percentage("Battery Percentage: 0xff (255)\n"), None);
+		assert_eq!(battery_percentage("Name: x\n"), None);
 	}
 
 	#[test]

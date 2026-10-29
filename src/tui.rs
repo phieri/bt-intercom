@@ -63,6 +63,22 @@ impl ControlPanel {
 						}),
 					)),
 					Cell::from(Span::styled(
+						presentation.battery_label(),
+						self.palette.style(match presentation.battery {
+							Some(0..=15)
+								if presentation.connection == ConnectionState::Connected =>
+							{
+								Meaning::Error
+							}
+							Some(16..=30)
+								if presentation.connection == ConnectionState::Connected =>
+							{
+								Meaning::Warning
+							}
+							_ => Meaning::Info,
+						}),
+					)),
+					Cell::from(Span::styled(
 						presentation.rssi_label(),
 						self.palette.style(signal_meaning),
 					)),
@@ -118,16 +134,24 @@ impl ControlPanel {
 		let table = Table::new(
 			rows,
 			[
-				Constraint::Percentage(22),
-				Constraint::Percentage(32),
-				Constraint::Percentage(18),
+				Constraint::Percentage(20),
+				Constraint::Percentage(28),
 				Constraint::Percentage(16),
+				Constraint::Percentage(14),
+				Constraint::Percentage(10),
 				Constraint::Percentage(12),
 			],
 		)
 		.header(
-			Row::new(["HEADSET", "ADDRESS", "BLUETOOTH", "DUPLEX", "SIGNAL"])
-				.style(Style::default().add_modifier(Modifier::BOLD)),
+			Row::new([
+				"HEADSET",
+				"ADDRESS",
+				"BLUETOOTH",
+				"DUPLEX",
+				"BATTERY",
+				"SIGNAL",
+			])
+			.style(Style::default().add_modifier(Modifier::BOLD)),
 		)
 		.block(
 			Block::default()

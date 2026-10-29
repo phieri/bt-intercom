@@ -519,7 +519,7 @@ retry succeeds.
 
 Add `--dashboard` to `run` for a live terminal view of the selected half- or
 full-duplex mode, per-headset PTT/floor and queue state, Bluetooth status, duplex
-availability, owned route counts and optional RSSI. Because the dashboard runs
+availability, owned route counts, and optional battery level and RSSI. Because the dashboard runs
 inside `run`, it reflects that process's mode directly without inter-process
 communication. It requires an
 interactive terminal on stderr and is not intended for a service. Route counts

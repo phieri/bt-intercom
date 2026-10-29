@@ -10,7 +10,8 @@ use std::time::Duration;
 
 use crate::bluez::Address;
 use crate::bluez::{
-	FAIR_RSSI, GOOD_RSSI, STRONG_RSSI, bluetooth_name, device_flag, signal_strength,
+	FAIR_RSSI, GOOD_RSSI, STRONG_RSSI, battery_percentage, bluetooth_name, device_flag,
+	signal_strength,
 };
 use crate::process::{COMMAND_TIMEOUT, command_cancellable};
 use crate::router::{Headset, Router};
@@ -22,6 +23,7 @@ pub(crate) struct HeadsetStatus {
 	pub connected: Option<bool>,
 	pub duplex: Option<bool>,
 	pub rssi: Option<i32>,
+	pub battery: Option<u8>,
 }
 
 impl HeadsetStatus {
@@ -31,6 +33,7 @@ impl HeadsetStatus {
 			connected: Some(device_flag(info, "Connected")),
 			duplex,
 			rssi: signal_strength(info),
+			battery: battery_percentage(info),
 		}
 	}
 }
@@ -104,6 +107,7 @@ pub(crate) struct StatusPresentation<'a> {
 	pub(crate) connection: ConnectionState,
 	pub(crate) duplex: Option<bool>,
 	pub(crate) rssi: Option<i32>,
+	pub(crate) battery: Option<u8>,
 }
 
 impl<'a> StatusPresentation<'a> {
@@ -113,6 +117,7 @@ impl<'a> StatusPresentation<'a> {
 			connection: ConnectionState::from_flag(status.and_then(|status| status.connected)),
 			duplex,
 			rssi: status.and_then(|status| status.rssi),
+			battery: status.and_then(|status| status.battery),
 		}
 	}
 
@@ -139,6 +144,14 @@ impl<'a> StatusPresentation<'a> {
 	pub(crate) fn rssi_label(&self) -> String {
 		self.rssi
 			.map_or_else(|| "—".to_string(), |rssi| format!("{rssi} dBm"))
+	}
+
+	/// Battery is only meaningful while the headset is connected.
+	pub(crate) fn battery_label(&self) -> String {
+		match (self.connection, self.battery) {
+			(ConnectionState::Connected, Some(percent)) => format!("{percent}%"),
+			_ => "—".to_string(),
+		}
 	}
 
 	pub(crate) fn dashboard_signal(&self) -> String {
@@ -269,7 +282,8 @@ mod tests {
 				name: Some("Alex's headset".into()),
 				connected: Some(true),
 				duplex: Some(true),
-				rssi: Some(-67)
+				rssi: Some(-67),
+				battery: None,
 			}
 		);
 		assert_eq!(
@@ -388,6 +402,7 @@ mod tests {
 			connected: Some(true),
 			duplex: Some(true),
 			rssi: Some(-67),
+			battery: Some(80),
 		};
 		let presentation = StatusPresentation::new(Some(&status), status.duplex);
 
@@ -398,6 +413,7 @@ mod tests {
 		assert_eq!(presentation.panel_duplex_label(), "ready");
 		assert_eq!(presentation.rssi_label(), "-67 dBm");
 		assert_eq!(presentation.dashboard_signal(), "-67 dBm (good)");
+		assert_eq!(presentation.battery_label(), "80%");
 
 		let unknown = StatusPresentation::new(None, None);
 		assert_eq!(unknown.name_or("fallback"), "fallback");
@@ -407,15 +423,18 @@ mod tests {
 		assert_eq!(unknown.panel_duplex_label(), "unknown");
 		assert_eq!(unknown.rssi_label(), "—");
 		assert_eq!(unknown.dashboard_signal(), "unknown");
+		assert_eq!(unknown.battery_label(), "—");
 
 		let disconnected_status = HeadsetStatus {
 			connected: Some(false),
 			rssi: Some(-40),
+			battery: Some(50),
 			..HeadsetStatus::default()
 		};
 		let disconnected = StatusPresentation::new(Some(&disconnected_status), Some(false));
 		assert_eq!(disconnected.dashboard_signal(), "unknown");
 		assert_eq!(disconnected.rssi_label(), "-40 dBm");
+		assert_eq!(disconnected.battery_label(), "—");
 		assert_eq!(SignalQuality::from_rssi(Some(-60)), SignalQuality::Strong);
 		assert_eq!(SignalQuality::from_rssi(Some(-70)), SignalQuality::Good);
 		assert_eq!(SignalQuality::from_rssi(Some(-80)), SignalQuality::Fair);

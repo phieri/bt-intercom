@@ -76,7 +76,7 @@ impl Dashboard {
 		)?;
 		writeln!(
 			output,
-			"HEADSET NAME      ADDRESS             CONNECTED  DUPLEX  TX/RX  TX / FLOOR       SIGNAL"
+			"HEADSET NAME      ADDRESS             CONNECTED  DUPLEX  TX/RX  TX / FLOOR       BATTERY  SIGNAL"
 		)?;
 		for address in allowed {
 			let bluetooth = self.state.get(address);
@@ -88,7 +88,7 @@ impl Dashboard {
 			let signal = presentation.dashboard_signal();
 			writeln!(
 				output,
-				"{:<16} {address}  {:<9}  {:<6}  {tx:>2}/{rx:<2}  {:<15} {signal}",
+				"{:<16} {address}  {:<9}  {:<6}  {tx:>2}/{rx:<2}  {:<15} {:<7}  {signal}",
 				presentation
 					.name_or("—")
 					.chars()
@@ -96,12 +96,13 @@ impl Dashboard {
 					.collect::<String>(),
 				presentation.connection.dashboard_label(),
 				presentation.dashboard_duplex_label(),
-				transmit_state
+				transmit_state,
+				presentation.battery_label()
 			)?;
 		}
 		writeln!(
 			output,
-			"\nTX / FLOOR is per headset; links represent routing, not measured speech. RSSI is shown only if BlueZ reports it."
+			"\nTX / FLOOR is per headset; links represent routing, not measured speech. RSSI and battery are shown only if BlueZ reports them."
 		)?;
 		if let Some(error) = error {
 			writeln!(
@@ -321,6 +322,7 @@ mod tests {
 						connected: Some(true),
 						duplex: Some(false),
 						rssi: Some(*rssi),
+						battery: None,
 					},
 				)
 			})
@@ -331,6 +333,7 @@ mod tests {
 					connected: Some(false),
 					duplex: Some(false),
 					rssi: Some(-40),
+					battery: None,
 				},
 			)])
 			.collect();
@@ -382,6 +385,7 @@ mod tests {
 					connected: Some(true),
 					duplex: Some(false),
 					rssi: None,
+					battery: Some(80),
 				},
 			)]),
 			status_error: None,
