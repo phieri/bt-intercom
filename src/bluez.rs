@@ -156,20 +156,21 @@ pub(crate) fn controller_addresses(info: &str) -> std::collections::BTreeSet<Add
 }
 
 pub(crate) fn signal_strength(info: &str) -> Option<i32> {
-	property(info, "RSSI").and_then(|value| value.split_whitespace().next()?.parse().ok())
+	let value = property(info, "RSSI")?;
+	// BlueZ prints "0xffffffbd (-67)"; accept the plain decimal form too.
+	parenthesized_decimal(value).or_else(|| value.split_whitespace().next()?.parse().ok())
+}
+
+fn parenthesized_decimal<T: FromStr>(value: &str) -> Option<T> {
+	let (_, rest) = value.split_once('(')?;
+	rest.strip_suffix(')')?.trim().parse().ok()
 }
 
 pub(crate) fn battery_percentage(info: &str) -> Option<u8> {
 	let value = property(info, "Battery Percentage")?;
-	let decimal = value
-		.split_once('(')
-		.and_then(|(_, rest)| rest.strip_suffix(')'))
-		.unwrap_or(value);
-	decimal
-		.trim()
-		.parse()
-		.ok()
-		.filter(|percent| *percent <= 100)
+	parenthesized_decimal(value)
+		.or_else(|| value.trim().parse().ok())
+		.filter(|percent: &u8| *percent <= 100)
 }
 
 pub(crate) fn bluetooth_name(info: &str) -> Option<String> {
@@ -280,7 +281,9 @@ mod tests {
 
 	#[test]
 	fn parses_optional_rssi() {
+		assert_eq!(signal_strength("RSSI: 0xffffffbd (-67)\n"), Some(-67));
 		assert_eq!(signal_strength("RSSI: -67 (0xffffffbd)\n"), Some(-67));
+		assert_eq!(signal_strength("RSSI: -67\n"), Some(-67));
 		assert_eq!(signal_strength("RSSI: unavailable\n"), None);
 		assert_eq!(signal_strength("Connected: yes\n"), None);
 	}

@@ -275,7 +275,7 @@ mod tests {
 	fn parses_bluetooth_status_and_optional_signal() {
 		assert_eq!(
 			HeadsetStatus::from_info(
-				"Name: Generic headset\nAlias: Alex's headset\nPaired: yes\nConnected: yes\nRSSI: -67 (0xffffffbd)\n",
+				"Name: Generic headset\nAlias: Alex's headset\nPaired: yes\nConnected: yes\nRSSI: 0xffffffbd (-67)\n",
 				Some(true)
 			),
 			HeadsetStatus {
