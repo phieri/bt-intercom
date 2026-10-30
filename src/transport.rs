@@ -211,6 +211,7 @@ pub(crate) struct Coordinator {
 	sco_limit: usize,
 	pub(crate) transition: TransitionState,
 	disconnects: BTreeSet<Address>,
+	profile_wait: Option<String>,
 }
 
 impl Default for Coordinator {
@@ -220,6 +221,7 @@ impl Default for Coordinator {
 			sco_limit: 1,
 			transition: TransitionState::default(),
 			disconnects: BTreeSet::new(),
+			profile_wait: None,
 		}
 	}
 }
@@ -312,7 +314,14 @@ impl Coordinator {
 		}
 		let started = self.transition.begin(sources);
 		if started.elapsed() >= Duration::from_secs(30) {
-			return Err("SCO/A2DP transport did not become ready within 30 seconds: expected HFP microphone/speaker ports for requested sources and A2DP speaker ports with no old HFP nodes for receivers; inspect pw-dump, Bluetooth connections and WirePlumber profile policy".into());
+			let detail = self
+				.profile_wait
+				.take()
+				.map(|reason| format!(" (last profile check: {reason})"))
+				.unwrap_or_default();
+			return Err(format!(
+				"SCO/A2DP transport did not become ready within 30 seconds: expected HFP microphone/speaker ports for requested sources and A2DP speaker ports with no old HFP nodes for receivers; inspect pw-dump, Bluetooth connections and WirePlumber profile policy{detail}"
+			));
 		}
 		if !sources.is_disjoint(&self.disconnects) {
 			return Ok(false);
@@ -345,7 +354,14 @@ impl Coordinator {
 			return Ok(false);
 		}
 		validate_source_capacity(sources, &devices, self.sco_limit)?;
-		validate_mixed_devices(&devices)?;
+		// Headsets such as CMF Buds 2 connect HFP and A2DP separately, so a
+		// profile can be unavailable until the second connection completes.
+		// Wait within the preparation deadline instead of failing immediately.
+		if let Err(reason) = validate_mixed_devices(&devices) {
+			self.profile_wait = Some(reason);
+			return Ok(false);
+		}
+		self.profile_wait = None;
 		// An accepted promotion can arrive after a floor change. Observe it
 		// before issuing its demotion or another promotion.
 		for (address, pending) in &self.transition.pending_profiles {
