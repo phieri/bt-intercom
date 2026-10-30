@@ -225,6 +225,10 @@ Notes:
   overlapping groups may briefly leave listeners unable to receive.
 - A short absence of microphone ports during a switch does not cancel a held
   request; a genuine device disappearance does.
+- Some headsets (for example CMF Buds 2) bring up HFP and A2DP separately, so
+  a profile may be unavailable for a few seconds after connecting. The session
+  waits up to 30 seconds for both before failing, and the error names the
+  missing profile.
 - `status` and the dashboard report HFP duplex readiness, so an idle A2DP
   listener appears playback-only.
 - Profiles stay in their last state on exit; owned links are always released.

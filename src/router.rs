@@ -543,6 +543,11 @@ mod tests {
 		router.set_sco_limit(1);
 		server.objects.borrow_mut()[6]["info"]["params"]["EnumProfile"][1]["available"] =
 			json!("no");
+		assert!(!router.prepare_transport(&[address(A)].into()).unwrap());
+		router
+			.coordinator
+			.transition
+			.expire_preparation(Duration::from_secs(31));
 		assert!(
 			router
 				.prepare_transport(&[address(A)].into())
@@ -553,8 +558,14 @@ mod tests {
 		assert!(!router.transport_devices().unwrap()[B].hfp_available);
 		assert!(!router.transport_devices().unwrap()[B].a2dp_available);
 		*server.objects.borrow_mut() = transport_fixture();
+		router.coordinator.transition = Default::default();
 		server.objects.borrow_mut()[6]["info"]["params"]["EnumProfile"][0]["available"] =
 			json!("no");
+		assert!(!router.prepare_transport(&[address(A)].into()).unwrap());
+		router
+			.coordinator
+			.transition
+			.expire_preparation(Duration::from_secs(31));
 		assert!(
 			router
 				.prepare_transport(&[address(A)].into())
@@ -562,8 +573,14 @@ mod tests {
 				.contains("no available advertised headset-head-unit")
 		);
 		*server.objects.borrow_mut() = transport_fixture();
+		router.coordinator.transition = Default::default();
 		server.objects.borrow_mut()[0]["info"]["params"]["EnumProfile"][1]["available"] =
 			json!("no");
+		assert!(!router.prepare_transport(&[address(A)].into()).unwrap());
+		router
+			.coordinator
+			.transition
+			.expire_preparation(Duration::from_secs(31));
 		assert!(
 			router
 				.prepare_transport(&[address(A)].into())
