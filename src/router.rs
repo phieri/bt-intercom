@@ -547,7 +547,7 @@ mod tests {
 			router
 				.prepare_transport(&[address(A)].into())
 				.unwrap_err()
-				.contains("no available advertised A2DP SBC")
+				.contains("no available advertised A2DP profile")
 		);
 		server.objects.borrow_mut()[6]["info"]["params"]["EnumProfile"] = json!([]);
 		assert!(!router.transport_devices().unwrap()[B].hfp_available);
@@ -568,7 +568,7 @@ mod tests {
 			router
 				.prepare_transport(&[address(A)].into())
 				.unwrap_err()
-				.contains("no available advertised A2DP SBC")
+				.contains("no available advertised A2DP profile")
 		);
 	}
 
