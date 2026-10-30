@@ -46,8 +46,8 @@ over requiring Bluetooth hardware or a live PipeWire session.
   `src/process.rs`. Preserve process-group cleanup for cancellable commands;
   interactive children that share the caller's terminal have different
   job-control constraints.
-- PTT is driven by mapped Linux evdev devices and `KEY_PLAYPAUSE` press/release
-  events only. Keyboard input and headset call/answer keys must not activate it.
+- PTT is driven by mapped Linux evdev devices and `KEY_PLAYPAUSE`, `KEY_PLAYCD` and
+  `KEY_PAUSECD` (BlueZ AVRCP) press/release events only. Keyboard input and headset call/answer keys must not activate it.
 - Keep talk-group routing and half-duplex floor behavior isolated by group.
   With no configured groups, retain the documented all-to-all behavior.
 - Use `crate::atomic_file::write` when replacing persisted configuration files.

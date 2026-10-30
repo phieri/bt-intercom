@@ -9,7 +9,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::bluez::Address;
-use crate::ptt::{KEY_PLAYPAUSE, PttButton};
+use crate::ptt::{PLAY_PAUSE_KEYS, PttButton};
 
 /// Value accepted in place of an input device path to request discovery.
 pub(crate) const AUTO: &str = "auto";
@@ -43,7 +43,7 @@ fn find_in(root: &Path, address: &Address) -> Result<String, String> {
 			continue;
 		}
 		let keys = fs::read_to_string(device.join("capabilities/key")).unwrap_or_default();
-		if has_key(&keys, KEY_PLAYPAUSE) {
+		if PLAY_PAUSE_KEYS.iter().any(|&code| has_key(&keys, code)) {
 			matches.push(name);
 		}
 	}

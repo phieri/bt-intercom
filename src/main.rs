@@ -56,7 +56,7 @@ use network::{
 };
 use process::{COMMAND_TIMEOUT, command};
 #[cfg(test)]
-use ptt::KEY_PLAYPAUSE;
+use ptt::{KEY_PAUSECD, KEY_PLAYCD, KEY_PLAYPAUSE};
 use router::Router;
 #[cfg(test)]
 use transmit::Mode;
@@ -883,6 +883,10 @@ mod tests {
 				(1, KEY_PLAYPAUSE, 1),
 				(0, KEY_PLAYPAUSE, 0),
 				(1, KEY_PLAYPAUSE, 0), // headset play/pause released
+				(1, KEY_PLAYCD, 1),    // BlueZ AVRCP PLAY
+				(1, KEY_PLAYCD, 0),
+				(1, KEY_PAUSECD, 1), // BlueZ AVRCP PAUSE
+				(1, KEY_PAUSECD, 0),
 			] {
 				events.extend(event(kind, key, value));
 			}
@@ -895,6 +899,10 @@ mod tests {
 			let (address, pressed, release_at) = receiver.recv().unwrap().unwrap();
 			assert_eq!((address, pressed), (input_address.clone(), false));
 			assert!(release_at >= press_at);
+			for pressed in [true, false, true, false] {
+				let (_, actual, _) = receiver.recv().unwrap().unwrap();
+				assert_eq!(actual, pressed);
+			}
 			assert!(receiver.recv().unwrap().is_err());
 			assert!(matches!(
 				receiver.try_recv(),
