@@ -205,6 +205,9 @@ impl TransitionState {
 	}
 }
 
+const A2DP_SINK_UUID: &str = "0000110b-0000-1000-8000-00805f9b34fb";
+const HFP_UUID: &str = "0000111e-0000-1000-8000-00805f9b34fb";
+
 /// Profile-transition coordinator, independent of the clients owning audio links.
 pub(crate) struct Coordinator {
 	pub(crate) transport: Transport,
@@ -212,6 +215,7 @@ pub(crate) struct Coordinator {
 	pub(crate) transition: TransitionState,
 	disconnects: BTreeSet<Address>,
 	profile_wait: Option<String>,
+	profile_nudged: Option<Instant>,
 }
 
 impl Default for Coordinator {
@@ -222,6 +226,7 @@ impl Default for Coordinator {
 			transition: TransitionState::default(),
 			disconnects: BTreeSet::new(),
 			profile_wait: None,
+			profile_nudged: None,
 		}
 	}
 }
@@ -357,7 +362,8 @@ impl Coordinator {
 		// Headsets such as CMF Buds 2 connect HFP and A2DP separately, so a
 		// profile can be unavailable until the second connection completes.
 		// Wait within the preparation deadline instead of failing immediately.
-		if let Err(reason) = validate_mixed_devices(&devices) {
+		if let Err(reason) = validate_role_profiles(sources, &devices) {
+			self.request_missing_profiles(sources, &devices, &snapshot, io.execute);
 			self.profile_wait = Some(reason);
 			return Ok(false);
 		}
@@ -384,6 +390,42 @@ impl Coordinator {
 					self.change_profile(&address, &devices[&address], family, sources, io)?;
 				}
 				Ok(false)
+			}
+		}
+	}
+
+	// BlueZ may leave A2DP/HFP disconnected after the other profile connects,
+	// so PipeWire never marks it available. Ask BlueZ to connect it, at most
+	// every 5 seconds, only once no profile change or other listener's HFP
+	// teardown is outstanding; failures are non-fatal because the wait deadline applies.
+	fn request_missing_profiles(
+		&mut self,
+		sources: &BTreeSet<Address>,
+		devices: &BTreeMap<Address, Device>,
+		snapshot: &Snapshot,
+		execute: &mut impl FnMut(&[&str]) -> Result<String, String>,
+	) {
+		if self.transition.has_pending_profiles()
+			|| self
+				.profile_nudged
+				.is_some_and(|at| at.elapsed() < Duration::from_secs(5))
+		{
+			return;
+		}
+		self.profile_nudged = Some(Instant::now());
+		for (address, device) in devices {
+			let (family, uuid) = role_profile(sources, address);
+			// Close before open: another listener must have released HFP first.
+			let closing = devices.iter().any(|(other, device)| {
+				other != address
+					&& !sources.contains(other)
+					&& (!device.is_profile(ProfileFamily::A2dp) || snapshot.has_hfp_node(device.id))
+			});
+			if device.index(family).is_none()
+				&& !closing && let Err(error) =
+				execute(&["bluetoothctl", "connect-profile", address.as_str(), uuid])
+			{
+				log::debug!("{address}: could not request {}: {error}", family.name());
 			}
 		}
 	}
@@ -434,7 +476,7 @@ impl Coordinator {
 		{
 			return Ok(());
 		}
-		validate_mixed_devices(&devices)?;
+		validate_role_profiles(sources, &devices)?;
 		validate_source_capacity(sources, &devices, self.sco_limit)?;
 		let current = devices
 			.get(address)
@@ -515,21 +557,33 @@ fn validate_source_capacity(
 	Ok(())
 }
 
-fn validate_mixed_devices(devices: &BTreeMap<Address, Device>) -> Result<(), String> {
+/// Half-duplex uses one profile per headset at a time: HFP for talkers and
+/// A2DP for listeners, so only that profile must be available.
+fn role_profile(sources: &BTreeSet<Address>, address: &Address) -> (ProfileFamily, &'static str) {
+	if sources.contains(address) {
+		(ProfileFamily::Hfp, HFP_UUID)
+	} else {
+		(ProfileFamily::A2dp, A2DP_SINK_UUID)
+	}
+}
+
+fn validate_role_profiles(
+	sources: &BTreeSet<Address>,
+	devices: &BTreeMap<Address, Device>,
+) -> Result<(), String> {
 	for (address, device) in devices {
-		for family in [ProfileFamily::Hfp, ProfileFamily::A2dp] {
-			if device.index(family).is_none() {
-				return Err(if family == ProfileFamily::A2dp {
-					format!(
-						"{address}: no available advertised A2DP profile; SCO/A2DP requires A2DP on every connected headset; enable an A2DP codec in WirePlumber's Bluetooth settings"
-					)
-				} else {
-					format!(
-						"{address}: no available advertised {} profile; SCO/A2DP requires both HFP and A2DP on every connected headset; check headset support and PipeWire Bluetooth configuration",
-						family.name()
-					)
-				});
-			}
+		let (family, _) = role_profile(sources, address);
+		if device.index(family).is_none() {
+			return Err(if family == ProfileFamily::A2dp {
+				format!(
+					"{address}: no available advertised A2DP profile; listeners need A2DP; enable an A2DP codec in WirePlumber's Bluetooth settings"
+				)
+			} else {
+				format!(
+					"{address}: no available advertised {} profile; talkers need HFP; check headset support and PipeWire Bluetooth configuration",
+					family.name()
+				)
+			});
 		}
 	}
 	Ok(())
