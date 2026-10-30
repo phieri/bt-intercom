@@ -162,8 +162,10 @@ Every headset starts in push-to-talk (PTT) using its play/pause button, which is
 matched automatically. The headsets must be connected when `run` starts, and
 startup fails if an input device cannot be matched uniquely.
 
-PTT listens only for `KEY_PLAYPAUSE` press and release events (code 164), not
-call/answer buttons or keyboard input. Hold the button to transmit; release to
+PTT listens only for play/pause press and release events: `KEY_PLAYPAUSE` (164)
+and the `KEY_PLAYCD` (200)/`KEY_PAUSECD` (201) codes BlueZ emits for AVRCP
+PLAY/PAUSE, not call/answer buttons or keyboard input. No MPRIS player is
+needed. Hold the button to transmit; release to
 mute. A double beep confirms that the microphone route is active.
 
 In **full-duplex**, press play/pause three times within one second to switch a

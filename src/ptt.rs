@@ -24,6 +24,12 @@ use crate::worker::Worker;
 pub(crate) const BEEP_WAV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ptt-beep.wav"));
 
 pub(crate) const KEY_PLAYPAUSE: u16 = 164;
+pub(crate) const KEY_PLAYCD: u16 = 200;
+pub(crate) const KEY_PAUSECD: u16 = 201;
+
+/// BlueZ maps AVRCP PLAY/PAUSE passthrough to KEY_PLAYCD/KEY_PAUSECD and never
+/// emits KEY_PLAYPAUSE; no MPRIS player is needed for these events.
+pub(crate) const PLAY_PAUSE_KEYS: [u16; 3] = [KEY_PLAYPAUSE, KEY_PLAYCD, KEY_PAUSECD];
 
 #[derive(Clone, Debug)]
 pub(crate) struct PttButton {
@@ -318,7 +324,7 @@ pub(crate) fn read_events<R: Read>(
 			);
 			return;
 		}
-		if event_type == 1 && event_key == KEY_PLAYPAUSE && (value == 0 || value == 1) {
+		if event_type == 1 && PLAY_PAUSE_KEYS.contains(&event_key) && (value == 0 || value == 1) {
 			let next = value == 1;
 			if next != pressed {
 				pressed = next;
