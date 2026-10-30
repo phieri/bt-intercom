@@ -225,10 +225,12 @@ Notes:
   overlapping groups may briefly leave listeners unable to receive.
 - A short absence of microphone ports during a switch does not cancel a held
   request; a genuine device disappearance does.
-- Some headsets (for example CMF Buds 2) bring up HFP and A2DP separately, so
-  a profile may be unavailable for a few seconds after connecting. The session
-  waits up to 30 seconds for both before failing, and the error names the
-  missing profile.
+- Half-duplex uses one profile per headset at a time, so only the profile for
+  its current role must be available: HFP for the talker, A2DP for listeners.
+  Some headsets (for example CMF Buds 2) bring up HFP and A2DP separately; the
+  session waits up to 30 seconds for the needed profile, asks BlueZ every 5
+  seconds to connect it (`bluetoothctl connect-profile`), and the error names
+  the missing profile.
 - `status` and the dashboard report HFP duplex readiness, so an idle A2DP
   listener appears playback-only.
 - Profiles stay in their last state on exit; owned links are always released.

@@ -561,14 +561,14 @@ mod tests {
 		router.coordinator.transition = Default::default();
 		server.objects.borrow_mut()[6]["info"]["params"]["EnumProfile"][0]["available"] =
 			json!("no");
-		assert!(!router.prepare_transport(&[address(A)].into()).unwrap());
+		assert!(!router.prepare_transport(&[address(B)].into()).unwrap());
 		router
 			.coordinator
 			.transition
 			.expire_preparation(Duration::from_secs(31));
 		assert!(
 			router
-				.prepare_transport(&[address(A)].into())
+				.prepare_transport(&[address(B)].into())
 				.unwrap_err()
 				.contains("no available advertised headset-head-unit")
 		);
@@ -576,14 +576,14 @@ mod tests {
 		router.coordinator.transition = Default::default();
 		server.objects.borrow_mut()[0]["info"]["params"]["EnumProfile"][1]["available"] =
 			json!("no");
-		assert!(!router.prepare_transport(&[address(A)].into()).unwrap());
+		assert!(!router.prepare_transport(&[address(B)].into()).unwrap());
 		router
 			.coordinator
 			.transition
 			.expire_preparation(Duration::from_secs(31));
 		assert!(
 			router
-				.prepare_transport(&[address(A)].into())
+				.prepare_transport(&[address(B)].into())
 				.unwrap_err()
 				.contains("no available advertised A2DP profile")
 		);
@@ -1050,6 +1050,10 @@ mod tests {
 			}
 			if self.fail_next.replace(false) {
 				return Err("simulated pw-cli failure".into());
+			}
+			if args[0] == "bluetoothctl" {
+				assert_eq!(args[1], "connect-profile");
+				return Ok(String::new());
 			}
 			if args.get(1) == Some(&"set-param") {
 				assert_eq!(args[0], "pw-cli");
