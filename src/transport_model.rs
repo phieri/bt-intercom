@@ -47,8 +47,7 @@ pub struct Device {
 	pub(crate) serial: String,
 	pub(crate) path: String,
 	profiles: BTreeMap<u64, String>,
-	a2dp_sbc: Option<u64>,
-	a2dp_codec_info: bool,
+	a2dp_best: Option<u64>,
 	pub(crate) current: Option<u64>,
 }
 
@@ -85,25 +84,15 @@ impl Device {
 				))
 			})
 			.collect();
-		let a2dp_sbc = profile_entries.iter().find_map(|profile| {
-			let name = profile["name"].as_str()?;
-			let is_sbc = name == "a2dp-sink-sbc"
-				|| (name == "a2dp-sink"
-					&& profile["description"].as_str().is_some_and(|description| {
-						description.to_ascii_lowercase().contains("codec sbc)")
-					}));
-			is_sbc.then(|| profile["index"].as_u64()).flatten()
-		});
-		let a2dp_codec_info = profile_entries.iter().any(|profile| {
-			let Some(name) = profile["name"].as_str() else {
-				return false;
-			};
-			ProfileFamily::A2dp.matches(name)
-				&& (name != "a2dp-sink"
-					|| profile["description"].as_str().is_some_and(|description| {
-						description.to_ascii_lowercase().contains("codec ")
-					}))
-		});
+		let a2dp_best = profile_entries
+			.iter()
+			.filter_map(|profile| {
+				let name = profile["name"].as_str()?;
+				ProfileFamily::A2dp.matches(name).then_some(())?;
+				Some((a2dp_rank(name), profile["index"].as_u64()?))
+			})
+			.min()
+			.map(|(_, index)| index);
 		let hfp_available = profiles
 			.values()
 			.any(|name| ProfileFamily::Hfp.matches(name));
@@ -122,19 +111,14 @@ impl Device {
 			serial,
 			path: path.into(),
 			profiles,
-			a2dp_sbc,
-			a2dp_codec_info,
+			a2dp_best,
 			current,
 		})
 	}
 
 	pub(crate) fn index(&self, family: ProfileFamily) -> Option<u64> {
 		if family == ProfileFamily::A2dp {
-			return self.a2dp_sbc.or_else(|| {
-				(!self.a2dp_codec_info)
-					.then(|| self.generic_index(family))
-					.flatten()
-			});
+			return self.a2dp_best;
 		}
 		self.generic_index(family)
 	}
@@ -155,8 +139,8 @@ impl Device {
 	}
 
 	pub(crate) fn is_profile(&self, family: ProfileFamily) -> bool {
-		if family == ProfileFamily::A2dp && self.a2dp_codec_info {
-			return self.a2dp_sbc.is_some() && self.a2dp_sbc == self.current;
+		if family == ProfileFamily::A2dp && self.a2dp_best.is_some() {
+			return self.a2dp_best == self.current;
 		}
 		self.current
 			.and_then(|index| self.profiles.get(&index))
@@ -165,6 +149,17 @@ impl Device {
 
 	pub(crate) fn same_identity(&self, other: &Self) -> bool {
 		self.id == other.id && self.serial == other.serial && self.path == other.path
+	}
+}
+
+/// Lower is preferred: SBC suits low-latency mono voice, then other codecs
+/// in order of quality, so headsets without SBC still work.
+fn a2dp_rank(name: &str) -> u8 {
+	match name.strip_prefix("a2dp-sink-").unwrap_or("sbc") {
+		"sbc" => 0,
+		"sbc_xq" => 1,
+		"aac" => 2,
+		_ => 3,
 	}
 }
 
@@ -244,18 +239,16 @@ mod tests {
 	}
 
 	#[test]
-	fn a2dp_does_not_choose_a_known_non_sbc_codec() {
+	fn a2dp_falls_back_to_other_codecs_without_sbc() {
 		let device = device(
-			json!([{
-				"index": 40,
-				"name": "a2dp-sink",
-				"description": "High Fidelity Playback (A2DP Sink, codec AAC)",
-				"available": "yes"
-			}]),
+			json!([
+				{"index": 40, "name": "a2dp-sink-ldac", "available": "yes"},
+				{"index": 41, "name": "a2dp-sink-aac", "available": "yes"}
+			]),
 			40,
 		);
 
-		assert_eq!(device.index(ProfileFamily::A2dp), None);
+		assert_eq!(device.index(ProfileFamily::A2dp), Some(41));
 		assert!(!device.is_profile(ProfileFamily::A2dp));
 	}
 }

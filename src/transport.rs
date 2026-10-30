@@ -431,7 +431,7 @@ impl Coordinator {
 			.ok_or_else(|| {
 				if family == ProfileFamily::A2dp {
 					format!(
-						"{address}: no advertised A2DP SBC profile; enable standard SBC in WirePlumber's Bluetooth codec settings"
+						"{address}: no advertised A2DP profile; enable an A2DP codec in WirePlumber's Bluetooth settings"
 					)
 				} else {
 					format!("{address}: {} profile is no longer available", family.name())
@@ -505,7 +505,7 @@ fn validate_mixed_devices(devices: &BTreeMap<Address, Device>) -> Result<(), Str
 			if device.index(family).is_none() {
 				return Err(if family == ProfileFamily::A2dp {
 					format!(
-						"{address}: no available advertised A2DP SBC profile; SCO/A2DP requires standard SBC on every connected headset; enable it in WirePlumber's Bluetooth codec settings"
+						"{address}: no available advertised A2DP profile; SCO/A2DP requires A2DP on every connected headset; enable an A2DP codec in WirePlumber's Bluetooth settings"
 					)
 				} else {
 					format!(

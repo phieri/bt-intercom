@@ -207,8 +207,8 @@ so it does **not** relieve a controller's synchronous-link limit.
 `sco-a2dp` keeps idle listeners on A2DP and switches granted talkers to HFP/HSP,
 up to `--sco-limit` per controller. Before granting another SCO link, it closes
 old routes, switches listeners to A2DP and waits for the profile changes to
-appear. Profile indices come from PipeWire, and SBC is preferred over SBC-XQ
-or other codecs for mono voice; WirePlumber still negotiates the actual
+appear. Profile indices come from PipeWire, and SBC is preferred, then SBC-XQ,
+AAC and other codecs when a headset lacks SBC; WirePlumber negotiates the actual
 bitrate. Only allowlisted devices are changed, and missing controller identity
 or required profiles produce errors instead of assumed capacity.
 
