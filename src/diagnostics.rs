@@ -128,7 +128,13 @@ fn yes_no(value: bool) -> &'static str {
 	if value { "yes" } else { "no" }
 }
 
-fn evaluate(inputs: &Inputs, mode: Mode, transport: Transport, sco_limit: usize) -> Vec<Finding> {
+fn evaluate(
+	inputs: &Inputs,
+	mode: Mode,
+	transport: Transport,
+	sco_limit: usize,
+	a2dp_limit: usize,
+) -> Vec<Finding> {
 	let mut findings = Vec::new();
 	match &inputs.controllers {
 		None => findings.push(Finding::warn(
@@ -264,14 +270,15 @@ fn evaluate(inputs: &Inputs, mode: Mode, transport: Transport, sco_limit: usize)
 
 	let known = inputs.controllers.as_ref().map(Vec::len);
 	let limit = sco_limit.max(1);
-	let per_adapter = headsets_per_controller(mode, transport, limit);
+	let a2dp = a2dp_limit.max(1);
+	let per_adapter = headsets_per_controller(mode, transport, limit, a2dp);
 	for (controller, addresses) in &per_controller {
 		if addresses.len() > per_adapter {
 			findings.push(Finding::warn(format!(
 				"{controller}: {} headsets exceed the {per_adapter} per adapter supported with these options ({}); add a USB Bluetooth adapter per further {per_adapter} headsets",
 				addresses.len(),
 				if per_adapter > limit {
-					format!("one A2DP listener plus --sco-limit {limit} SCO talker(s)")
+					format!("one talker plus --a2dp-limit {a2dp} A2DP listener(s)")
 				} else {
 					format!("--sco-limit {limit}; every headset keeps HFP/SCO open")
 				}
@@ -280,10 +287,10 @@ fn evaluate(inputs: &Inputs, mode: Mode, transport: Transport, sco_limit: usize)
 	}
 	if let Some(controllers) = known.filter(|count| *count > 0) {
 		findings.push(Finding::info(format!(
-			"Capacity (assumes one A2DP stream and --sco-limit {limit} SCO link(s) per adapter; not measured, verify on hardware): \
-			 half-duplex with sco-a2dp supports up to {} headsets on {controllers} adapter(s) (one A2DP listener plus {limit} SCO talker(s) per adapter); \
+			"Capacity (assumes --a2dp-limit {a2dp} A2DP stream(s) and --sco-limit {limit} SCO link(s) per adapter; not measured, verify on hardware): \
+			 half-duplex with sco-a2dp supports up to {} headsets on {controllers} adapter(s) (one talker plus {a2dp} A2DP listener(s) per adapter); \
 			 full-duplex or hfp supports up to {} headsets",
-			controllers * headsets_per_controller(Mode::HalfDuplex, Transport::ScoA2dp, limit),
+			controllers * headsets_per_controller(Mode::HalfDuplex, Transport::ScoA2dp, limit, a2dp),
 			controllers * limit,
 		)));
 		if usable < inputs.headsets.len() {
@@ -306,9 +313,16 @@ pub(crate) fn diagnose(
 	mode: Mode,
 	transport: Transport,
 	sco_limit: usize,
+	a2dp_limit: usize,
 	execute: impl FnMut(&[&str]) -> Result<String, String>,
 ) -> Vec<Finding> {
-	evaluate(&collect(allowed, execute), mode, transport, sco_limit)
+	evaluate(
+		&collect(allowed, execute),
+		mode,
+		transport,
+		sco_limit,
+		a2dp_limit,
+	)
 }
 
 pub(crate) fn log_findings(findings: &[Finding]) {
@@ -341,7 +355,7 @@ mod tests {
 
 	fn run(info: &'static str, transport: Transport) -> Vec<Finding> {
 		let allowed = BTreeSet::from([Address::parse(ONE).unwrap()]);
-		diagnose(&allowed, Mode::HalfDuplex, transport, 1, fake(info))
+		diagnose(&allowed, Mode::HalfDuplex, transport, 1, 1, fake(info))
 	}
 
 	#[test]
@@ -379,7 +393,7 @@ mod tests {
 	#[test]
 	fn unknown_device_and_missing_controller_are_findings_not_errors() {
 		let allowed = BTreeSet::from([Address::parse(ONE).unwrap()]);
-		let findings = diagnose(&allowed, Mode::HalfDuplex, Transport::ScoA2dp, 1, |_| {
+		let findings = diagnose(&allowed, Mode::HalfDuplex, Transport::ScoA2dp, 1, 1, |_| {
 			Err("boom".into())
 		});
 		assert!(findings.iter().filter(|f| f.level == Level::Warn).count() >= 3);

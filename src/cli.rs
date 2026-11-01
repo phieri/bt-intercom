@@ -82,6 +82,9 @@ pub(crate) enum CliCommand {
 		/// Assumed simultaneous SCO/eSCO links per controller (default: 1).
 		#[arg(long, default_value_t = 1, value_parser = parse_sco_limit)]
 		sco_limit: usize,
+		/// Assumed simultaneous A2DP streams per controller (default: 1).
+		#[arg(long, default_value_t = 1, value_parser = parse_a2dp_limit)]
+		a2dp_limit: usize,
 	},
 	/// Route configured headset microphones to one another, optionally showing the live dashboard.
 	Run {
@@ -97,6 +100,10 @@ pub(crate) enum CliCommand {
 		/// Increase only after verifying the controller, firmware, and headset capacity.
 		#[arg(long, default_value_t = 1, value_parser = parse_sco_limit)]
 		sco_limit: usize,
+		/// Maximum simultaneous A2DP streams per Bluetooth controller (default: 1).
+		/// Used by the sco-a2dp transport for listeners; increase only after verification.
+		#[arg(long, default_value_t = 1, value_parser = parse_a2dp_limit)]
+		a2dp_limit: usize,
 		/// Map a headset address to an evdev input path; repeat once per headset.
 		/// Defaults to matching every headset automatically. Use ADDRESS=auto, or a
 		/// lone `auto`, to request automatic discovery explicitly.
@@ -136,6 +143,16 @@ fn parse_sco_limit(value: &str) -> Result<usize, String> {
 		.map_err(|_| "--sco-limit must be a positive integer")?;
 	if limit == 0 {
 		return Err("--sco-limit must be at least 1".into());
+	}
+	Ok(limit)
+}
+
+fn parse_a2dp_limit(value: &str) -> Result<usize, String> {
+	let limit = value
+		.parse::<usize>()
+		.map_err(|_| "--a2dp-limit must be a positive integer")?;
+	if limit == 0 {
+		return Err("--a2dp-limit must be at least 1".into());
 	}
 	Ok(limit)
 }

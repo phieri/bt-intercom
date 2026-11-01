@@ -194,6 +194,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 				transmit::Mode::HalfDuplex,
 				transport::Transport::ScoA2dp,
 				1,
+				1,
 			) {
 				log::warn!("{warning}");
 			}
@@ -201,6 +202,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 		CliCommand::Diagnose {
 			addresses: devices,
 			sco_limit,
+			a2dp_limit,
 			passive,
 		} => {
 			let allowed = if devices.is_empty() {
@@ -236,6 +238,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 				transmit::Mode::HalfDuplex,
 				transport::Transport::ScoA2dp,
 				sco_limit,
+				a2dp_limit,
 				execute,
 			));
 			for finding in &findings {
@@ -251,6 +254,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 			interval,
 			no_connect,
 			sco_limit,
+			a2dp_limit,
 			ptt: buttons,
 			mode,
 			transport,
@@ -262,6 +266,7 @@ fn run(action: CliCommand) -> Result<(), String> {
 					interval,
 					connect: !no_connect,
 					sco_limit,
+					a2dp_limit,
 					buttons,
 					mode,
 					transport,
@@ -596,6 +601,15 @@ mod tests {
 			};
 			assert_eq!(sco_limit, 3);
 			assert!(Cli::try_parse_from(["bt-intercom", "run", "--sco-limit", "0"]).is_err());
+			let CliCommand::Run { a2dp_limit, .. } =
+				Cli::try_parse_from(["bt-intercom", "run", "--a2dp-limit", "2"])
+					.unwrap()
+					.command
+			else {
+				panic!("expected run");
+			};
+			assert_eq!(a2dp_limit, 2);
+			assert!(Cli::try_parse_from(["bt-intercom", "run", "--a2dp-limit", "0"]).is_err());
 			assert!(validate_controller_count(Mode::FullDuplex, 1, 1).is_err());
 			assert!(validate_controller_count(Mode::FullDuplex, 1, 2).is_ok());
 			assert!(validate_controller_count(Mode::FullDuplex, 2, 1).is_ok());
