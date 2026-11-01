@@ -15,7 +15,7 @@ use crate::transport_model::ProfileFamily;
 
 pub use crate::transport_model::{Device, Transport};
 mod profile_plan;
-use profile_plan::{ProfileAction, ProfilePlan, plan_profile_changes};
+use profile_plan::{ProfileAction, ProfilePlan, assign_profiles, plan_profile_changes};
 
 pub(crate) fn validate_controller_count(
 	mode: Mode,
@@ -39,9 +39,9 @@ pub(crate) fn validate_transport(mode: Mode, transport: Transport) -> Result<(),
 
 /// Headsets one controller can keep connected: BlueZ allows one active A2DP
 /// stream plus one SCO/eSCO link per controller unless overridden. Only
-/// `sco-a2dp` moves listeners off SCO onto A2DP streams. Whenever at least one
-/// headset talks, all others stream A2DP, so the worst case (a single talker)
-/// bounds the headsets to `a2dp_limit + 1`; more talkers only free A2DP slots.
+/// `sco-a2dp` moves listeners onto A2DP streams. Talkers and any listeners
+/// beyond the A2DP budget use SCO, so a controller serves `a2dp_limit +
+/// sco_limit` headsets however the talkers are distributed.
 pub(crate) fn headsets_per_controller(
 	mode: Mode,
 	transport: Transport,
@@ -50,7 +50,7 @@ pub(crate) fn headsets_per_controller(
 ) -> usize {
 	let sco_limit = sco_limit.max(1);
 	if mode == Mode::HalfDuplex && transport == Transport::ScoA2dp {
-		a2dp_limit.max(1) + 1
+		a2dp_limit.max(1) + sco_limit
 	} else {
 		sco_limit
 	}
@@ -68,7 +68,7 @@ pub(crate) fn validate_headset_capacity(
 	let capacity = headsets_per_controller(mode, transport, sco_limit, a2dp_limit);
 	if controllers > 0 && headsets > controllers.saturating_mul(capacity) {
 		return Err(format!(
-			"{headsets} headsets exceed the capacity of {controllers} Bluetooth controller(s): each supports {capacity} (one talker plus --a2dp-limit {a2dp_limit} A2DP listener(s) with --transport sco-a2dp, otherwise --sco-limit {sco_limit}). Add a USB Bluetooth adapter or remove headsets"
+			"{headsets} headsets exceed the capacity of {controllers} Bluetooth controller(s): each supports {capacity} (--a2dp-limit {a2dp_limit} A2DP stream(s) plus --sco-limit {sco_limit} SCO link(s) with --transport sco-a2dp, otherwise --sco-limit {sco_limit}). Add a USB Bluetooth adapter or remove headsets"
 		));
 	}
 	Ok(())
@@ -104,7 +104,7 @@ pub(crate) fn controller_warnings(
 		.filter(|(_, addresses)| addresses.len() > capacity)
 		.map(|(controller, addresses)| {
 			format!(
-				"{} headsets share {controller} ({}), exceeding its capacity of {capacity} (one talker plus --a2dp-limit {a2dp_limit} A2DP listener(s) with --transport sco-a2dp, otherwise --sco-limit {sco_limit}). Add a USB Bluetooth adapter or use --mode half-duplex --transport sco-a2dp with PTT.",
+				"{} headsets share {controller} ({}), exceeding its capacity of {capacity} (--a2dp-limit {a2dp_limit} A2DP stream(s) plus --sco-limit {sco_limit} SCO link(s) with --transport sco-a2dp, otherwise --sco-limit {sco_limit}). Add a USB Bluetooth adapter or use --mode half-duplex --transport sco-a2dp with PTT.",
 				addresses.len(),
 				addresses
 					.iter()
@@ -423,11 +423,12 @@ impl Coordinator {
 			return Ok(false);
 		}
 		validate_source_capacity(sources, &devices, self.sco_limit)?;
-		validate_listener_capacity(sources, &devices, self.a2dp_limit)?;
+		validate_listener_capacity(sources, &devices, self.sco_limit, self.a2dp_limit)?;
 		// Headsets such as CMF Buds 2 connect HFP and A2DP separately, so a
 		// profile can be unavailable until the second connection completes.
 		// Wait within the preparation deadline instead of failing immediately.
-		if let Err(reason) = validate_role_profiles(sources, &devices) {
+		let targets = assign_profiles(sources, &devices, self.a2dp_limit);
+		if let Err(reason) = validate_role_profiles(&targets, &devices) {
 			let refused = self.request_missing_profiles(sources, &devices, &snapshot, io.execute);
 			self.profile_wait = Some(match refused {
 				Some(refused) => format!("{reason}; {refused}"),
@@ -449,9 +450,9 @@ impl Coordinator {
 			return Ok(false);
 		}
 
-		match plan_profile_changes(sources, &snapshot, &devices) {
+		match plan_profile_changes(sources, &snapshot, &devices, self.a2dp_limit) {
 			ProfilePlan::Wait => Ok(false),
-			ProfilePlan::Ready => Ok(self.sources_ready(sources, &headsets, &devices)),
+			ProfilePlan::Ready => Ok(self.sources_ready(&targets, &headsets, &devices)),
 			ProfilePlan::Apply(actions) => {
 				for action in actions {
 					let ProfileAction::SelectProfile { address, family } = action;
@@ -482,13 +483,16 @@ impl Coordinator {
 		}
 		self.profile_nudged = Some(Instant::now());
 		let mut failures = Vec::new();
+		let targets = assign_profiles(sources, devices, self.a2dp_limit);
 		for (address, device) in devices {
-			let (family, uuid) = role_profile(sources, address);
+			let (family, uuid) = role_profile(&targets, address);
 			// Close before open: another listener must have released HFP first.
-			let closing = devices.iter().any(|(other, device)| {
+			let closing = devices.iter().any(|(other, other_device)| {
 				other != address
-					&& !sources.contains(other)
-					&& (!device.is_profile(ProfileFamily::A2dp) || snapshot.has_hfp_node(device.id))
+					&& other_device.controller == device.controller
+					&& targets[other] == ProfileFamily::A2dp
+					&& (!other_device.is_profile(ProfileFamily::A2dp)
+						|| snapshot.has_hfp_node(other_device.id))
 			});
 			if device.index(family).is_none()
 				&& !closing && let Err(error) = crate::bluez::checked(execute(&[
@@ -509,13 +513,13 @@ impl Coordinator {
 
 	fn sources_ready(
 		&self,
-		sources: &BTreeSet<Address>,
+		targets: &BTreeMap<Address, ProfileFamily>,
 		headsets: &BTreeMap<Address, crate::pipewire::Headset>,
 		devices: &BTreeMap<Address, Device>,
 	) -> bool {
 		devices.iter().all(|(address, device)| {
 			headsets.get(address).is_some_and(|headset| {
-				if sources.contains(address) {
+				if targets[address] == ProfileFamily::Hfp {
 					device.is_profile(ProfileFamily::Hfp) && headset.has_duplex_audio()
 				} else {
 					device.is_profile(ProfileFamily::A2dp) && !headset.sinks.is_empty()
@@ -553,7 +557,8 @@ impl Coordinator {
 		{
 			return Ok(());
 		}
-		validate_role_profiles(sources, &devices)?;
+		let targets = assign_profiles(sources, &devices, self.a2dp_limit);
+		validate_role_profiles(&targets, &devices)?;
 		validate_source_capacity(sources, &devices, self.sco_limit)?;
 		let current = devices
 			.get(address)
@@ -576,8 +581,9 @@ impl Coordinator {
 			return Ok(());
 		}
 		if family == ProfileFamily::Hfp
-			&& devices.iter().any(|(address, device)| {
-				!sources.contains(address)
+			&& devices.iter().any(|(other, device)| {
+				targets[other] == ProfileFamily::A2dp
+					&& device.controller == current.controller
 					&& (!device.is_profile(ProfileFamily::A2dp) || snapshot.has_hfp_node(device.id))
 			}) {
 			return Ok(());
@@ -609,29 +615,24 @@ impl Coordinator {
 	}
 }
 
-/// Every connected headset on a controller with an active talker streams
-/// A2DP, so their count must fit the controller's A2DP budget.
+/// Talkers use SCO, listeners fill the controller's A2DP budget and overflow
+/// onto the remaining SCO links, so every connected headset must fit one of them.
 fn validate_listener_capacity(
 	sources: &BTreeSet<Address>,
 	devices: &BTreeMap<Address, Device>,
+	sco_limit: usize,
 	a2dp_limit: usize,
 ) -> Result<(), String> {
-	if a2dp_limit == 0 {
-		return Ok(());
-	}
-	let talking: BTreeSet<_> = sources
-		.iter()
-		.filter_map(|address| devices.get(address))
-		.map(|device| device.controller.as_str())
-		.collect();
 	for (controller, addresses) in addresses_by_controller(devices.iter()) {
-		let listeners = addresses
+		let talkers = addresses
 			.iter()
-			.filter(|address| !sources.contains(**address))
+			.filter(|address| sources.contains(**address))
 			.count();
-		if talking.contains(controller) && listeners > a2dp_limit {
+		let listeners = addresses.len() - talkers;
+		let budget = a2dp_limit.max(1) + sco_limit.saturating_sub(talkers);
+		if listeners > budget {
 			return Err(format!(
-				"A2DP capacity conflict on {controller}: {listeners} listeners exceed configured --a2dp-limit {a2dp_limit} while a headset talks. Add a USB Bluetooth adapter, remove headsets from this controller, or raise --a2dp-limit only after verifying it"
+				"Listener capacity conflict on {controller}: {listeners} listeners exceed --a2dp-limit {a2dp_limit} A2DP stream(s) plus the SCO links left by {talkers} talker(s) (--sco-limit {sco_limit}). Add a USB Bluetooth adapter, remove headsets from this controller, or raise the limits only after verifying them"
 			));
 		}
 	}
@@ -663,10 +664,13 @@ fn validate_source_capacity(
 	Ok(())
 }
 
-/// Half-duplex uses one profile per headset at a time: HFP for talkers and
-/// A2DP for listeners, so only that profile must be available.
-fn role_profile(sources: &BTreeSet<Address>, address: &Address) -> (ProfileFamily, &'static str) {
-	if sources.contains(address) {
+/// Half-duplex uses one profile per headset at a time, chosen by
+/// `assign_profiles`, so only that profile must be available.
+fn role_profile(
+	targets: &BTreeMap<Address, ProfileFamily>,
+	address: &Address,
+) -> (ProfileFamily, &'static str) {
+	if targets[address] == ProfileFamily::Hfp {
 		(ProfileFamily::Hfp, HFP_UUID)
 	} else {
 		(ProfileFamily::A2dp, A2DP_SINK_UUID)
@@ -674,11 +678,11 @@ fn role_profile(sources: &BTreeSet<Address>, address: &Address) -> (ProfileFamil
 }
 
 fn validate_role_profiles(
-	sources: &BTreeSet<Address>,
+	targets: &BTreeMap<Address, ProfileFamily>,
 	devices: &BTreeMap<Address, Device>,
 ) -> Result<(), String> {
 	for (address, device) in devices {
-		let (family, _) = role_profile(sources, address);
+		let (family, _) = role_profile(targets, address);
 		if device.index(family).is_none() {
 			let offered = [ProfileFamily::A2dp, ProfileFamily::Hfp]
 				.map(|family| format!("{} [{}]", family.name(), device.variants(family).join(", ")))
@@ -691,7 +695,7 @@ fn validate_role_profiles(
 					)
 				} else {
 					format!(
-						"{address}: no available advertised {} profile; talkers need HFP; check headset support and PipeWire Bluetooth configuration",
+						"{address}: no available advertised {} profile; talkers and overflow listeners need HFP; check headset support and PipeWire Bluetooth configuration",
 						family.name()
 					)
 				}
@@ -836,13 +840,14 @@ mod tests {
 		let one = BTreeSet::from([addresses[0].clone()]);
 		let two = BTreeSet::from([addresses[0].clone(), addresses[1].clone()]);
 		assert!(
-			validate_listener_capacity(&one, &devices, 1)
+			validate_listener_capacity(&one, &devices, 1, 1)
 				.unwrap_err()
-				.contains("A2DP capacity conflict")
+				.contains("Listener capacity conflict")
 		);
-		assert!(validate_listener_capacity(&one, &devices, 2).is_ok());
-		assert!(validate_listener_capacity(&two, &devices, 1).is_ok());
-		assert!(validate_listener_capacity(&BTreeSet::new(), &devices, 1).is_ok());
+		assert!(validate_listener_capacity(&one, &devices, 1, 2).is_ok());
+		assert!(validate_listener_capacity(&two, &devices, 1, 1).is_ok());
+		assert!(validate_listener_capacity(&BTreeSet::new(), &devices, 1, 1).is_err());
+		assert!(validate_listener_capacity(&BTreeSet::new(), &devices, 1, 2).is_ok());
 	}
 
 	#[test]
@@ -898,7 +903,7 @@ mod tests {
 		let (snapshot, devices) =
 			snapshot_with_profiles(&[(source.as_str(), 41, false), (receiver.as_str(), 17, true)]);
 		assert_eq!(
-			plan_profile_changes(&[source.clone()].into(), &snapshot, &devices),
+			plan_profile_changes(&[source.clone()].into(), &snapshot, &devices, 1),
 			ProfilePlan::Apply(vec![ProfileAction::SelectProfile {
 				address: receiver,
 				family: ProfileFamily::A2dp,
@@ -914,17 +919,111 @@ mod tests {
 		let (snapshot, devices) =
 			snapshot_with_profiles(&[(source.as_str(), 41, false), (receiver.as_str(), 41, true)]);
 		assert_eq!(
-			plan_profile_changes(&sources, &snapshot, &devices),
+			plan_profile_changes(&sources, &snapshot, &devices, 1),
 			ProfilePlan::Wait
 		);
 
 		let (snapshot, devices) =
 			snapshot_with_profiles(&[(source.as_str(), 41, false), (receiver.as_str(), 41, false)]);
 		assert_eq!(
-			plan_profile_changes(&sources, &snapshot, &devices),
+			plan_profile_changes(&sources, &snapshot, &devices, 1),
 			ProfilePlan::Apply(vec![ProfileAction::SelectProfile {
 				address: source,
 				family: ProfileFamily::Hfp,
+			}])
+		);
+	}
+
+	#[test]
+	fn lingering_listener_hfp_blocks_only_its_own_controller() {
+		let (talker, same, other) = (
+			address("AA:BB:CC:DD:EE:01"),
+			address("AA:BB:CC:DD:EE:02"),
+			address("AA:BB:CC:DD:EE:03"),
+		);
+		let (snapshot, mut devices) = snapshot_with_profiles(&[
+			(talker.as_str(), 41, false),
+			(same.as_str(), 41, true),
+			(other.as_str(), 41, true),
+		]);
+		let sources = [talker.clone()].into();
+		assert_eq!(
+			plan_profile_changes(&sources, &snapshot, &devices, 1),
+			ProfilePlan::Wait
+		);
+
+		// Move the lingering listener's controller away from the talker's.
+		for address in [&same, &other] {
+			devices.get_mut(address).unwrap().controller = "hci1".into();
+		}
+		assert_eq!(
+			plan_profile_changes(&sources, &snapshot, &devices, 1),
+			ProfilePlan::Apply(vec![ProfileAction::SelectProfile {
+				address: talker,
+				family: ProfileFamily::Hfp,
+			}])
+		);
+	}
+
+	#[test]
+	fn listeners_beyond_the_a2dp_budget_use_hfp() {
+		let (talker, first, second) = (
+			address("AA:BB:CC:DD:EE:01"),
+			address("AA:BB:CC:DD:EE:02"),
+			address("AA:BB:CC:DD:EE:03"),
+		);
+		let (snapshot, mut devices) = snapshot_with_profiles(&[
+			(talker.as_str(), 41, false),
+			(first.as_str(), 41, false),
+			(second.as_str(), 41, false),
+		]);
+		devices.get_mut(&talker).unwrap().controller = "hci1".into();
+		let sources = [talker.clone()].into();
+
+		// The talker is on another adapter: one listener streams A2DP and the
+		// other one on the shared controller must take its single SCO link.
+		assert_eq!(
+			assign_profiles(&sources, &devices, 1),
+			BTreeMap::from([
+				(talker.clone(), ProfileFamily::Hfp),
+				(first.clone(), ProfileFamily::A2dp),
+				(second.clone(), ProfileFamily::Hfp),
+			])
+		);
+		assert_eq!(
+			plan_profile_changes(&sources, &snapshot, &devices, 1),
+			ProfilePlan::Apply(vec![
+				ProfileAction::SelectProfile {
+					address: talker,
+					family: ProfileFamily::Hfp,
+				},
+				ProfileAction::SelectProfile {
+					address: second,
+					family: ProfileFamily::Hfp,
+				},
+			])
+		);
+	}
+
+	#[test]
+	fn idle_startup_splits_a_shared_controller_between_a2dp_and_hfp() {
+		let (first, second) = (address("AA:BB:CC:DD:EE:01"), address("AA:BB:CC:DD:EE:02"));
+		// Both headsets start on HFP, as WirePlumber may leave them.
+		let (snapshot, devices) =
+			snapshot_with_profiles(&[(first.as_str(), 17, true), (second.as_str(), 17, true)]);
+		let none = BTreeSet::new();
+		assert_eq!(
+			assign_profiles(&none, &devices, 1),
+			BTreeMap::from([
+				(first.clone(), ProfileFamily::A2dp),
+				(second, ProfileFamily::Hfp),
+			])
+		);
+		assert_eq!(
+			plan_profile_changes(&none, &snapshot, &devices, 1),
+			ProfilePlan::Apply(vec![ProfileAction::SelectProfile {
+				address: first,
+				family: ProfileFamily::A2dp,
 			}])
 		);
 	}
