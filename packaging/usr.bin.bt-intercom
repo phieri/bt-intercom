@@ -9,6 +9,15 @@ profile bt-intercom /usr/bin/bt-intercom {
   /usr/bin/pw-cli ix,
   /usr/bin/pw-play ix,
 
+  # Interactive `pair` shares the caller's terminal with bluetoothctl.
+  /dev/tty rw,
+  /dev/pts/[0-9]* rw,
+  /etc/inputrc r,
+  @{HOME}/.inputrc r,
+  @{HOME}/.bluetoothctl_history rwk,
+  @{HOME}/.cache/bluetoothctl/ rw,
+  @{HOME}/.cache/bluetoothctl/** rwk,
+
   /run/dbus/system_bus_socket rw,
   dbus (send, receive) bus=system peer=(name=org.bluez),
   dbus (send, receive) bus=system peer=(name=org.freedesktop.DBus),
@@ -18,6 +27,7 @@ profile bt-intercom /usr/bin/bt-intercom {
   /usr/share/pipewire/** r,
   @{HOME}/.config/pipewire/** r,
   /run/user/[0-9]*/pipewire-0 rw,
+  /run/user/[0-9]*/pipewire-0-manager rw,
 
   @{HOME}/.config/ rw,
   @{HOME}/.config/bt-intercom/ rw,
