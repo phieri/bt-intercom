@@ -241,12 +241,13 @@ fn run(action: CliCommand) -> Result<(), String> {
 				a2dp_limit,
 				execute,
 			));
+			let palette = terminal_style::Palette::detect(io::stdout().is_terminal());
 			for finding in &findings {
-				let tag = match finding.level {
-					diagnostics::Level::Info => "ok  ",
-					diagnostics::Level::Warn => "warn",
+				let (tag, meaning) = match finding.level {
+					diagnostics::Level::Info => ("ok  ", terminal_style::Meaning::Success),
+					diagnostics::Level::Warn => ("warn", terminal_style::Meaning::Warning),
 				};
-				println!("[{tag}] {}", finding.text);
+				println!("[{}] {}", palette.paint(meaning, tag), finding.text);
 			}
 		}
 		CliCommand::Run {

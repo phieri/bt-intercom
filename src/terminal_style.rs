@@ -61,6 +61,22 @@ impl Palette {
 		}
 	}
 
+	/// Wraps `text` in ANSI escapes for plain-text output; unchanged without color.
+	pub fn paint(self, meaning: Meaning, text: &str) -> String {
+		let code = match self.color(meaning) {
+			Color::Reset => return text.to_string(),
+			Color::Rgb(r, g, b) => format!("38;2;{r};{g};{b}"),
+			Color::Indexed(index) => format!("38;5;{index}"),
+			Color::Red => "31".into(),
+			Color::Green => "32".into(),
+			Color::Yellow => "33".into(),
+			Color::Blue => "34".into(),
+			Color::Cyan => "36".into(),
+			_ => return text.to_string(),
+		};
+		format!("\x1b[{code}m{text}\x1b[0m")
+	}
+
 	pub fn style(self, meaning: Meaning) -> Style {
 		if self.level == ColorLevel::None {
 			Style::default()
@@ -142,6 +158,25 @@ mod tests {
 			Meaning::Selection,
 		] {
 			assert_eq!(palette.color(meaning), Color::Reset);
+			assert_eq!(palette.paint(meaning, "ok"), "ok");
 		}
+	}
+
+	#[test]
+	fn paint_wraps_text_in_ansi_escapes() {
+		let palette = Palette {
+			level: ColorLevel::Ansi16,
+		};
+		assert_eq!(
+			palette.paint(Meaning::Warning, "warn"),
+			"\x1b[33mwarn\x1b[0m"
+		);
+		let palette = Palette {
+			level: ColorLevel::TrueColor,
+		};
+		assert_eq!(
+			palette.paint(Meaning::Success, "ok"),
+			"\x1b[38;2;0;160;0mok\x1b[0m"
+		);
 	}
 }
