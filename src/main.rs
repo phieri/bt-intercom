@@ -329,7 +329,7 @@ fn main() {
 						);
 					} else {
 						eprintln!(
-							"hint: cannot reach PipeWire; check `systemctl --user status pipewire wireplumber`. Over SSH or at boot, enable lingering with `sudo loginctl enable-linger \"$USER\"` and set XDG_RUNTIME_DIR=/run/user/$(id -u)"
+							"hint: cannot reach PipeWire; check `systemctl --user status pipewire` and your session manager (`wireplumber` or `pipewire-media-session`). Over SSH or at boot, enable lingering with `sudo loginctl enable-linger \"$USER\"` and set XDG_RUNTIME_DIR=/run/user/$(id -u)"
 						);
 					}
 				}

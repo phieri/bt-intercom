@@ -147,12 +147,12 @@ fn evaluate(inputs: &Inputs, mode: Mode, transport: Transport, sco_limit: usize)
 				}
 				if !controller.audio_source {
 					notes.push(
-						"A2DP source not registered (is WirePlumber's Bluetooth monitor running?)",
+						"A2DP source not registered (is the PipeWire session manager's Bluetooth support running, e.g. WirePlumber or pipewire-media-session?)",
 					);
 				}
 				if !controller.hfp_gateway {
 					notes.push(
-						"HFP audio gateway not registered (is WirePlumber's Bluetooth monitor running?)",
+						"HFP audio gateway not registered (is the PipeWire session manager's Bluetooth support running, e.g. WirePlumber or pipewire-media-session?)",
 					);
 				}
 				let text = format!(
