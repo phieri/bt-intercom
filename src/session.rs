@@ -128,6 +128,7 @@ impl Session {
 				self.config.mode,
 				self.config.transport,
 				self.config.sco_limit,
+				self.config.a2dp_limit,
 			)?;
 		}
 		if let Ok(devices) = self.routing.router.transport_devices() {
@@ -136,6 +137,7 @@ impl Session {
 				self.config.mode,
 				self.config.transport,
 				self.config.sco_limit,
+				self.config.a2dp_limit,
 			)?;
 		}
 		if self.config.mode == Mode::FullDuplex
@@ -147,10 +149,11 @@ impl Session {
 				self.config.sco_limit,
 			)?;
 		}
-		if self.config.sco_limit > 1 {
+		if self.config.sco_limit > 1 || self.config.a2dp_limit > 1 {
 			log::warn!(
-				"Assuming up to {} simultaneous SCO/eSCO links per Bluetooth controller; verify the capacity of your hardware",
-				self.config.sco_limit
+				"Assuming up to {} SCO/eSCO link(s) and {} A2DP stream(s) per Bluetooth controller; verify the capacity of your hardware",
+				self.config.sco_limit,
+				self.config.a2dp_limit
 			);
 		}
 		if self.config.connect
@@ -167,6 +170,7 @@ impl Session {
 			self.config.mode,
 			self.config.transport,
 			self.config.sco_limit,
+			self.config.a2dp_limit,
 			|args| command_cancellable(args, COMMAND_TIMEOUT, Some(&self.stopped)),
 		);
 		crate::diagnostics::log_findings(&findings);
@@ -394,6 +398,7 @@ mod tests {
 			mode: Mode::HalfDuplex,
 			transport: Transport::Hfp,
 			sco_limit: 1,
+			a2dp_limit: 1,
 			dashboard: false,
 			explicit_network: true,
 			groups_path: network_path.with_extension("groups"),

@@ -244,6 +244,10 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 		self.coordinator.set_sco_limit(limit);
 	}
 
+	pub fn set_a2dp_limit(&mut self, limit: usize) {
+		self.coordinator.set_a2dp_limit(limit);
+	}
+
 	pub fn transport_devices(&mut self) -> Result<BTreeMap<Address, transport::Device>, String> {
 		let snapshot = self.snapshot()?;
 		snapshot.transport_devices(&self.allowed)

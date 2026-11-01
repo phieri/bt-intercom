@@ -49,6 +49,7 @@ impl RoutingCoordinator {
 		let mut router = Router::with_executor(config.allowed.clone(), execute);
 		router.set_transport(config.transport);
 		router.set_sco_limit(config.sco_limit);
+		router.set_a2dp_limit(config.a2dp_limit);
 		Self {
 			router,
 			headsets: BTreeMap::new(),
@@ -141,9 +142,13 @@ impl RoutingCoordinator {
 		config: &RunConfig,
 		devices: &BTreeMap<Address, transport::Device>,
 	) {
-		for warning in
-			transport::controller_warnings(devices, config.mode, config.transport, config.sco_limit)
-		{
+		for warning in transport::controller_warnings(
+			devices,
+			config.mode,
+			config.transport,
+			config.sco_limit,
+			config.a2dp_limit,
+		) {
 			if self.reported_controller_warnings.insert(warning.clone()) {
 				log::warn!("{warning}");
 			}

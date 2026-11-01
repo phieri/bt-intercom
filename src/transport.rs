@@ -38,12 +38,19 @@ pub(crate) fn validate_transport(mode: Mode, transport: Transport) -> Result<(),
 }
 
 /// Headsets one controller can keep connected: BlueZ allows one active A2DP
-/// stream plus `sco_limit` SCO/eSCO links per controller. Only `sco-a2dp`
-/// moves listeners off SCO onto that A2DP stream.
-pub(crate) fn headsets_per_controller(mode: Mode, transport: Transport, sco_limit: usize) -> usize {
+/// stream plus one SCO/eSCO link per controller unless overridden. Only
+/// `sco-a2dp` moves listeners off SCO onto A2DP streams. Whenever at least one
+/// headset talks, all others stream A2DP, so the worst case (a single talker)
+/// bounds the headsets to `a2dp_limit + 1`; more talkers only free A2DP slots.
+pub(crate) fn headsets_per_controller(
+	mode: Mode,
+	transport: Transport,
+	sco_limit: usize,
+	a2dp_limit: usize,
+) -> usize {
 	let sco_limit = sco_limit.max(1);
 	if mode == Mode::HalfDuplex && transport == Transport::ScoA2dp {
-		sco_limit + 1
+		a2dp_limit.max(1) + 1
 	} else {
 		sco_limit
 	}
@@ -56,11 +63,12 @@ pub(crate) fn validate_headset_capacity(
 	mode: Mode,
 	transport: Transport,
 	sco_limit: usize,
+	a2dp_limit: usize,
 ) -> Result<(), String> {
-	let capacity = headsets_per_controller(mode, transport, sco_limit);
+	let capacity = headsets_per_controller(mode, transport, sco_limit, a2dp_limit);
 	if controllers > 0 && headsets > controllers.saturating_mul(capacity) {
 		return Err(format!(
-			"{headsets} headsets exceed the capacity of {controllers} Bluetooth controller(s): each supports {capacity} (one A2DP stream plus --sco-limit {sco_limit} SCO/eSCO link(s) with --transport sco-a2dp, otherwise --sco-limit). Add a USB Bluetooth adapter or remove headsets"
+			"{headsets} headsets exceed the capacity of {controllers} Bluetooth controller(s): each supports {capacity} (one talker plus --a2dp-limit {a2dp_limit} A2DP listener(s) with --transport sco-a2dp, otherwise --sco-limit {sco_limit}). Add a USB Bluetooth adapter or remove headsets"
 		));
 	}
 	Ok(())
@@ -72,8 +80,9 @@ pub(crate) fn validate_controller_headsets(
 	mode: Mode,
 	transport: Transport,
 	sco_limit: usize,
+	a2dp_limit: usize,
 ) -> Result<(), String> {
-	match controller_warnings(devices, mode, transport, sco_limit)
+	match controller_warnings(devices, mode, transport, sco_limit, a2dp_limit)
 		.into_iter()
 		.next()
 	{
@@ -87,14 +96,15 @@ pub(crate) fn controller_warnings(
 	mode: Mode,
 	transport: Transport,
 	sco_limit: usize,
+	a2dp_limit: usize,
 ) -> Vec<String> {
-	let capacity = headsets_per_controller(mode, transport, sco_limit);
+	let capacity = headsets_per_controller(mode, transport, sco_limit, a2dp_limit);
 	addresses_by_controller(devices.iter())
 		.into_iter()
 		.filter(|(_, addresses)| addresses.len() > capacity)
 		.map(|(controller, addresses)| {
 			format!(
-				"{} headsets share {controller} ({}), exceeding its capacity of {capacity} (one A2DP stream plus --sco-limit {sco_limit} SCO/eSCO link(s) with --transport sco-a2dp, otherwise --sco-limit). Add a USB Bluetooth adapter or use --mode half-duplex --transport sco-a2dp with PTT.",
+				"{} headsets share {controller} ({}), exceeding its capacity of {capacity} (one talker plus --a2dp-limit {a2dp_limit} A2DP listener(s) with --transport sco-a2dp, otherwise --sco-limit {sco_limit}). Add a USB Bluetooth adapter or use --mode half-duplex --transport sco-a2dp with PTT.",
 				addresses.len(),
 				addresses
 					.iter()
@@ -260,6 +270,7 @@ const HFP_UUID: &str = "0000111e-0000-1000-8000-00805f9b34fb";
 pub(crate) struct Coordinator {
 	pub(crate) transport: Transport,
 	sco_limit: usize,
+	a2dp_limit: usize,
 	pub(crate) transition: TransitionState,
 	disconnects: BTreeSet<Address>,
 	profile_wait: Option<String>,
@@ -271,6 +282,7 @@ impl Default for Coordinator {
 		Self {
 			transport: Transport::default(),
 			sco_limit: 1,
+			a2dp_limit: 1,
 			transition: TransitionState::default(),
 			disconnects: BTreeSet::new(),
 			profile_wait: None,
@@ -295,6 +307,10 @@ impl Coordinator {
 
 	pub(crate) fn set_sco_limit(&mut self, limit: usize) {
 		self.sco_limit = limit;
+	}
+
+	pub(crate) fn set_a2dp_limit(&mut self, limit: usize) {
+		self.a2dp_limit = limit;
 	}
 
 	pub(crate) fn take_disconnects(&mut self) -> BTreeSet<Address> {
@@ -407,6 +423,7 @@ impl Coordinator {
 			return Ok(false);
 		}
 		validate_source_capacity(sources, &devices, self.sco_limit)?;
+		validate_listener_capacity(sources, &devices, self.a2dp_limit)?;
 		// Headsets such as CMF Buds 2 connect HFP and A2DP separately, so a
 		// profile can be unavailable until the second connection completes.
 		// Wait within the preparation deadline instead of failing immediately.
@@ -592,6 +609,35 @@ impl Coordinator {
 	}
 }
 
+/// Every connected headset on a controller with an active talker streams
+/// A2DP, so their count must fit the controller's A2DP budget.
+fn validate_listener_capacity(
+	sources: &BTreeSet<Address>,
+	devices: &BTreeMap<Address, Device>,
+	a2dp_limit: usize,
+) -> Result<(), String> {
+	if a2dp_limit == 0 {
+		return Ok(());
+	}
+	let talking: BTreeSet<_> = sources
+		.iter()
+		.filter_map(|address| devices.get(address))
+		.map(|device| device.controller.as_str())
+		.collect();
+	for (controller, addresses) in addresses_by_controller(devices.iter()) {
+		let listeners = addresses
+			.iter()
+			.filter(|address| !sources.contains(**address))
+			.count();
+		if talking.contains(controller) && listeners > a2dp_limit {
+			return Err(format!(
+				"A2DP capacity conflict on {controller}: {listeners} listeners exceed configured --a2dp-limit {a2dp_limit} while a headset talks. Add a USB Bluetooth adapter, remove headsets from this controller, or raise --a2dp-limit only after verifying it"
+			));
+		}
+	}
+	Ok(())
+}
+
 fn validate_source_capacity(
 	sources: &BTreeSet<Address>,
 	devices: &BTreeMap<Address, Device>,
@@ -741,18 +787,18 @@ mod tests {
 			})
 			.collect::<BTreeMap<_, _>>();
 		let two = BTreeMap::from_iter(devices.iter().take(2).map(|(a, d)| (a.clone(), d.clone())));
-		let warn = |devices, mode, transport| controller_warnings(devices, mode, transport, 1);
+		let warn = |devices, mode, transport| controller_warnings(devices, mode, transport, 1, 1);
 
 		assert_eq!(
-			headsets_per_controller(Mode::HalfDuplex, Transport::ScoA2dp, 1),
+			headsets_per_controller(Mode::HalfDuplex, Transport::ScoA2dp, 1, 1),
 			2
 		);
 		assert_eq!(
-			headsets_per_controller(Mode::HalfDuplex, Transport::Hfp, 1),
+			headsets_per_controller(Mode::HalfDuplex, Transport::Hfp, 1, 1),
 			1
 		);
 		assert_eq!(
-			headsets_per_controller(Mode::FullDuplex, Transport::Hfp, 1),
+			headsets_per_controller(Mode::FullDuplex, Transport::Hfp, 1, 1),
 			1
 		);
 		assert!(warn(&two, Mode::HalfDuplex, Transport::ScoA2dp).is_empty());
@@ -764,9 +810,39 @@ mod tests {
 	}
 
 	#[test]
+	fn listeners_must_fit_a2dp_limit_while_a_headset_talks() {
+		let addresses = [
+			"AA:BB:CC:DD:EE:01",
+			"AA:BB:CC:DD:EE:02",
+			"AA:BB:CC:DD:EE:03",
+		]
+		.map(address);
+		let devices = addresses
+			.iter()
+			.enumerate()
+			.map(|(index, address)| {
+				(
+					address.clone(),
+					device_on_controller(index as u64, address, "hci0"),
+				)
+			})
+			.collect::<BTreeMap<_, _>>();
+		let one = BTreeSet::from([addresses[0].clone()]);
+		let two = BTreeSet::from([addresses[0].clone(), addresses[1].clone()]);
+		assert!(
+			validate_listener_capacity(&one, &devices, 1)
+				.unwrap_err()
+				.contains("A2DP capacity conflict")
+		);
+		assert!(validate_listener_capacity(&one, &devices, 2).is_ok());
+		assert!(validate_listener_capacity(&two, &devices, 1).is_ok());
+		assert!(validate_listener_capacity(&BTreeSet::new(), &devices, 1).is_ok());
+	}
+
+	#[test]
 	fn startup_capacity_rejects_more_headsets_than_controllers_support() {
 		let check = |headsets, controllers, mode, transport| {
-			validate_headset_capacity(headsets, controllers, mode, transport, 1)
+			validate_headset_capacity(headsets, controllers, mode, transport, 1, 1)
 		};
 		assert!(check(2, 1, Mode::HalfDuplex, Transport::ScoA2dp).is_ok());
 		assert!(check(3, 1, Mode::HalfDuplex, Transport::ScoA2dp).is_err());
@@ -774,6 +850,10 @@ mod tests {
 		assert!(check(2, 1, Mode::HalfDuplex, Transport::Hfp).is_err());
 		assert!(check(2, 2, Mode::FullDuplex, Transport::Hfp).is_ok());
 		assert!(check(9, 0, Mode::HalfDuplex, Transport::ScoA2dp).is_ok());
+		assert_eq!(
+			headsets_per_controller(Mode::HalfDuplex, Transport::ScoA2dp, 1, 3),
+			4
+		);
 	}
 
 	#[test]
