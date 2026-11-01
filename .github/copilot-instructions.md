@@ -17,18 +17,33 @@ When a change affects those topics, update the README as well.
 
 ## Project structure
 
-- `src/main.rs`: CLI, orchestration, reconnect loop, pairing, and PTT.
+- `src/main.rs`: entry point and command dispatch; `src/cli.rs`: Clap
+  definitions and parsers; `src/runtime_config.rs`: read-only resolution of
+  `run` options before persistence or workers start.
+- `src/session.rs`, `src/session/`: session lifecycle, event loop, route
+  coordination (`routing.rs`) and bounded reconnection (`reconnect.rs`).
 - `src/process.rs`: bounded subprocess execution, cancellation, and process
-  cleanup.
-- `src/bluez.rs`: parsing of `bluetoothctl` output shared by the CLI and
-  dashboard.
-- `src/network.rs`, `src/groups.rs`: persistence and validation for the headset
-  network and talk groups.
-- `src/router.rs`: PipeWire discovery and managed audio links.
-- `src/transmit.rs`: transmit state and half-duplex floor/queue behavior.
-- `src/dashboard.rs`, `src/tui.rs`, `src/terminal_style.rs`: terminal status
-  views and styling.
+  cleanup; `src/worker.rs`: owned workers with cancellation and joined teardown.
+- `src/bluez.rs`: parsing of `bluetoothctl` output shared by the CLI, dashboard
+  and panel; `src/device_status.rs`: shared status sampling.
+- `src/network.rs`, `src/groups.rs`, `src/group_editor.rs`: persistence and
+  validation for the headset network and talk groups.
+- `src/pipewire.rs`: typed PipeWire topology; `src/route_policy.rs`: pure route
+  and talk-group selection; `src/router.rs`: discovery and owned managed links;
+  `src/routing_status.rs`: metrics from observed links.
+- `src/transmit.rs`, `src/transmit/floor.rs`: transmit state and half-duplex
+  floor/queue behavior, including per-controller SCO limits.
+- `src/transport.rs`, `src/transport_model.rs`, `src/transport/profile_plan.rs`:
+  `sco-a2dp` profile transitions (pure planning, then verified mutation).
+- `src/ptt.rs`, `src/ptt_discovery.rs`: evdev PTT readers and automatic
+  matching of each headset's play/pause device.
+- `src/diagnostics.rs`, `src/diagnostics/probe.rs`: passive and active hardware
+  diagnosis (`diagnose`).
+- `src/dashboard.rs`, `src/tui.rs`, `src/tui/panel.rs`, `src/terminal_style.rs`:
+  terminal status views, control panel and styling.
 - `src/atomic_file.rs`: atomic replacement for persisted files.
+- `man/`, `packaging/`, `examples/`: man page, AppArmor profile and systemd
+  units. Update the man page alongside README changes to CLI behavior.
 
 Unit tests are colocated with implementation in `#[cfg(test)]` modules.
 Prefer the existing synthetic PipeWire fixtures and injected command executors
@@ -48,6 +63,9 @@ over requiring Bluetooth hardware or a live PipeWire session.
   job-control constraints.
 - PTT is driven by mapped Linux evdev devices and `KEY_PLAYPAUSE`, `KEY_PLAYCD` and
   `KEY_PAUSECD` (BlueZ AVRCP) press/release events only. Keyboard input and headset call/answer keys must not activate it.
+- With `--transport sco-a2dp`, change profiles only per headset after
+  re-verifying its PipeWire identity, respect per-controller `--sco-limit` and
+  `--a2dp-limit`, and never assume capacity when controller identity is missing.
 - Keep talk-group routing and half-duplex floor behavior isolated by group.
   With no configured groups, retain the documented all-to-all behavior.
 - Use `crate::atomic_file::write` when replacing persisted configuration files.

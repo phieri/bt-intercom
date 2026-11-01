@@ -31,6 +31,19 @@ the last address clears the saved network.
 .BI status " ADDRESS" ...
 Show each headset's Bluetooth name, duplex audio availability, and port counts.
 .TP
+.BI diagnose " [--passive] [ADDRESS ...]"
+Test adapters and headsets on real hardware. Connects each headset, switches it
+to A2DP and HFP, and measures how many simultaneous SCO links each controller
+sustains, then summarizes BlueZ and PipeWire state (pairing, trust, controller
+roles, codecs, capacity bounds). Uses the saved network when no address is
+given. Stop any running intercom first: audio is interrupted, profile changes
+are unsaved, and every headset ends on A2DP.
+.B \-\-passive
+only inspects state without connecting or switching profiles. Also accepts
+.B \-\-sco\-limit
+and
+.BR \-\-a2dp\-limit .
+.TP
 .BI run " [ADDRESS ...]"
 Run the intercom. Explicit addresses are saved for future runs; if omitted, the
 previously saved network is restored.
@@ -58,6 +71,13 @@ Set the maximum simultaneous SCO/eSCO links per Bluetooth controller (default:
 The HFP transport leaves profiles unchanged and warns if observed
 headset usage exceeds the budget. Increase N only after verifying the adapter,
 firmware, and headset capacity.
+.TP
+.BI run " --a2dp-limit N"
+Set the assumed simultaneous A2DP streams per Bluetooth controller (default: 1).
+In SCO/A2DP transport, listeners stream A2DP up to this limit; further listeners
+on the same controller keep HFP/SCO and receive only. A controller therefore
+supports --a2dp-limit plus --sco-limit headsets. Startup is rejected when the
+network exceeds this. Increase N only after verifying the hardware.
 .TP
 .B run --no-connect
 Do not connect headsets at startup or retry disconnected headsets every
@@ -95,7 +115,9 @@ Override the default automatic matching of play/pause input devices by mapping
 a headset to its Linux evdev push-to-talk input. Repeat once for every configured
 headset. Only the headset's play/pause key press and release events are used.
 The headset must be connected when run starts; startup fails if its input device
-cannot be matched uniquely.
+cannot be matched uniquely. Use ADDRESS=auto, or a lone auto, to request
+automatic matching explicitly. Only KEY_PLAYPAUSE, KEY_PLAYCD, and KEY_PAUSECD
+are recognised.
 .PP
 Hold play/pause to talk in PTT mode; release to mute. In half-duplex, requests
 wait in first-in, first-out order while another headset transmits. Keep holding
