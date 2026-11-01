@@ -253,6 +253,12 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 		snapshot.transport_devices(&self.allowed)
 	}
 
+	/// Programs other than bt-intercom linked to each allowlisted headset.
+	pub fn foreign_users(&mut self) -> Result<BTreeMap<Address, BTreeSet<String>>, String> {
+		let snapshot = self.snapshot()?;
+		Ok(snapshot.foreign_users(&self.allowed))
+	}
+
 	/// Consume observed allowlisted device disappearances, even after reconnect.
 	pub fn take_transport_disconnects(&mut self) -> BTreeSet<Address> {
 		self.coordinator.take_disconnects()

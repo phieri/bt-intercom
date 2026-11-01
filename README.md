@@ -247,7 +247,11 @@ headset offers nothing else. WirePlumber negotiates the actual bitrate. The
 choice is made per headset, so mixed headsets each use their own best match. `bt-intercom
 diagnose` lists the codecs each connected headset offers and warns when BlueZ
 reports a profile that PipeWire hides, usually because WirePlumber's
-`bluez5.codecs` or `bluez5.roles` exclude it. Only allowlisted devices are changed, and missing controller identity
+`bluez5.codecs` or `bluez5.roles` exclude it. Headsets often bring up HFP and
+A2DP separately, so startup diagnosis waits up to about 6 seconds and asks BlueZ
+to connect a connected headset's listed but missing profile before warning.
+Diagnosis also warns when another program's PipeWire stream is linked to an
+allowlisted headset (links not created by bt-intercom). Only allowlisted devices are changed, and missing controller identity
 or required profiles produce errors instead of assumed capacity.
 
 ```sh

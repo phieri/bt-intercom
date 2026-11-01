@@ -165,7 +165,7 @@ impl Session {
 			);
 		}
 		// Advisory only; never blocks startup.
-		let findings = crate::diagnostics::diagnose(
+		let findings = crate::diagnostics::diagnose_startup(
 			&self.config.allowed,
 			self.config.mode,
 			self.config.transport,

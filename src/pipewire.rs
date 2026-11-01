@@ -54,6 +54,7 @@ struct Node {
 	device: Option<u64>,
 	class: Option<String>,
 	profile: Option<String>,
+	label: Option<String>,
 }
 
 #[derive(Debug)]
@@ -72,6 +73,7 @@ pub(crate) struct Snapshot {
 	nodes: BTreeMap<u64, Node>,
 	ports: Vec<AudioPort>,
 	links: BTreeSet<Link>,
+	unowned_links: BTreeSet<Link>,
 	owned_links: BTreeMap<String, BTreeSet<Link>>,
 }
 
@@ -102,6 +104,7 @@ impl Snapshot {
 			nodes: BTreeMap::new(),
 			ports: Vec::new(),
 			links: BTreeSet::new(),
+			unowned_links: BTreeSet::new(),
 			owned_links: BTreeMap::new(),
 		};
 		let mut ids = BTreeSet::new();
@@ -141,6 +144,9 @@ impl Snapshot {
 							device: id(&props["device.id"]),
 							class: text(props, "media.class"),
 							profile: text(props, "api.bluez5.profile"),
+							label: text(props, "application.name")
+								.or_else(|| text(props, "node.description"))
+								.or_else(|| text(props, "node.name")),
 						},
 					);
 				}
@@ -166,6 +172,8 @@ impl Snapshot {
 						}
 						if let Some(owner) = text(props, OWNER_PROPERTY) {
 							snapshot.owned_links.entry(owner).or_default().insert(link);
+						} else if object_id.is_some() {
+							snapshot.unowned_links.insert(link);
 						}
 					}
 				}
@@ -274,6 +282,39 @@ impl Snapshot {
 		headsets
 	}
 
+	/// Other programs' audio nodes linked to an allowlisted headset's nodes.
+	/// Links created by any bt-intercom instance carry an owner and are skipped.
+	pub(crate) fn foreign_users(
+		&self,
+		allowed: &BTreeSet<Address>,
+	) -> BTreeMap<Address, BTreeSet<String>> {
+		let node_of = |port: u64| self.ports.iter().find(|p| p.id == port).map(|p| p.node);
+		let headset_of = |node: u64| {
+			let device = self.nodes.get(&node)?.device?;
+			let address = &self.devices.get(&device)?.address;
+			allowed.contains(address).then(|| address.clone())
+		};
+		let mut users: BTreeMap<Address, BTreeSet<String>> = BTreeMap::new();
+		for &(output, input) in &self.unowned_links {
+			let (Some(from), Some(to)) = (node_of(output), node_of(input)) else {
+				continue;
+			};
+			for (headset, peer) in [(from, to), (to, from)] {
+				if let Some(address) = headset_of(headset)
+					&& headset_of(peer).is_none()
+				{
+					let label = self
+						.nodes
+						.get(&peer)
+						.and_then(|node| node.label.clone())
+						.unwrap_or_else(|| format!("PipeWire node {peer}"));
+					users.entry(address).or_default().insert(label);
+				}
+			}
+		}
+		users
+	}
+
 	pub(crate) fn owned_links(&self, owner: &str) -> BTreeSet<Link> {
 		self.owned_links.get(owner).cloned().unwrap_or_default()
 	}
@@ -320,6 +361,32 @@ mod tests {
 		assert_eq!(links, [(12, 99)].into());
 		assert_eq!(snapshot.owned_links("owner"), links);
 		assert!(snapshot.owned_links("other").is_empty());
+	}
+
+	#[test]
+	fn foreign_users_exclude_owned_links() {
+		let mut value = fixture();
+		let allowed = [Address::parse(ADDRESS).unwrap()].into();
+		let items = value.as_array_mut().unwrap();
+		items.push(
+			json!({"id":30,"type":"PipeWire:Interface:Node","info":{"props":{
+			"application.name":"Music Player","media.class":"Stream/Output/Audio"}}}),
+		);
+		items.push(
+			json!({"id":31,"type":"PipeWire:Interface:Port","info":{"props":{
+			"node.id":30,"port.direction":"in"}}}),
+		);
+		items.push(json!({"id":32,"type":"PipeWire:Interface:Link","info":{
+			"output-port-id":12,"input-port-id":31,"props":{}}}));
+		let snapshot = Snapshot::parse(&Value::Array(items.clone())).unwrap();
+		let users = snapshot.foreign_users(&allowed);
+		assert_eq!(users[ADDRESS], ["Music Player".to_string()].into());
+		assert!(
+			Snapshot::parse(&fixture())
+				.unwrap()
+				.foreign_users(&allowed)
+				.is_empty()
+		);
 	}
 
 	#[test]
