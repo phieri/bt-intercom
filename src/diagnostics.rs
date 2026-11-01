@@ -13,6 +13,7 @@ use crate::bluez::{self, Address};
 use crate::router::Router;
 use crate::transmit::Mode;
 use crate::transport::{Device, Transport, headsets_per_controller};
+use crate::transport_model::ProfileFamily;
 
 mod probe;
 pub(crate) use probe::{Timing, probe};
@@ -272,12 +273,22 @@ fn evaluate(
 				.or_default()
 				.push(&headset.address);
 		}
+		let variants = |family| {
+			headset
+				.pipewire
+				.as_ref()
+				.map(|device| device.variants(family))
+				.filter(|names| !names.is_empty())
+				.map_or(String::new(), |names| format!(" [{}]", names.join(", ")))
+		};
 		let mut line = format!(
-			"{}: {connected}{}; HFP {}, A2DP {} (from {source})",
+			"{}: {connected}{}; HFP {}{}, A2DP {}{} (from {source})",
 			headset.label,
 			controller.map_or(String::new(), |name| format!(" on {name}")),
 			yes_no(hfp),
+			variants(ProfileFamily::Hfp),
 			yes_no(a2dp),
+			variants(ProfileFamily::A2dp),
 		);
 		let supported = match transport {
 			Transport::ScoA2dp => hfp && a2dp,
@@ -292,6 +303,26 @@ fn evaluate(
 				_ if hfp => "profile support incomplete",
 				_ => "no HFP: cannot talk or use --transport hfp",
 			});
+		}
+		// BlueZ lists the UUID, yet PipeWire offers no profile: the session
+		// manager's configuration, not the headset, is hiding it.
+		if headset.pipewire.is_some() {
+			let needs_a2dp = transport == Transport::ScoA2dp;
+			let hidden = [
+				(hfp, hfp_uuid, "HFP", true),
+				(a2dp, a2dp_uuid, "A2DP", needs_a2dp),
+			]
+			.into_iter()
+			.filter(|(offered, uuid, _, needed)| !offered && *uuid && *needed)
+			.map(|(_, _, name, _)| name)
+			.collect::<Vec<_>>();
+			if !hidden.is_empty() {
+				line.push_str(&format!(
+					"; the headset supports {} but PipeWire offers no such profile: check `bluez5.codecs`/`bluez5.roles` in WirePlumber's Bluetooth monitor settings and that the headset shares a codec with them",
+					hidden.join(" and ")
+				));
+				problems.push("profile hidden by session manager");
+			}
 		}
 		if connected != "connected" && headset.pipewire.is_none() {
 			line.push_str("; PipeWire profiles are known only once connected");
@@ -392,6 +423,57 @@ mod tests {
 	fn run(info: &'static str, transport: Transport) -> Vec<Finding> {
 		let allowed = BTreeSet::from([Address::parse(ONE).unwrap()]);
 		diagnose(&allowed, Mode::HalfDuplex, transport, 1, 1, fake(info))
+	}
+
+	fn run_with_profiles(profiles: &str, transport: Transport) -> Vec<Finding> {
+		const INFO: &str = "Name: Buds\nPaired: yes\nTrusted: yes\nConnected: yes\n\tUUID: Audio Sink (0000110b-0000-1000-8000-00805f9b34fb)\n\tUUID: Handsfree (0000111e-0000-1000-8000-00805f9b34fb)\n";
+		let dump = format!(
+			r#"[{{"type":"PipeWire:Interface:Device","id":10,"info":{{"props":{{"api.bluez5.address":"{ONE}","api.bluez5.path":"/org/bluez/hci0/dev_AA_BB_CC_DD_EE_01","object.serial":1010}},"params":{{"EnumProfile":{profiles},"Profile":[{{"index":1}}]}}}}}}]"#
+		);
+		let allowed = BTreeSet::from([Address::parse(ONE).unwrap()]);
+		diagnose(
+			&allowed,
+			Mode::HalfDuplex,
+			transport,
+			1,
+			1,
+			move |args: &[&str]| match args {
+				["pw-dump"] => Ok(dump.clone()),
+				_ => fake(INFO)(args),
+			},
+		)
+	}
+
+	#[test]
+	fn lists_codecs_offered_by_each_headset() {
+		let findings = run_with_profiles(
+			r#"[{"index":1,"name":"a2dp-sink-ldac","available":"yes"},{"index":2,"name":"headset-head-unit-msbc","available":"yes"}]"#,
+			Transport::ScoA2dp,
+		);
+		assert!(
+			findings
+				.iter()
+				.any(|f| f.text.contains("HFP yes [msbc], A2DP yes [ldac]")),
+			"{findings:?}"
+		);
+	}
+
+	#[test]
+	fn flags_profiles_hidden_by_the_session_manager() {
+		let findings = run_with_profiles(
+			r#"[{"index":2,"name":"headset-head-unit-msbc","available":"yes"}]"#,
+			Transport::ScoA2dp,
+		);
+		let warning = findings
+			.iter()
+			.find(|f| f.level == Level::Warn && f.text.contains("bluez5.codecs"))
+			.unwrap_or_else(|| panic!("{findings:?}"));
+		assert!(warning.text.contains("supports A2DP"));
+		let hfp_only = run_with_profiles(
+			r#"[{"index":2,"name":"headset-head-unit-msbc","available":"yes"}]"#,
+			Transport::Hfp,
+		);
+		assert!(hfp_only.iter().all(|f| !f.text.contains("bluez5.codecs")));
 	}
 
 	#[test]
