@@ -31,7 +31,7 @@
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-copy">
           <p class="eyebrow"><span class="status-light" aria-hidden="true"></span> Linux · Bluetooth · PipeWire</p>
-          <h1 id="hero-title">Your headsets,<br>in conversation.</h1>
+          <h1 id="hero-title">Your headsets,<br>in conversation</h1>
           <p class="hero-intro">Turn a Linux computer or Raspberry Pi into a local intercom. Bring your own Bluetooth headsets, decide who can hear whom, and choose whether everyone talks at once or takes a turn.</p>
           <div class="hero-actions">
             <a class="button button-primary" href="https://github.com/phieri/bt-intercom#usage">Get started <span aria-hidden="true">↗</span></a>
@@ -39,25 +39,25 @@
           </div>
           <p class="hero-footnote">No internet cloud dependency. Audio stays on your host and paired headsets.</p>
         </div>
-        <div class="signal-board" role="img" aria-label="Illustration of three paired headsets connected locally through a Linux host and separated into two talk groups">
+        <div class="signal-board" role="img" aria-label="Illustration of one Linux host with two Bluetooth controllers: the first serves two headsets and the second serves one">
           <div class="board-topline"><span>LOCAL AUDIO ROUTING</span><span class="live-indicator">● READY</span></div>
           <div class="host-node">
             <span class="host-symbol" aria-hidden="true">⌘</span>
             <span><strong>Linux host</strong><small>BlueZ + PipeWire</small></span>
-            <span class="host-mode">FULL DUPLEX</span>
+            <span class="host-mode">HALF DUPLEX</span>
           </div>
           <div class="signal-lines" aria-hidden="true"></div>
           <div class="group-nodes">
             <div class="group-node">
-              <div class="group-heading"><span>01</span><strong>Office</strong></div>
+              <div class="group-heading"><span>hci0</span><strong>Bluetooth controller</strong></div>
               <div class="headset-list"><span class="headset-chip"><b>🎧</b> Alex</span><span class="headset-chip"><b>🎧</b> Jules</span></div>
             </div>
             <div class="group-node group-node-alt">
-              <div class="group-heading"><span>02</span><strong>Workshop</strong></div>
-              <div class="headset-list"><span class="headset-chip"><b>🎧</b> Jules</span><span class="headset-chip"><b>🎧</b> Morgan</span></div>
+              <div class="group-heading"><span>hci1</span><strong>Bluetooth controller</strong></div>
+              <div class="headset-list"><span class="headset-chip"><b>🎧</b> Morgan</span></div>
             </div>
           </div>
-          <p class="board-caption"><span aria-hidden="true">↔</span> Jules belongs to both groups</p>
+          <p class="board-caption"><span aria-hidden="true">↔</span> Two controllers serve three headsets (2 + 1)</p>
         </div>
       </section>
 
@@ -70,13 +70,13 @@
       <section class="section how-section" id="how-it-works" aria-labelledby="groups-title">
         <div class="section-heading">
           <p class="eyebrow">Conversations with boundaries</p>
-          <h2 id="groups-title">Make room for the right voices.</h2>
+          <h2 id="groups-title">Make room for the right voices</h2>
           <p>Talk groups decide where each headset’s microphone goes. Build a shared workshop, separate crews, or overlapping circles with one headset in more than one group.</p>
         </div>
         <div class="group-explainer">
           <article class="group-card">
             <span class="card-index">01 / MEMBERSHIP</span>
-            <h3>Choose who’s in.</h3>
+            <h3>Choose who’s in</h3>
             <p>Assign paired headsets to one or more groups. When groups are configured, an unassigned headset is kept out of group routes.</p>
             <div class="mini-group-list" aria-label="Example group memberships">
               <div><span class="mini-dot dot-mint"></span><strong>Office</strong><span>Alex · Jules</span></div>
@@ -85,7 +85,7 @@
           </article>
           <article class="group-card group-card-dark">
             <span class="card-index">02 / ROUTING</span>
-            <h3>Hear only your group.</h3>
+            <h3>Hear only your group</h3>
             <p>A microphone reaches other headsets sharing at least one group—never its own headset. With no groups configured, the intercom stays all-to-all.</p>
             <div class="route-example">
               <span>Alex</span><i aria-hidden="true"></i><span>Jules</span><i aria-hidden="true"></i><span>Morgan</span>
@@ -96,10 +96,10 @@
         <p class="mode-note"><strong>Taking turns?</strong> In half-duplex mode, each group has its own first-in, first-out queue. Separate groups can have a talker at the same time.</p>
       </section>
 
-      <section class="section panel-section" id="control-panel" aria-labelledby="panel-title">
+      <section class="section panel-section panel-section-single" id="control-panel" aria-labelledby="panel-title">
         <div class="panel-copy">
           <p class="eyebrow">A small terminal, a clear picture</p>
-          <h2 id="panel-title">Keep the network in hand.</h2>
+          <h2 id="panel-title">Keep the network in hand</h2>
           <p>Open <code>bt-intercom panel</code> for the terminal control panel. Check Bluetooth connection and signal, confirm duplex audio is available, then manage groups and membership without editing config files.</p>
           <ul class="key-list">
             <li><kbd>Tab</kbd><span>Switch between groups and headsets</span></li>
@@ -112,42 +112,11 @@
           </ul>
           <p class="panel-update">Changes save to your user config and a running intercom picks them up on its next routing update.</p>
         </div>
-        <div class="tui-card">
-          <div class="tui-screen">
-            <div class="tui-title">┌ bt-intercom | Headsets and talk groups ───────────────────────────────┐</div>
-            <section class="tui-status" aria-label="Illustrative live headset status">
-              <div class="tui-box-title">Live headset status</div>
-              <table>
-                <thead><tr><th>HEADSET</th><th>ADDRESS</th><th>BLUETOOTH</th><th>DUPLEX</th><th>SIGNAL</th></tr></thead>
-                <tbody>
-                  <tr><td>Alex</td><td>AA:BB:CC:DD:EE:01</td><td>connected</td><td>ready</td><td>−58 dBm</td></tr>
-                  <tr><td>Jules</td><td>AA:BB:CC:DD:EE:02</td><td>connected</td><td>ready</td><td>−64 dBm</td></tr>
-                  <tr><td>Morgan</td><td>AA:BB:CC:DD:EE:03</td><td>connected</td><td>ready</td><td>−71 dBm</td></tr>
-                </tbody>
-              </table>
-            </section>
-            <div class="tui-lower">
-              <section class="tui-pane" aria-label="Illustrative talk groups">
-                <div class="tui-box-title">Talk groups [n add, d delete]</div>
-                <p class="tui-selected">&gt; Office</p>
-                <p>  Workshop</p>
-              </section>
-              <section class="tui-pane" aria-label="Illustrative group membership">
-                <div class="tui-box-title">Office [space toggle]</div>
-                <p class="tui-member">&gt; [x] Alex (AA:BB:CC:DD:EE:01)</p>
-                <p>  [x] Jules (AA:BB:CC:DD:EE:02)</p>
-                <p>  [ ] Morgan (AA:BB:CC:DD:EE:03)</p>
-              </section>
-            </div>
-            <div class="tui-footer">Tab switch pane | ↑/↓ select | n add | d delete | Space toggle member | q quit</div>
-          </div>
-          <p class="tui-caption">Illustrative terminal view; the control panel runs in your terminal, not in a separate app window.</p>
-        </div>
       </section>
 
       <section class="section demo-section" id="demo" aria-labelledby="demo-title">
         <div class="demo-heading">
-          <div><p class="eyebrow">See the setup in motion</p><h2 id="demo-title">From status to speaking.</h2></div>
+          <div><p class="eyebrow">See the setup in motion</p><h2 id="demo-title">From status to speaking</h2></div>
           <p>Check headset transport, choose a transmit mode, and follow live routing as a talker takes and releases the floor.</p>
         </div>
         <div class="player-panel">
@@ -161,7 +130,7 @@
       </section>
 
       <section class="start-banner" aria-labelledby="start-title">
-        <div><p class="eyebrow">Ready to set up your intercom?</p><h2 id="start-title">Bring your headsets together.</h2></div>
+        <div><p class="eyebrow">Ready to set up your intercom?</p><h2 id="start-title">Bring your headsets together</h2></div>
         <a class="button button-primary" href="https://github.com/phieri/bt-intercom#requirements">Read the setup guide <span aria-hidden="true">↗</span></a>
       </section>
       <p class="requirements-note">Requires Linux, BlueZ, PipeWire, WirePlumber, and Bluetooth Classic headsets with duplex audio. Browser playback is a demonstration; the intercom itself runs on your Linux host.</p>
