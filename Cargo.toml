@@ -25,7 +25,6 @@ priority = "optional"
 depends = "libc6, libgcc-s1, bluez, pipewire, pipewire-bin, wireplumber, libspa-0.2-bluetooth"
 assets = [
     "$auto",
-    ["packaging/usr.bin.bt-intercom", "etc/apparmor.d/", "644"],
     ["packaging/bt-intercom.service", "usr/lib/systemd/user/", "644"],
     ["man/bt-intercom.1", "usr/share/man/man1/", "644"],
 ]
@@ -34,7 +33,6 @@ assets = [
 license = "LicenseRef-Unknown"
 assets = [
     { source = "target/release/bt-intercom", dest = "/usr/bin/bt-intercom", mode = "755" },
-    { source = "packaging/usr.bin.bt-intercom", dest = "/etc/apparmor.d/usr.bin.bt-intercom", mode = "644" },
     { source = "packaging/bt-intercom.service", dest = "/usr/lib/systemd/user/bt-intercom.service", mode = "644" },
     { source = "man/bt-intercom.1", dest = "/usr/share/man/man1/bt-intercom.1", mode = "644" },
 ]
