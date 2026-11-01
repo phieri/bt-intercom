@@ -49,6 +49,39 @@ pub(crate) fn headsets_per_controller(mode: Mode, transport: Transport, sco_limi
 	}
 }
 
+/// Startup check: the allowlisted network must fit the detected controllers.
+pub(crate) fn validate_headset_capacity(
+	headsets: usize,
+	controllers: usize,
+	mode: Mode,
+	transport: Transport,
+	sco_limit: usize,
+) -> Result<(), String> {
+	let capacity = headsets_per_controller(mode, transport, sco_limit);
+	if controllers > 0 && headsets > controllers.saturating_mul(capacity) {
+		return Err(format!(
+			"{headsets} headsets exceed the capacity of {controllers} Bluetooth controller(s): each supports {capacity} (one A2DP stream plus --sco-limit {sco_limit} SCO/eSCO link(s) with --transport sco-a2dp, otherwise --sco-limit). Add a USB Bluetooth adapter or remove headsets"
+		));
+	}
+	Ok(())
+}
+
+/// Startup check for headsets whose controller is already known.
+pub(crate) fn validate_controller_headsets(
+	devices: &BTreeMap<Address, Device>,
+	mode: Mode,
+	transport: Transport,
+	sco_limit: usize,
+) -> Result<(), String> {
+	match controller_warnings(devices, mode, transport, sco_limit)
+		.into_iter()
+		.next()
+	{
+		Some(warning) => Err(warning),
+		None => Ok(()),
+	}
+}
+
 pub(crate) fn controller_warnings(
 	devices: &BTreeMap<Address, Device>,
 	mode: Mode,
@@ -728,6 +761,19 @@ mod tests {
 			warn(&devices, Mode::HalfDuplex, Transport::ScoA2dp).len(),
 			1
 		);
+	}
+
+	#[test]
+	fn startup_capacity_rejects_more_headsets_than_controllers_support() {
+		let check = |headsets, controllers, mode, transport| {
+			validate_headset_capacity(headsets, controllers, mode, transport, 1)
+		};
+		assert!(check(2, 1, Mode::HalfDuplex, Transport::ScoA2dp).is_ok());
+		assert!(check(3, 1, Mode::HalfDuplex, Transport::ScoA2dp).is_err());
+		assert!(check(4, 2, Mode::HalfDuplex, Transport::ScoA2dp).is_ok());
+		assert!(check(2, 1, Mode::HalfDuplex, Transport::Hfp).is_err());
+		assert!(check(2, 2, Mode::FullDuplex, Transport::Hfp).is_ok());
+		assert!(check(9, 0, Mode::HalfDuplex, Transport::ScoA2dp).is_ok());
 	}
 
 	#[test]

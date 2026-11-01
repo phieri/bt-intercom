@@ -114,17 +114,30 @@ impl Session {
 	}
 
 	fn setup(&mut self) -> Result<(), String> {
-		let controllers = if self.config.mode == Mode::FullDuplex || self.config.connect {
-			command_cancellable(
-				&["bluetoothctl", "list"],
-				COMMAND_TIMEOUT,
-				Some(&self.stopped),
-			)
-			.ok()
-			.map(|output| bluez::controller_addresses(&output))
-		} else {
-			None
-		};
+		let controllers = command_cancellable(
+			&["bluetoothctl", "list"],
+			COMMAND_TIMEOUT,
+			Some(&self.stopped),
+		)
+		.ok()
+		.map(|output| bluez::controller_addresses(&output));
+		if let Some(controllers) = &controllers {
+			transport::validate_headset_capacity(
+				self.config.allowed.len(),
+				controllers.len(),
+				self.config.mode,
+				self.config.transport,
+				self.config.sco_limit,
+			)?;
+		}
+		if let Ok(devices) = self.routing.router.transport_devices() {
+			transport::validate_controller_headsets(
+				&devices,
+				self.config.mode,
+				self.config.transport,
+				self.config.sco_limit,
+			)?;
+		}
 		if self.config.mode == Mode::FullDuplex
 			&& let Some(controllers) = &controllers
 		{

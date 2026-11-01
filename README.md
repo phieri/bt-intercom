@@ -49,8 +49,9 @@ firmware and headset combination.
   BlueZ allows one active A2DP stream per controller in addition to its SCO
   budget, so each controller supports two headsets (one talker, one listener).
   A Pi with only its onboard radio supports two; each USB adapter adds two.
-  `run`, `status` and `diagnose` warn when a controller has more headsets than
-  this. See [SCO/A2DP transport](#scoa2dp-half-duplex-transport).
+  `run` refuses to start when the headsets exceed what the detected controllers
+  (or any already-connected controller's headsets) support; `status` and
+  `diagnose` warn. See [SCO/A2DP transport](#scoa2dp-half-duplex-transport).
 
 ## Installation
 
