@@ -29,6 +29,8 @@ use routing::RoutingCoordinator;
 mod reconnect;
 #[cfg(test)]
 pub(crate) use reconnect::connect_disconnected;
+#[cfg(test)]
+pub(crate) use reconnect::ensure_adapter_powered;
 pub(crate) use reconnect::reconnect_worker;
 
 const ROUTE_CHANGE_RETRY_INTERVAL: Duration = Duration::from_millis(250);
@@ -146,6 +148,15 @@ impl Session {
 				"Multiple Bluetooth controllers detected: automatic reconnection addresses only BlueZ's default controller (use --no-connect to disable it). Keep other controllers' headsets connected using an adapter-aware Bluetooth manager, or connect them in a bluetoothctl session after select CONTROLLER_MAC."
 			);
 		}
+		// Advisory only; never blocks startup.
+		let findings = crate::diagnostics::diagnose(
+			&self.config.allowed,
+			self.config.mode,
+			self.config.transport,
+			self.config.sco_limit,
+			|args| command_cancellable(args, COMMAND_TIMEOUT, Some(&self.stopped)),
+		);
+		crate::diagnostics::log_findings(&findings);
 		// Validate all device opens before starting any worker or saving the network.
 		let inputs = PreparedInputs::open(&self.config.buttons)?;
 		let signal = Arc::clone(&self.stopped);

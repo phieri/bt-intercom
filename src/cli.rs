@@ -69,6 +69,20 @@ pub(crate) enum CliCommand {
 		#[arg(required = true, value_parser = parse_address)]
 		addresses: Vec<Address>,
 	},
+	/// Test adapters and headsets on real hardware: connects them, exercises
+	/// A2DP and HFP, and measures simultaneous SCO links per controller.
+	/// Uses the saved network when no address is given. Stop any running
+	/// intercom first: profiles are switched and restored to A2DP (unsaved).
+	Diagnose {
+		/// Only inspect BlueZ and PipeWire state; do not connect or switch profiles.
+		#[arg(long)]
+		passive: bool,
+		#[arg(value_parser = parse_address)]
+		addresses: Vec<Address>,
+		/// Assumed simultaneous SCO/eSCO links per controller (default: 1).
+		#[arg(long, default_value_t = 1, value_parser = parse_sco_limit)]
+		sco_limit: usize,
+	},
 	/// Route configured headset microphones to one another, optionally showing the live dashboard.
 	Run {
 		#[arg(value_parser = parse_address)]
