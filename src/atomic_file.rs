@@ -42,12 +42,26 @@ pub(crate) fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
 	let result = (|| {
 		file.write_all(contents)?;
 		file.sync_all()?;
-		fs::rename(&temporary_path, path)
+		fs::rename(&temporary_path, path)?;
+		sync_parent(path);
+		Ok(())
 	})();
 	if result.is_err() {
 		let _ = fs::remove_file(temporary_path);
 	}
 	result
+}
+
+/// Persists the rename itself. Best effort: the new contents are already in
+/// place, so a failure here must not report the write as failed.
+fn sync_parent(path: &Path) {
+	let directory = match path.parent() {
+		Some(parent) if !parent.as_os_str().is_empty() => parent,
+		_ => Path::new("."),
+	};
+	if let Err(error) = fs::File::open(directory).and_then(|dir| dir.sync_all()) {
+		log::debug!("could not sync {}: {error}", directory.display());
+	}
 }
 
 #[cfg(test)]
