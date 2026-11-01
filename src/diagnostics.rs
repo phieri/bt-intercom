@@ -117,10 +117,49 @@ struct Inputs {
 	controllers: Option<Vec<Controller>>,
 	headsets: Vec<Headset>,
 	pipewire_error: Option<String>,
+	foreign_users: BTreeMap<Address, BTreeSet<String>>,
+}
+
+/// A connected headset may expose HFP and A2DP to PipeWire seconds apart, and
+/// startup diagnosis races that. Missing profiles are re-checked before being reported.
+const SETTLE_ATTEMPTS: u32 = if cfg!(test) { 3 } else { 8 };
+const SETTLE_DELAY: Duration = if cfg!(test) {
+	Duration::ZERO
+} else {
+	Duration::from_millis(750)
+};
+
+fn missing_profiles<'a>(
+	infos: &'a BTreeMap<Address, Result<String, String>>,
+	devices: &BTreeMap<Address, Device>,
+	transport: Transport,
+) -> Vec<(&'a Address, &'static str)> {
+	let mut missing = Vec::new();
+	for (address, info) in infos {
+		let (Ok(info), Some(device)) = (info, devices.get(address)) else {
+			continue;
+		};
+		if bluez::property(info, "Connected") != Some("yes") {
+			continue;
+		}
+		let hfp_uuid = bluez::has_uuid(info, "111e") || bluez::has_uuid(info, "1108");
+		if !device.hfp_available && hfp_uuid {
+			missing.push((address, crate::transport::HFP_UUID));
+		}
+		if transport == Transport::ScoA2dp
+			&& !device.a2dp_available
+			&& bluez::has_uuid(info, "110b")
+		{
+			missing.push((address, crate::transport::A2DP_SINK_UUID));
+		}
+	}
+	missing
 }
 
 fn collect(
 	allowed: &BTreeSet<Address>,
+	transport: Transport,
+	nudge: bool,
 	mut execute: impl FnMut(&[&str]) -> Result<String, String>,
 ) -> Inputs {
 	let controllers = execute(&["bluetoothctl", "list"]).ok().map(|list| {
@@ -129,25 +168,56 @@ fn collect(
 			.map(|address| probe_controller(address.as_str(), &mut execute))
 			.collect()
 	});
-	let (mut devices, pipewire_error) =
-		match Router::with_executor(allowed.clone(), &mut execute).transport_devices() {
+	let infos: BTreeMap<Address, Result<String, String>> = allowed
+		.iter()
+		.map(|address| {
+			(
+				address.clone(),
+				execute(&["bluetoothctl", "info", address.as_str()]),
+			)
+		})
+		.collect();
+	let fetch =
+		|execute: &mut dyn FnMut(&[&str]) -> Result<String, String>| match Router::with_executor(
+			allowed.clone(),
+			execute,
+		)
+		.transport_devices()
+		{
 			Ok(devices) => (devices, None),
 			Err(error) => (BTreeMap::new(), Some(error)),
 		};
-	let headsets = allowed
-		.iter()
-		.map(|address| {
-			let info = execute(&["bluetoothctl", "info", address.as_str()]);
+	let (mut devices, mut pipewire_error) = fetch(&mut execute);
+	for attempt in 0..SETTLE_ATTEMPTS {
+		let missing = missing_profiles(&infos, &devices, transport);
+		if missing.is_empty() {
+			break;
+		}
+		if attempt == 0 && nudge {
+			// Failures are advisory; the re-check below reports what remains.
+			for (address, uuid) in missing {
+				let _ = execute(&["bluetoothctl", "connect-profile", address.as_str(), uuid]);
+			}
+		}
+		std::thread::sleep(SETTLE_DELAY);
+		(devices, pipewire_error) = fetch(&mut execute);
+	}
+	let foreign_users = Router::with_executor(allowed.clone(), &mut execute)
+		.foreign_users()
+		.unwrap_or_default();
+	let headsets = infos
+		.into_iter()
+		.map(|(address, info)| {
 			let label = info
 				.as_ref()
 				.ok()
 				.and_then(|info| bluez::bluetooth_name(info))
 				.map_or_else(|| address.to_string(), |name| format!("{name} ({address})"));
 			Headset {
-				address: address.clone(),
 				label,
 				info,
-				pipewire: devices.remove(address),
+				pipewire: devices.remove(&address),
+				address,
 			}
 		})
 		.collect();
@@ -155,6 +225,7 @@ fn collect(
 		controllers,
 		headsets,
 		pipewire_error,
+		foreign_users,
 	}
 }
 
@@ -324,6 +395,13 @@ fn evaluate(
 				problems.push("profile hidden by session manager");
 			}
 		}
+		if let Some(users) = inputs.foreign_users.get(&headset.address) {
+			findings.push(Finding::warn(format!(
+				"{}: also in use by {}; other programs sharing the headset can steal its audio or change its profile (stop them or exclude the headset from them)",
+				headset.label,
+				users.iter().cloned().collect::<Vec<_>>().join(", ")
+			)));
+		}
 		if connected != "connected" && headset.pipewire.is_none() {
 			line.push_str("; PipeWire profiles are known only once connected");
 		}
@@ -383,8 +461,38 @@ pub(crate) fn diagnose(
 	a2dp_limit: usize,
 	execute: impl FnMut(&[&str]) -> Result<String, String>,
 ) -> Vec<Finding> {
+	diagnose_with(
+		allowed, mode, transport, sco_limit, a2dp_limit, false, execute,
+	)
+}
+
+/// Like `diagnose`, but asks BlueZ to connect profiles that a connected
+/// headset lists yet has not brought up, as startup races the headsets'
+/// own reconnection.
+pub(crate) fn diagnose_startup(
+	allowed: &BTreeSet<Address>,
+	mode: Mode,
+	transport: Transport,
+	sco_limit: usize,
+	a2dp_limit: usize,
+	execute: impl FnMut(&[&str]) -> Result<String, String>,
+) -> Vec<Finding> {
+	diagnose_with(
+		allowed, mode, transport, sco_limit, a2dp_limit, true, execute,
+	)
+}
+
+fn diagnose_with(
+	allowed: &BTreeSet<Address>,
+	mode: Mode,
+	transport: Transport,
+	sco_limit: usize,
+	a2dp_limit: usize,
+	nudge: bool,
+	execute: impl FnMut(&[&str]) -> Result<String, String>,
+) -> Vec<Finding> {
 	evaluate(
-		&collect(allowed, execute),
+		&collect(allowed, transport, nudge, execute),
 		mode,
 		transport,
 		sco_limit,
@@ -442,6 +550,45 @@ mod tests {
 				_ => fake(INFO)(args),
 			},
 		)
+	}
+
+	#[test]
+	fn startup_nudges_and_waits_for_a_late_a2dp_profile() {
+		const INFO: &str = "Name: Buds\nPaired: yes\nTrusted: yes\nConnected: yes\n\tUUID: Audio Sink (0000110b-0000-1000-8000-00805f9b34fb)\n\tUUID: Handsfree (0000111e-0000-1000-8000-00805f9b34fb)\n";
+		let dump = |profiles: &str| {
+			format!(
+				r#"[{{"type":"PipeWire:Interface:Device","id":10,"info":{{"props":{{"api.bluez5.address":"{ONE}","api.bluez5.path":"/org/bluez/hci0/dev_AA_BB_CC_DD_EE_01","object.serial":1010}},"params":{{"EnumProfile":{profiles},"Profile":[{{"index":1}}]}}}}}}]"#
+			)
+		};
+		let hfp_only = dump(r#"[{"index":2,"name":"headset-head-unit","available":"yes"}]"#);
+		let both = dump(
+			r#"[{"index":1,"name":"a2dp-sink","available":"yes"},{"index":2,"name":"headset-head-unit","available":"yes"}]"#,
+		);
+		let allowed = BTreeSet::from([Address::parse(ONE).unwrap()]);
+		let mut nudged = false;
+		let findings = diagnose_startup(
+			&allowed,
+			Mode::HalfDuplex,
+			Transport::ScoA2dp,
+			1,
+			1,
+			|args: &[&str]| match args {
+				["bluetoothctl", "connect-profile", ..] => {
+					nudged = true;
+					Ok("Connection successful".into())
+				}
+				["pw-dump"] if nudged => Ok(both.clone()),
+				["pw-dump"] => Ok(hfp_only.clone()),
+				_ => fake(INFO)(args),
+			},
+		);
+		assert!(nudged);
+		assert!(
+			findings
+				.iter()
+				.all(|f| !f.text.contains("bluez5.codecs") && f.level == Level::Info),
+			"{findings:?}"
+		);
 	}
 
 	#[test]

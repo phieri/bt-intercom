@@ -263,8 +263,8 @@ impl TransitionState {
 	}
 }
 
-const A2DP_SINK_UUID: &str = "0000110b-0000-1000-8000-00805f9b34fb";
-const HFP_UUID: &str = "0000111e-0000-1000-8000-00805f9b34fb";
+pub(crate) const A2DP_SINK_UUID: &str = "0000110b-0000-1000-8000-00805f9b34fb";
+pub(crate) const HFP_UUID: &str = "0000111e-0000-1000-8000-00805f9b34fb";
 
 /// Profile-transition coordinator, independent of the clients owning audio links.
 pub(crate) struct Coordinator {
