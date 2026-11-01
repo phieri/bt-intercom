@@ -60,6 +60,47 @@ struct Controller {
 	powered: Option<bool>,
 	audio_source: bool,
 	hfp_gateway: bool,
+	show_failed: bool,
+}
+
+/// The session manager may register its Bluetooth endpoints shortly after
+/// startup, so missing endpoints are re-checked before being reported.
+const REGISTRATION_ATTEMPTS: u32 = if cfg!(test) { 2 } else { 5 };
+const REGISTRATION_DELAY: std::time::Duration = if cfg!(test) {
+	std::time::Duration::ZERO
+} else {
+	std::time::Duration::from_millis(500)
+};
+
+fn probe_controller(
+	address: &str,
+	execute: &mut impl FnMut(&[&str]) -> Result<String, String>,
+) -> Controller {
+	let mut controller = Controller {
+		address: address.to_string(),
+		..Controller::default()
+	};
+	for attempt in 0..REGISTRATION_ATTEMPTS {
+		if attempt > 0 {
+			std::thread::sleep(REGISTRATION_DELAY);
+		}
+		match execute(&["bluetoothctl", "show", address]) {
+			Ok(show) => {
+				controller.show_failed = false;
+				controller.powered = bluez::property(&show, "Powered").map(|value| value == "yes");
+				controller.audio_source = bluez::has_uuid(&show, "110a");
+				// 111f is the HFP gateway; 1112 is the HSP gateway, which suffices
+				// when the session manager only enables the HSP role.
+				controller.hfp_gateway =
+					bluez::has_uuid(&show, "111f") || bluez::has_uuid(&show, "1112");
+				if controller.audio_source && controller.hfp_gateway {
+					break;
+				}
+			}
+			Err(_) => controller.show_failed = true,
+		}
+	}
+	controller
 }
 
 #[derive(Debug)]
@@ -84,15 +125,7 @@ fn collect(
 	let controllers = execute(&["bluetoothctl", "list"]).ok().map(|list| {
 		bluez::controller_addresses(&list)
 			.into_iter()
-			.map(|address| {
-				let show = execute(&["bluetoothctl", "show", address.as_str()]).unwrap_or_default();
-				Controller {
-					powered: bluez::property(&show, "Powered").map(|value| value == "yes"),
-					audio_source: bluez::has_uuid(&show, "110a"),
-					hfp_gateway: bluez::has_uuid(&show, "111f"),
-					address: address.to_string(),
-				}
-			})
+			.map(|address| probe_controller(address.as_str(), &mut execute))
 			.collect()
 	});
 	let (mut devices, pipewire_error) =
@@ -146,19 +179,22 @@ fn evaluate(
 		Some(controllers) => {
 			for controller in controllers {
 				let mut notes = Vec::new();
+				if controller.show_failed {
+					notes.push("controller state unavailable (`bluetoothctl show` failed)");
+				}
 				match controller.powered {
 					Some(true) => {}
 					Some(false) => notes.push("powered off (`bluetoothctl power on`)"),
 					None => notes.push("power state unknown"),
 				}
-				if !controller.audio_source {
+				if !controller.show_failed && !controller.audio_source {
 					notes.push(
 						"A2DP source not registered (is the PipeWire session manager's Bluetooth support running, e.g. WirePlumber or pipewire-media-session?)",
 					);
 				}
-				if !controller.hfp_gateway {
+				if !controller.show_failed && !controller.hfp_gateway {
 					notes.push(
-						"HFP audio gateway not registered (is the PipeWire session manager's Bluetooth support running, e.g. WirePlumber or pipewire-media-session?)",
+						"HFP/HSP audio gateway not registered (is the PipeWire session manager's Bluetooth support running, e.g. WirePlumber or pipewire-media-session?)",
 					);
 				}
 				let text = format!(
