@@ -198,6 +198,26 @@ Missing or unreadable devices stop PTT from starting; a device failure while
 running exits and cleans up. PTT is not a privacy boundary: a failed mute can
 leave audio active until a retry succeeds.
 
+### Diagnostics
+
+`bt-intercom diagnose [ADDRESS...]` (saved network when omitted) tests the real
+hardware. It powers on the adapter, connects each headset, switches each one to
+A2DP and HFP and checks that PipeWire exposes working ports, then switches one
+headset per controller after another to HFP to **measure how many simultaneous
+SCO links that controller sustains** (use the result as `--sco-limit`). It
+reports headsets connected at once, per-profile failures and timings, then the
+BlueZ/PipeWire summary (pairing, trust, controller roles, capacity bounds).
+Stop any running intercom first: audio is interrupted for several minutes at
+most, profile changes are unsaved and every headset ends on A2DP. The measured
+limit is bounded by the number of headsets you pass; add more to probe further.
+`--passive` only inspects state without connecting or switching. `run` logs the
+passive findings at startup as non-fatal warnings.
+
+Capacity model: BlueZ allows one active A2DP stream and one SCO link per
+adapter, so half-duplex supports two headsets per adapter (one talker, one
+listener). A Pi with only its internal chip supports two headsets; each added
+USB Bluetooth adapter adds two more.
+
 ### SCO/A2DP half-duplex transport
 
 Half-duplex defaults to `--transport sco-a2dp` (full-duplex defaults to `hfp`).
@@ -230,7 +250,10 @@ Notes:
   Some headsets (for example CMF Buds 2) bring up HFP and A2DP separately; the
   session waits up to 30 seconds for the needed profile, asks BlueZ every 5
   seconds to connect it (`bluetoothctl connect-profile`), and the error names
-  the missing profile.
+  the missing profile and any BlueZ refusal. `bluetoothctl` often exits 0 on
+  failure, so its output is checked.
+- Reconnection runs one headset at a time, powers on a powered-off adapter,
+  trusts untrusted devices, and skips (with a warning) unpaired or blocked ones.
 - `status` and the dashboard report HFP duplex readiness, so an idle A2DP
   listener appears playback-only.
 - Profiles stay in their last state on exit; owned links are always released.

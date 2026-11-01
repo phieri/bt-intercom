@@ -10,6 +10,7 @@ mod bluez;
 mod cli;
 mod dashboard;
 mod device_status;
+mod diagnostics;
 mod group_editor;
 mod groups;
 mod network;
@@ -190,6 +191,54 @@ fn run(action: CliCommand) -> Result<(), String> {
 			}
 			for warning in transport::controller_warnings(&transport_devices, 1) {
 				log::warn!("{warning}");
+			}
+		}
+		CliCommand::Diagnose {
+			addresses: devices,
+			sco_limit,
+			passive,
+		} => {
+			let allowed = if devices.is_empty() {
+				load_headsets(&headset_network_path()?)?
+			} else {
+				addresses(&devices)?
+			};
+			let stopped = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+			let signal = std::sync::Arc::clone(&stopped);
+			ctrlc::set_handler(move || signal.store(true, std::sync::atomic::Ordering::SeqCst))
+				.map_err(|error| error.to_string())?;
+			let execute = |args: &[&str]| {
+				process::command_cancellable(
+					args,
+					diagnostics::command_timeout(args),
+					Some(stopped.as_ref()),
+				)
+			};
+			let mut findings = Vec::new();
+			if !passive {
+				eprintln!(
+					"Testing connections and profiles; this can take several minutes and interrupts headset audio."
+				);
+				findings.extend(diagnostics::probe(
+					&allowed,
+					&stopped,
+					diagnostics::Timing::default(),
+					execute,
+				));
+			}
+			findings.extend(diagnostics::diagnose(
+				&allowed,
+				transmit::Mode::HalfDuplex,
+				transport::Transport::ScoA2dp,
+				sco_limit,
+				execute,
+			));
+			for finding in &findings {
+				let tag = match finding.level {
+					diagnostics::Level::Info => "ok  ",
+					diagnostics::Level::Warn => "warn",
+				};
+				println!("[{tag}] {}", finding.text);
 			}
 		}
 		CliCommand::Run {
@@ -939,7 +988,38 @@ mod tests {
 		}
 
 		#[test]
-		fn reconnect_checks_run_with_bounded_concurrency() {
+		fn reconnect_trusts_skips_unpaired_and_detects_silent_failures() {
+			let allowed = BTreeSet::from([address("AA:BB:CC:DD:EE:01")]);
+			let calls = Mutex::new(Vec::new());
+			connect_disconnected(&allowed, &AtomicBool::new(false), |args, _| {
+				calls.lock().unwrap().push(args[1].to_string());
+				match args[1] {
+					"info" => Ok("Paired: yes\nTrusted: no\nConnected: no\n".into()),
+					"--timeout" => Ok("Failed to connect: org.bluez.Error.Failed\n".into()),
+					_ => Ok(String::new()),
+				}
+			});
+			assert_eq!(*calls.lock().unwrap(), ["info", "trust", "--timeout"]);
+			calls.lock().unwrap().clear();
+			connect_disconnected(&allowed, &AtomicBool::new(false), |args, _| {
+				calls.lock().unwrap().push(args[1].to_string());
+				Ok("Paired: no\nConnected: no\n".into())
+			});
+			assert_eq!(*calls.lock().unwrap(), ["info"]);
+		}
+
+		#[test]
+		fn powers_on_a_powered_off_adapter() {
+			let calls = Mutex::new(Vec::new());
+			crate::session::ensure_adapter_powered(|args, _| {
+				calls.lock().unwrap().push(args[1].to_string());
+				Ok("Powered: no\n".into())
+			});
+			assert_eq!(*calls.lock().unwrap(), ["show", "power"]);
+		}
+
+		#[test]
+		fn reconnect_attempts_are_serialized() {
 			use std::sync::atomic::AtomicUsize;
 
 			let allowed = [
@@ -961,7 +1041,7 @@ mod tests {
 				active.fetch_sub(1, Ordering::SeqCst);
 				Ok(String::new())
 			});
-			assert_eq!(maximum.load(Ordering::SeqCst), 2);
+			assert_eq!(maximum.load(Ordering::SeqCst), 1);
 		}
 
 		#[test]

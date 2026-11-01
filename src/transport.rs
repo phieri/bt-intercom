@@ -363,8 +363,11 @@ impl Coordinator {
 		// profile can be unavailable until the second connection completes.
 		// Wait within the preparation deadline instead of failing immediately.
 		if let Err(reason) = validate_role_profiles(sources, &devices) {
-			self.request_missing_profiles(sources, &devices, &snapshot, io.execute);
-			self.profile_wait = Some(reason);
+			let refused = self.request_missing_profiles(sources, &devices, &snapshot, io.execute);
+			self.profile_wait = Some(match refused {
+				Some(refused) => format!("{reason}; {refused}"),
+				None => reason,
+			});
 			return Ok(false);
 		}
 		self.profile_wait = None;
@@ -404,15 +407,16 @@ impl Coordinator {
 		devices: &BTreeMap<Address, Device>,
 		snapshot: &Snapshot,
 		execute: &mut impl FnMut(&[&str]) -> Result<String, String>,
-	) {
+	) -> Option<String> {
 		if self.transition.has_pending_profiles()
 			|| self
 				.profile_nudged
 				.is_some_and(|at| at.elapsed() < Duration::from_secs(5))
 		{
-			return;
+			return None;
 		}
 		self.profile_nudged = Some(Instant::now());
+		let mut failures = Vec::new();
 		for (address, device) in devices {
 			let (family, uuid) = role_profile(sources, address);
 			// Close before open: another listener must have released HFP first.
@@ -422,12 +426,20 @@ impl Coordinator {
 					&& (!device.is_profile(ProfileFamily::A2dp) || snapshot.has_hfp_node(device.id))
 			});
 			if device.index(family).is_none()
-				&& !closing && let Err(error) =
-				execute(&["bluetoothctl", "connect-profile", address.as_str(), uuid])
-			{
+				&& !closing && let Err(error) = crate::bluez::checked(execute(&[
+				"bluetoothctl",
+				"connect-profile",
+				address.as_str(),
+				uuid,
+			])) {
 				log::debug!("{address}: could not request {}: {error}", family.name());
+				failures.push(format!(
+					"{address}: BlueZ refused {}: {error}",
+					family.name()
+				));
 			}
 		}
+		(!failures.is_empty()).then(|| failures.join("; "))
 	}
 
 	fn sources_ready(

@@ -134,6 +134,41 @@ pub(crate) fn device_flag(info: &str, flag: &str) -> bool {
 	property(info, flag) == Some("yes")
 }
 
+/// Returns BlueZ's failure line from `bluetoothctl` output. Many releases exit
+/// with status 0 even when an action fails, so the text must be inspected.
+/// An already-connected device is not a failure.
+pub(crate) fn command_failure(output: &str) -> Option<&str> {
+	output.lines().map(str::trim).find(|line| {
+		let failed = line.starts_with("Failed to ")
+			|| line.contains("org.bluez.Error.")
+			|| line.contains("No default controller");
+		failed
+			&& !line.contains("org.bluez.Error.AlreadyConnected")
+			&& !line.contains("Already connected")
+	})
+}
+
+/// Converts a `bluetoothctl` result into an error when its output reports failure.
+pub(crate) fn checked(result: Result<String, String>) -> Result<String, String> {
+	let output = result?;
+	match command_failure(&output) {
+		Some(line) => Err(line.to_string()),
+		None => Ok(output),
+	}
+}
+
+/// Whether `bluetoothctl info/show` lists a service UUID, given its 16-bit
+/// short form such as `110b`.
+pub(crate) fn has_uuid(info: &str, short: &str) -> bool {
+	let needle = format!(
+		"0000{}-0000-1000-8000-00805f9b34fb",
+		short.to_ascii_lowercase()
+	);
+	info.lines()
+		.map(str::trim)
+		.any(|line| line.starts_with("UUID:") && line.to_ascii_lowercase().contains(&needle))
+}
+
 pub(crate) fn normalize_address(value: &str) -> Option<Address> {
 	Address::parse(value).ok()
 }
@@ -187,6 +222,27 @@ pub(crate) fn bluetooth_name(info: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn detects_failures_reported_with_a_zero_exit_status() {
+		assert_eq!(
+			command_failure(
+				"Attempting to connect\nFailed to connect: org.bluez.Error.Failed br-connection-profile-unavailable\n"
+			),
+			Some("Failed to connect: org.bluez.Error.Failed br-connection-profile-unavailable")
+		);
+		assert_eq!(
+			command_failure("No default controller available\n"),
+			Some("No default controller available")
+		);
+		assert_eq!(command_failure("Connection successful\n"), None);
+		assert_eq!(
+			command_failure("Failed to connect: org.bluez.Error.AlreadyConnected\n"),
+			None
+		);
+		assert!(checked(Ok("Failed to trust: org.bluez.Error.Failed\n".into())).is_err());
+		assert!(checked(Err("timed out".into())).is_err());
+	}
 
 	#[test]
 	fn parses_properties_and_flags() {
