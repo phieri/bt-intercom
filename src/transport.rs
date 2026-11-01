@@ -37,16 +37,31 @@ pub(crate) fn validate_transport(mode: Mode, transport: Transport) -> Result<(),
 	Ok(())
 }
 
+/// Headsets one controller can keep connected: BlueZ allows one active A2DP
+/// stream plus `sco_limit` SCO/eSCO links per controller. Only `sco-a2dp`
+/// moves listeners off SCO onto that A2DP stream.
+pub(crate) fn headsets_per_controller(mode: Mode, transport: Transport, sco_limit: usize) -> usize {
+	let sco_limit = sco_limit.max(1);
+	if mode == Mode::HalfDuplex && transport == Transport::ScoA2dp {
+		sco_limit + 1
+	} else {
+		sco_limit
+	}
+}
+
 pub(crate) fn controller_warnings(
 	devices: &BTreeMap<Address, Device>,
+	mode: Mode,
+	transport: Transport,
 	sco_limit: usize,
 ) -> Vec<String> {
+	let capacity = headsets_per_controller(mode, transport, sco_limit);
 	addresses_by_controller(devices.iter())
 		.into_iter()
-		.filter(|(_, addresses)| addresses.len() > sco_limit)
+		.filter(|(_, addresses)| addresses.len() > capacity)
 		.map(|(controller, addresses)| {
 			format!(
-				"{} headsets share {controller} ({}), exceeding --sco-limit {sco_limit}. HFP listeners also need SCO/eSCO; verify controller capacity or use --mode half-duplex --transport sco-a2dp with PTT when sharing a radio.",
+				"{} headsets share {controller} ({}), exceeding its capacity of {capacity} (one A2DP stream plus --sco-limit {sco_limit} SCO/eSCO link(s) with --transport sco-a2dp, otherwise --sco-limit). Add a USB Bluetooth adapter or use --mode half-duplex --transport sco-a2dp with PTT.",
 				addresses.len(),
 				addresses
 					.iter()
@@ -673,6 +688,46 @@ mod tests {
 		let snapshot = Snapshot::parse(&json!(objects)).unwrap();
 		let devices = snapshot.transport_devices(&allowed).unwrap();
 		(snapshot, devices)
+	}
+
+	#[test]
+	fn controller_capacity_adds_one_a2dp_stream_only_for_sco_a2dp() {
+		let addresses = [
+			address("AA:BB:CC:DD:EE:01"),
+			address("AA:BB:CC:DD:EE:02"),
+			address("AA:BB:CC:DD:EE:03"),
+		];
+		let devices = addresses
+			.iter()
+			.enumerate()
+			.map(|(index, address)| {
+				(
+					address.clone(),
+					device_on_controller(index as u64, address, "hci0"),
+				)
+			})
+			.collect::<BTreeMap<_, _>>();
+		let two = BTreeMap::from_iter(devices.iter().take(2).map(|(a, d)| (a.clone(), d.clone())));
+		let warn = |devices, mode, transport| controller_warnings(devices, mode, transport, 1);
+
+		assert_eq!(
+			headsets_per_controller(Mode::HalfDuplex, Transport::ScoA2dp, 1),
+			2
+		);
+		assert_eq!(
+			headsets_per_controller(Mode::HalfDuplex, Transport::Hfp, 1),
+			1
+		);
+		assert_eq!(
+			headsets_per_controller(Mode::FullDuplex, Transport::Hfp, 1),
+			1
+		);
+		assert!(warn(&two, Mode::HalfDuplex, Transport::ScoA2dp).is_empty());
+		assert_eq!(warn(&two, Mode::HalfDuplex, Transport::Hfp).len(), 1);
+		assert_eq!(
+			warn(&devices, Mode::HalfDuplex, Transport::ScoA2dp).len(),
+			1
+		);
 	}
 
 	#[test]

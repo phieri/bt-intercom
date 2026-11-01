@@ -136,6 +136,20 @@ impl RoutingCoordinator {
 		}
 	}
 
+	fn warn_controller_capacity(
+		&mut self,
+		config: &RunConfig,
+		devices: &BTreeMap<Address, transport::Device>,
+	) {
+		for warning in
+			transport::controller_warnings(devices, config.mode, config.transport, config.sco_limit)
+		{
+			if self.reported_controller_warnings.insert(warning.clone()) {
+				log::warn!("{warning}");
+			}
+		}
+	}
+
 	fn refresh_topology(
 		&mut self,
 		config: &RunConfig,
@@ -153,13 +167,10 @@ impl RoutingCoordinator {
 					.collect(),
 			);
 			transmit.topology(&devices.keys().cloned().collect());
+			self.warn_controller_capacity(config, &devices);
 		} else {
 			if let Ok(devices) = self.router.transport_devices() {
-				for warning in transport::controller_warnings(&devices, config.sco_limit) {
-					if self.reported_controller_warnings.insert(warning.clone()) {
-						log::warn!("{warning}");
-					}
-				}
+				self.warn_controller_capacity(config, &devices);
 			}
 			if let Some(input) = input {
 				let snapshot = self.router.inspect_owned();

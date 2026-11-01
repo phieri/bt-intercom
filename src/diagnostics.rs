@@ -12,11 +12,7 @@ use std::time::Duration;
 use crate::bluez::{self, Address};
 use crate::router::Router;
 use crate::transmit::Mode;
-use crate::transport::{Device, Transport};
-
-/// BlueZ supports one active A2DP stream and one SCO link per adapter, so
-/// half-duplex fits one talker (HFP) and one listener (A2DP) per adapter.
-const HALF_DUPLEX_HEADSETS_PER_ADAPTER: usize = 2;
+use crate::transport::{Device, Transport, headsets_per_controller};
 
 mod probe;
 pub(crate) use probe::{Timing, probe};
@@ -268,26 +264,26 @@ fn evaluate(inputs: &Inputs, mode: Mode, transport: Transport, sco_limit: usize)
 
 	let known = inputs.controllers.as_ref().map(Vec::len);
 	let limit = sco_limit.max(1);
+	let per_adapter = headsets_per_controller(mode, transport, limit);
 	for (controller, addresses) in &per_controller {
-		if mode == Mode::HalfDuplex && addresses.len() > HALF_DUPLEX_HEADSETS_PER_ADAPTER {
+		if addresses.len() > per_adapter {
 			findings.push(Finding::warn(format!(
-				"{controller}: {} headsets exceed the {HALF_DUPLEX_HEADSETS_PER_ADAPTER} per adapter that half-duplex supports (one SCO talker plus one A2DP listener); add a USB Bluetooth adapter per further pair",
-				addresses.len()
-			)));
-		}
-		if mode == Mode::FullDuplex && addresses.len() > limit {
-			findings.push(Finding::warn(format!(
-				"{controller}: {} headsets exceed --sco-limit {limit}; full-duplex keeps HFP/SCO open on all of them",
-				addresses.len()
+				"{controller}: {} headsets exceed the {per_adapter} per adapter supported with these options ({}); add a USB Bluetooth adapter per further {per_adapter} headsets",
+				addresses.len(),
+				if per_adapter > limit {
+					format!("one A2DP listener plus --sco-limit {limit} SCO talker(s)")
+				} else {
+					format!("--sco-limit {limit}; every headset keeps HFP/SCO open")
+				}
 			)));
 		}
 	}
 	if let Some(controllers) = known.filter(|count| *count > 0) {
 		findings.push(Finding::info(format!(
 			"Capacity (assumes one A2DP stream and --sco-limit {limit} SCO link(s) per adapter; not measured, verify on hardware): \
-			 half-duplex supports up to {} headsets on {controllers} adapter(s) ({HALF_DUPLEX_HEADSETS_PER_ADAPTER} per adapter: one talker, one listener); \
-			 full-duplex supports up to {} headsets",
-			controllers * HALF_DUPLEX_HEADSETS_PER_ADAPTER,
+			 half-duplex with sco-a2dp supports up to {} headsets on {controllers} adapter(s) (one A2DP listener plus {limit} SCO talker(s) per adapter); \
+			 full-duplex or hfp supports up to {} headsets",
+			controllers * headsets_per_controller(Mode::HalfDuplex, Transport::ScoA2dp, limit),
 			controllers * limit,
 		)));
 		if usable < inputs.headsets.len() {

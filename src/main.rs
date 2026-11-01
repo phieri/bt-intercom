@@ -189,7 +189,12 @@ fn run(action: CliCommand) -> Result<(), String> {
 					);
 				}
 			}
-			for warning in transport::controller_warnings(&transport_devices, 1) {
+			for warning in transport::controller_warnings(
+				&transport_devices,
+				transmit::Mode::HalfDuplex,
+				transport::Transport::ScoA2dp,
+				1,
+			) {
 				log::warn!("{warning}");
 			}
 		}
