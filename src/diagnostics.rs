@@ -345,7 +345,7 @@ fn evaluate(
 				"{controller}: {} headsets exceed the {per_adapter} per adapter supported with these options ({}); add a USB Bluetooth adapter per further {per_adapter} headsets",
 				addresses.len(),
 				if per_adapter > limit {
-					format!("one talker plus --a2dp-limit {a2dp} A2DP listener(s)")
+					format!("--a2dp-limit {a2dp} A2DP stream(s) plus --sco-limit {limit} SCO link(s)")
 				} else {
 					format!("--sco-limit {limit}; every headset keeps HFP/SCO open")
 				}
@@ -355,7 +355,7 @@ fn evaluate(
 	if let Some(controllers) = known.filter(|count| *count > 0) {
 		findings.push(Finding::info(format!(
 			"Capacity (assumes --a2dp-limit {a2dp} A2DP stream(s) and --sco-limit {limit} SCO link(s) per adapter; not measured, verify on hardware): \
-			 half-duplex with sco-a2dp supports up to {} headsets on {controllers} adapter(s) (one talker plus {a2dp} A2DP listener(s) per adapter); \
+			 half-duplex with sco-a2dp supports up to {} headsets on {controllers} adapter(s) ({a2dp} A2DP stream(s) plus {limit} SCO link(s) per adapter); \
 			 full-duplex or hfp supports up to {} headsets",
 			controllers * headsets_per_controller(Mode::HalfDuplex, Transport::ScoA2dp, limit, a2dp),
 			controllers * limit,

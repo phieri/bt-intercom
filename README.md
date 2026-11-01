@@ -150,14 +150,15 @@ button inputs never overwrite the saved network.
   workers. Existing PipeWire links are never modified.
 - `--sco-limit N` sets the SCO/eSCO budget per controller (default 1). With
   `sco-a2dp` it limits simultaneous talkers per controller (each controller also
-  hosts one A2DP listener); with `hfp` it only warns when the number of
+  hosts `--a2dp-limit` A2DP listeners); with `hfp` it only warns when the number of
   headsets on a controller exceeds the budget.
 - `--a2dp-limit N` sets the assumed A2DP streams per controller (default 1).
-  With `sco-a2dp`, while any headset talks every other headset on that
-  controller streams A2DP, so a controller supports one talker plus
-  `--a2dp-limit` listeners (raising `--sco-limit` only allows more talkers at
-  once). `run` rejects networks exceeding this at startup, and routing reports
-  an A2DP capacity conflict instead of switching profiles if more headsets
+  With `sco-a2dp`, talkers use HFP/SCO and listeners stream A2DP up to this
+  limit; further listeners on the same controller keep HFP/SCO (receiving only),
+  so a controller supports `--a2dp-limit` plus `--sco-limit` headsets in total,
+  for example one A2DP listener and one HFP listener while a talker on another
+  adapter transmits. `run` rejects networks exceeding this at startup, and routing reports
+  a listener capacity conflict instead of switching profiles if more headsets
   connect later. Also accepted by `diagnose`; raise only after verifying hardware.
 - Best-effort beeps confirm that a route is active. The temporary WAV file is
   created under an absolute `XDG_RUNTIME_DIR`, else the system temporary
