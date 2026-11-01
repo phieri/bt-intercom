@@ -166,13 +166,16 @@ impl Device {
 	}
 }
 
-/// Lower is preferred: SBC suits low-latency mono voice, then other codecs
-/// in order of quality, so headsets without SBC still work.
+/// Lower is preferred. Voice needs compatibility and low latency, not fidelity:
+/// SBC first, then SBC-XQ and AAC, then other codecs, with high-resolution
+/// codecs (LDAC, aptX HD/Adaptive) only as a last resort for headsets without
+/// any of them.
 fn a2dp_rank(name: &str) -> u8 {
 	match name.strip_prefix("a2dp-sink-").unwrap_or("sbc") {
 		"sbc" => 0,
 		"sbc_xq" => 1,
 		"aac" => 2,
+		"ldac" | "aptx_hd" | "aptx_adaptive" => 4,
 		_ => 3,
 	}
 }
@@ -249,6 +252,19 @@ mod tests {
 
 		assert_eq!(device.index(ProfileFamily::A2dp), Some(22));
 		assert!(!device.is_profile(ProfileFamily::A2dp));
+	}
+
+	#[test]
+	fn a2dp_ranks_high_resolution_codecs_last() {
+		let device = device(
+			json!([
+				{"index": 30, "name": "a2dp-sink-ldac", "available": "yes"},
+				{"index": 31, "name": "a2dp-sink-aptx_hd", "available": "yes"},
+				{"index": 32, "name": "a2dp-sink-aptx", "available": "yes"}
+			]),
+			30,
+		);
+		assert_eq!(device.index(ProfileFamily::A2dp), Some(32));
 	}
 
 	#[test]
