@@ -132,6 +132,7 @@ h1 { max-width: 11ch; margin-bottom: 1.3rem; font-family: var(--font-display); f
 .mode-note { max-width: 75ch; margin: 1.3rem 0 0; padding-left: 1rem; border-left: 2px solid var(--orange); color: var(--muted); font-size: .84rem; }
 .mode-note strong { color: var(--paper); }
 .panel-section { display: grid; grid-template-columns: .85fr 1.15fr; align-items: center; gap: clamp(2.5rem, 7vw, 6rem); border-top: 1px solid var(--line); }
+.panel-section-single { grid-template-columns: 1fr; }
 .panel-copy > p:not(.eyebrow) { max-width: 52ch; color: var(--muted); font-size: .9rem; }
 code { color: var(--color-code); font-family: var(--mono); font-size: .9em; }
 .key-list { display: grid; gap: .75rem; margin: 1.6rem 0 1.3rem; padding: 0; list-style: none; }
