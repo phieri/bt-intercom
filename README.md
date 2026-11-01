@@ -45,8 +45,13 @@ firmware and headset combination.
   independent controller per headset. `run` rejects full-duplex when BlueZ
   reports too few. Extra USB adapters do not move existing bonds, and
   bandwidth, interference, USB power and firmware can still limit quality.
-- **Half-duplex** with the default `sco-a2dp` transport needs fewer controllers;
-  see [SCO/A2DP transport](#scoa2dp-half-duplex-transport).
+- **Half-duplex** with the default `sco-a2dp` transport needs fewer controllers:
+  BlueZ allows one active A2DP stream per controller in addition to its SCO
+  budget, so each controller supports two headsets (one talker, one listener).
+  A Pi with only its onboard radio supports two; each USB adapter adds two.
+  `run` refuses to start when the headsets exceed what the detected controllers
+  (or any already-connected controller's headsets) support; `status` and
+  `diagnose` warn. See [SCO/A2DP transport](#scoa2dp-half-duplex-transport).
 
 ## Installation
 
@@ -144,8 +149,9 @@ button inputs never overwrite the saved network.
 - Ctrl-C or SIGTERM closes the links this process created and stops all
   workers. Existing PipeWire links are never modified.
 - `--sco-limit N` sets the SCO/eSCO budget per controller (default 1). With
-  `sco-a2dp` it limits simultaneous talkers per controller; with `hfp` it only
-  warns when observed usage exceeds the budget.
+  `sco-a2dp` it limits simultaneous talkers per controller (each controller also
+  hosts one A2DP listener); with `hfp` it only warns when the number of
+  headsets on a controller exceeds the budget.
 - Best-effort beeps confirm that a route is active. The temporary WAV file is
   created under an absolute `XDG_RUNTIME_DIR`, else the system temporary
   directory, and is removed at shutdown.
