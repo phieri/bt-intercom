@@ -242,7 +242,11 @@ up to `--sco-limit` per controller. Before granting another SCO link, it closes
 old routes, switches listeners to A2DP and waits for the profile changes to
 appear. Profile indices come from PipeWire, and SBC is preferred, then SBC-XQ,
 AAC and other codecs when a headset lacks SBC; WirePlumber negotiates the actual
-bitrate. Only allowlisted devices are changed, and missing controller identity
+bitrate. The choice is made per headset, so mixed headsets (for example one
+with LDAC and one with only SBC) each use their best available codec. `bt-intercom
+diagnose` lists the codecs each connected headset offers and warns when BlueZ
+reports a profile that PipeWire hides, usually because WirePlumber's
+`bluez5.codecs` or `bluez5.roles` exclude it. Only allowlisted devices are changed, and missing controller identity
 or required profiles produce errors instead of assumed capacity.
 
 ```sh

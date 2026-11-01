@@ -680,16 +680,22 @@ fn validate_role_profiles(
 	for (address, device) in devices {
 		let (family, _) = role_profile(sources, address);
 		if device.index(family).is_none() {
-			return Err(if family == ProfileFamily::A2dp {
-				format!(
-					"{address}: no available advertised A2DP profile; listeners need A2DP; enable an A2DP codec in WirePlumber's Bluetooth settings"
-				)
-			} else {
-				format!(
-					"{address}: no available advertised {} profile; talkers need HFP; check headset support and PipeWire Bluetooth configuration",
-					family.name()
-				)
-			});
+			let offered = [ProfileFamily::A2dp, ProfileFamily::Hfp]
+				.map(|family| format!("{} [{}]", family.name(), device.variants(family).join(", ")))
+				.join(", ");
+			return Err(format!(
+				"{}; this headset offers {offered}",
+				if family == ProfileFamily::A2dp {
+					format!(
+						"{address}: no available advertised A2DP profile; listeners need A2DP; enable an A2DP codec in WirePlumber's Bluetooth settings"
+					)
+				} else {
+					format!(
+						"{address}: no available advertised {} profile; talkers need HFP; check headset support and PipeWire Bluetooth configuration",
+						family.name()
+					)
+				}
+			));
 		}
 	}
 	Ok(())

@@ -147,6 +147,20 @@ impl Device {
 			.is_some_and(|name| family.matches(name))
 	}
 
+	/// Available profile variants of `family`, e.g. `sbc` or `msbc`, so
+	/// diagnostics can show what the headset and WirePlumber actually offer.
+	pub(crate) fn variants(&self, family: ProfileFamily) -> Vec<&str> {
+		self.profiles
+			.values()
+			.filter(|name| family.matches(name))
+			.map(|name| {
+				name.strip_prefix(family.name())
+					.and_then(|suffix| suffix.strip_prefix('-'))
+					.unwrap_or("default")
+			})
+			.collect()
+	}
+
 	pub(crate) fn same_identity(&self, other: &Self) -> bool {
 		self.id == other.id && self.serial == other.serial && self.path == other.path
 	}
@@ -205,6 +219,21 @@ mod tests {
 		assert!(ProfileFamily::A2dp.matches("a2dp-sink-sbc_xq"));
 		assert!(!ProfileFamily::Hfp.matches("headset-head-unitary"));
 		assert!(!ProfileFamily::A2dp.matches("a2dp-sinkish"));
+	}
+
+	#[test]
+	fn variants_list_available_codecs_per_family() {
+		let device = device(
+			json!([
+				{"index": 1, "name": "a2dp-sink-ldac", "available": "yes"},
+				{"index": 2, "name": "a2dp-sink-aac", "available": "no"},
+				{"index": 3, "name": "a2dp-sink", "available": "yes"},
+				{"index": 4, "name": "headset-head-unit-msbc", "available": "yes"}
+			]),
+			1,
+		);
+		assert_eq!(device.variants(ProfileFamily::A2dp), ["ldac", "default"]);
+		assert_eq!(device.variants(ProfileFamily::Hfp), ["msbc"]);
 	}
 
 	#[test]
