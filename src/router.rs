@@ -778,7 +778,7 @@ mod tests {
 		let error = router.transport_devices().unwrap_err();
 		assert!(error.contains("multiple live PipeWire Device"));
 		assert!(error.contains("hci0") && error.contains("hci1"));
-		// Advisory metadata errors must not change legacy HFP discovery.
+		// Advisory metadata errors must not change default HFP discovery.
 		router.update(true).unwrap();
 		assert_eq!(server.links(), 4);
 		router.set_transport(Transport::ScoA2dp);
