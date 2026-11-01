@@ -42,7 +42,7 @@ When a change affects those topics, update the README as well.
 - `src/dashboard.rs`, `src/tui.rs`, `src/tui/panel.rs`, `src/terminal_style.rs`:
   terminal status views, control panel and styling.
 - `src/atomic_file.rs`: atomic replacement for persisted files.
-- `man/`, `packaging/`, `examples/`: man page, AppArmor profile and systemd
+- `man/`, `packaging/`, `examples/`: man page and systemd
   units. Update the man page alongside README changes to CLI behavior.
 
 Unit tests are colocated with implementation in `#[cfg(test)]` modules.

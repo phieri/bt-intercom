@@ -82,11 +82,8 @@ yourself, install `cargo-deb` and `cargo-generate-rpm`, then run `cargo deb`
 or `cargo generate-rpm` (add `--target TARGET` when cross-compiling). Output
 goes to `target/debian/` and `target/[TARGET/]generate-rpm/`.
 
-Packages include a man page, an AppArmor profile
-(`/etc/apparmor.d/usr.bin.bt-intercom`, enforced only if AppArmor is enabled)
-and a systemd user unit that is installed but not enabled. The profile covers
-the default configuration and runtime paths; custom `XDG_CONFIG_HOME` or
-`TMPDIR` locations may need a local adjustment.
+Packages include a man page and a systemd user unit that is installed but not
+enabled.
 
 ### Shell completions
 
@@ -208,8 +205,10 @@ Use `--ptt ADDRESS=auto` (or a lone `--ptt auto`) to request matching
 explicitly. Find devices with `evtest` or `libinput debug-events`, and prefer
 stable `/dev/input/by-id/` or `by-path/` names. The running user must be able to
 read the devices, and the headset must send distinct press and release events.
-Missing or unreadable devices stop PTT from starting; a device failure while
-running exits and cleans up. PTT is not a privacy boundary: a failed mute can
+Missing or unreadable devices stop PTT from starting. If a device disappears
+while running (BlueZ recreates it when a headset reconnects or AVRCP restarts),
+the button is released and the reader reattaches by headset address once the
+device reappears. PTT is not a privacy boundary: a failed mute can
 leave audio active until a retry succeeds.
 
 ### Diagnostics

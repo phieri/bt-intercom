@@ -231,7 +231,15 @@ impl PreparedInputs {
 					let Some(address) = button.address else {
 						return;
 					};
-					read_events(file, address, sender, &stopped, &wake, Some(&session_wake));
+					supervise_events(
+						file,
+						&button.path,
+						address,
+						sender,
+						&stopped,
+						&wake,
+						&session_wake,
+					);
 				})
 			})
 			.collect();
@@ -255,10 +263,75 @@ impl PttInput {
 	}
 }
 
+/// Keep reading a headset's button across loss of its input device. BlueZ
+/// destroys and recreates the AVRCP uinput device when the headset reconnects
+/// or AVRCP restarts (e.g. around profile switches), which invalidates the
+/// open descriptor. Rediscover the device by address instead of failing.
+fn supervise_events(
+	file: File,
+	path: &str,
+	address: Address,
+	sender: Sender<PttEvent>,
+	stopped: &AtomicBool,
+	wake: &Receiver<()>,
+	session_wake: &SyncSender<()>,
+) {
+	let mut file = Some(file);
+	let mut path = path.to_string();
+	let mut pressed = false;
+	while !stopped.load(Ordering::SeqCst) {
+		let Some(input) = file.take() else {
+			if let Some((new_path, input)) = reopen(&address) {
+				log::info!("PTT input for {address} reattached at {new_path}");
+				path = new_path;
+				file = Some(input);
+			} else if !matches!(
+				wake.recv_timeout(Duration::from_millis(500)),
+				Err(mpsc::RecvTimeoutError::Timeout)
+			) {
+				return;
+			}
+			continue;
+		};
+		let Err(reason) = read_loop(
+			input,
+			&address,
+			&sender,
+			stopped,
+			wake,
+			Some(session_wake),
+			&mut pressed,
+		) else {
+			return;
+		};
+		if stopped.load(Ordering::SeqCst) {
+			return;
+		}
+		log::warn!("{reason} ({path}); waiting for the device to reappear");
+		if pressed {
+			pressed = false;
+			let release = Ok((address.clone(), false, Instant::now()));
+			if !send_event(&sender, Some(session_wake), release) {
+				return;
+			}
+		}
+	}
+}
+
+fn reopen(address: &Address) -> Option<(String, File)> {
+	let path = crate::ptt_discovery::find(address).ok()?;
+	let file = OpenOptions::new()
+		.read(true)
+		.custom_flags(libc::O_NONBLOCK)
+		.open(&path)
+		.ok()?;
+	Some((path, file))
+}
+
 /// `input` must not block: real devices are opened with O_NONBLOCK.
-/// Preserve the prefix of a record across short reads and WouldBlock.
+#[cfg(test)]
 pub(crate) fn read_events<R: Read>(
-	mut input: R,
+	input: R,
 	address: Address,
 	sender: Sender<PttEvent>,
 	stopped: &AtomicBool,
@@ -266,22 +339,40 @@ pub(crate) fn read_events<R: Read>(
 	session_wake: Option<&SyncSender<()>>,
 ) {
 	let mut pressed = false;
+	if let Err(error) = read_loop(
+		input,
+		&address,
+		&sender,
+		stopped,
+		wake,
+		session_wake,
+		&mut pressed,
+	) && !stopped.load(Ordering::SeqCst)
+	{
+		send_event(&sender, session_wake, Err(error));
+	}
+}
+
+/// Preserve the prefix of a record across short reads and WouldBlock. Returns
+/// `Ok` when stopped or the session is gone, `Err` when the input was lost.
+fn read_loop<R: Read>(
+	mut input: R,
+	address: &Address,
+	sender: &Sender<PttEvent>,
+	stopped: &AtomicBool,
+	wake: &Receiver<()>,
+	session_wake: Option<&SyncSender<()>>,
+	pressed: &mut bool,
+) -> Result<(), String> {
 	let offset = std::mem::size_of::<libc::timeval>();
 	let mut event = vec![0; offset + 8];
 	let mut filled = 0;
 	while !stopped.load(Ordering::SeqCst) {
 		match input.read(&mut event[filled..]) {
 			Ok(0) => {
-				if !stopped.load(Ordering::SeqCst) {
-					send_event(
-						&sender,
-						session_wake,
-						Err(format!(
-							"PTT input for {address} closed: unexpected end of input"
-						)),
-					);
-				}
-				return;
+				return Err(format!(
+					"PTT input for {address} closed: unexpected end of input"
+				));
 			}
 			Ok(count) => filled += count,
 			Err(error) if error.kind() == ErrorKind::Interrupted => continue,
@@ -290,50 +381,37 @@ pub(crate) fn read_events<R: Read>(
 					wake.recv_timeout(Duration::from_millis(20)),
 					Err(mpsc::RecvTimeoutError::Timeout)
 				) {
-					return;
+					return Ok(());
 				}
 				continue;
 			}
-			Err(error) => {
-				if !stopped.load(Ordering::SeqCst) {
-					send_event(
-						&sender,
-						session_wake,
-						Err(format!("PTT input for {address} closed: {error}")),
-					);
-				}
-				return;
-			}
+			Err(error) => return Err(format!("PTT input for {address} closed: {error}")),
 		}
 		if filled != event.len() {
 			continue;
 		}
 		filled = 0;
 		if stopped.load(Ordering::SeqCst) {
-			return;
+			return Ok(());
 		}
 		let at = Instant::now();
 		let event_type = u16::from_ne_bytes([event[offset], event[offset + 1]]);
 		let event_key = u16::from_ne_bytes([event[offset + 2], event[offset + 3]]);
 		let value = i32::from_ne_bytes(event[offset + 4..offset + 8].try_into().unwrap());
 		if event_type == 0 && event_key == 3 {
-			send_event(
-				&sender,
-				session_wake,
-				Err(format!("PTT input for {address} lost button events")),
-			);
-			return;
+			return Err(format!("PTT input for {address} lost button events"));
 		}
 		if event_type == 1 && PLAY_PAUSE_KEYS.contains(&event_key) && (value == 0 || value == 1) {
 			let next = value == 1;
-			if next != pressed {
-				pressed = next;
-				if !send_event(&sender, session_wake, Ok((address.clone(), pressed, at))) {
-					return;
+			if next != *pressed {
+				*pressed = next;
+				if !send_event(sender, session_wake, Ok((address.clone(), next, at))) {
+					return Ok(());
 				}
 			}
 		}
 	}
+	Ok(())
 }
 
 fn send_event(sender: &Sender<PttEvent>, wake: Option<&SyncSender<()>>, event: PttEvent) -> bool {

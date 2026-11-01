@@ -60,6 +60,10 @@ fn find_in(root: &Path, address: &Address) -> Result<String, String> {
 	}
 }
 
+pub(crate) fn find(address: &Address) -> Result<String, String> {
+	find_in(Path::new(SYS_INPUT), address)
+}
+
 /// Replaces `auto` mappings with discovered input paths.
 ///
 /// A bare `--ptt auto` expands to every listed headset.
