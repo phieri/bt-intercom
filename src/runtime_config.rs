@@ -16,12 +16,14 @@ use crate::transport::{self, Transport};
 pub(crate) fn parse_interval(value: &str) -> Result<f64, String> {
 	let interval = value
 		.parse::<f64>()
-		.map_err(|_| "--interval must be a positive finite number")?;
+		.map_err(|_| format!("--interval must be a positive finite number, got {value:?}"))?;
 	if !interval.is_finite() || interval <= 0.0 || interval >= u64::MAX as f64 {
-		return Err("--interval must be a positive finite number".into());
+		return Err(format!(
+			"--interval must be a positive finite number, got {value:?}"
+		));
 	}
 	if interval < 1.0 {
-		return Err("--interval must be at least 1 second".into());
+		return Err(format!("--interval must be at least 1 second, got {value}"));
 	}
 	Ok(interval)
 }
@@ -36,17 +38,30 @@ pub(crate) fn validate_ptt(
 		let Some(address) = &button.address else {
 			return Err("--ptt auto must be resolved before validating headset mappings".into());
 		};
-		if (!allowed.is_empty() && !allowed.contains(address))
-			|| !configured.insert(address.clone())
-		{
-			return Err("--ptt requires one unique button mapping per listed headset".into());
+		if !allowed.is_empty() && !allowed.contains(address) {
+			return Err(format!(
+				"--ptt maps {address}, which is not one of the listed headsets"
+			));
+		}
+		if !configured.insert(address.clone()) {
+			return Err(format!("--ptt maps {address} more than once"));
 		}
 		if !paths.insert(&button.path) {
-			return Err("--ptt requires a separate input device for each headset".into());
+			return Err(format!(
+				"--ptt maps input device {} to more than one headset; use a separate device for each",
+				button.path
+			));
 		}
 	}
 	if !buttons.is_empty() && !allowed.is_empty() && configured != *allowed {
-		return Err("--ptt requires a button mapping for every listed headset".into());
+		let missing: Vec<_> = allowed
+			.difference(&configured)
+			.map(|a| a.to_string())
+			.collect();
+		return Err(format!(
+			"--ptt requires a button mapping for every listed headset; missing: {}",
+			missing.join(", ")
+		));
 	}
 	Ok(())
 }
