@@ -37,7 +37,8 @@ to A2DP and HFP, and measures how many simultaneous SCO links each controller
 sustains, then summarizes BlueZ and PipeWire state (pairing, trust, controller
 roles, codecs, capacity bounds). Uses the saved network when no address is
 given. Stop any running intercom first: audio is interrupted, profile changes
-are unsaved, and every headset ends on A2DP.
+are unsaved, and every headset ends with all profiles released (PipeWire off,
+still connected) so none holds the controller's single A2DP stream.
 .B \-\-passive
 only inspects state without connecting or switching profiles. Also accepts
 .B \-\-sco\-limit
