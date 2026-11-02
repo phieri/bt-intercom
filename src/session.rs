@@ -70,6 +70,7 @@ pub(crate) struct Session {
 	wake: Receiver<()>,
 	wake_sender: SyncSender<()>,
 	last_error: Option<String>,
+	last_duplex_count: Option<usize>,
 	last_update: Option<Instant>,
 	update_interval: Duration,
 	redraw: bool,
@@ -105,6 +106,7 @@ impl Session {
 			wake,
 			wake_sender,
 			last_error: None,
+			last_duplex_count: None,
 			last_update: None,
 			update_interval,
 			redraw: true,
@@ -303,10 +305,15 @@ impl Session {
 						.values()
 						.filter(|headset| headset.has_duplex_audio())
 						.count();
-					log::info!(
-						"{active}/{} headsets with duplex audio",
-						self.routing.router.allowed.len()
-					);
+					// Half-duplex keeps only the talker on a duplex profile, so the count is not a readiness signal there.
+					if self.config.mode == Mode::FullDuplex
+						&& self.last_duplex_count.replace(active) != Some(active)
+					{
+						log::info!(
+							"{active}/{} headsets with duplex audio",
+							self.routing.router.allowed.len()
+						);
+					}
 				}
 				Err(error) => log::warn!("Routing update failed: {error}"),
 			}
