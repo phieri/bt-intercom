@@ -3,14 +3,17 @@
 //! Runtime session ownership, event processing, routing, and presentation.
 
 use std::collections::BTreeMap;
-use std::io::{IsTerminal, Write};
+use std::io::{self, IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use crossterm::cursor::MoveTo;
-use crossterm::execute;
+use crossterm::queue;
+use crossterm::style::Print;
+use crossterm::terminal::{self, BeginSynchronizedUpdate, Clear, ClearType, EndSynchronizedUpdate};
+use unicode_width::UnicodeWidthChar;
 
 use crate::bluez;
 use crate::bluez::Address;
@@ -396,13 +399,12 @@ impl Session {
 				.map_err(|error| error.to_string())?;
 			let mut output = stderr.lock();
 			if interactive {
-				// Overwrite in place and erase leftovers to avoid a blank frame.
-				execute!(output, MoveTo(0, 0)).map_err(|error| error.to_string())?;
-				let mut text = String::from_utf8_lossy(&frame).replace('\n', "\x1b[K\n");
-				text.push_str("\x1b[J");
-				output
-					.write_all(text.as_bytes())
+				let width = terminal::size()
+					.ok()
+					.map(|(columns, _)| usize::from(columns));
+				let text = interactive_frame(&String::from_utf8_lossy(&frame), width)
 					.map_err(|error| error.to_string())?;
+				output.write_all(&text).map_err(|error| error.to_string())?;
 			} else {
 				output
 					.write_all(&frame)
@@ -413,6 +415,36 @@ impl Session {
 		}
 		Ok(())
 	}
+}
+
+/// Truncates a line to at most `width` terminal columns.
+fn fit_line(line: &str, width: usize) -> &str {
+	let mut used = 0;
+	for (index, ch) in line.char_indices() {
+		used += ch.width().unwrap_or(0);
+		if used > width {
+			return &line[..index];
+		}
+	}
+	line
+}
+
+/// Builds one atomic in-place frame: lines are clipped to the terminal width so
+/// wrapping cannot desynchronize the cursor, and leftovers are erased.
+fn interactive_frame(frame: &str, width: Option<usize>) -> io::Result<Vec<u8>> {
+	let mut out = Vec::new();
+	queue!(out, BeginSynchronizedUpdate, MoveTo(0, 0))?;
+	for line in frame.lines() {
+		let line = width.map_or(line, |width| fit_line(line, width));
+		queue!(
+			out,
+			Print(line),
+			Clear(ClearType::UntilNewLine),
+			Print("\r\n")
+		)?;
+	}
+	queue!(out, Clear(ClearType::FromCursorDown), EndSynchronizedUpdate)?;
+	Ok(out)
 }
 
 impl Drop for Session {
@@ -434,6 +466,22 @@ impl Drop for Session {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn fit_line_clips_by_display_width() {
+		assert_eq!(fit_line("abcdef", 3), "abc");
+		assert_eq!(fit_line("abc", 10), "abc");
+		assert_eq!(fit_line("日本語", 5), "日本");
+	}
+
+	#[test]
+	fn interactive_frame_clips_and_clears() {
+		let out = String::from_utf8(interactive_frame("abcdef\nxy\n", Some(3)).unwrap()).unwrap();
+		assert!(out.contains("abc\x1b[K\r\n"));
+		assert!(!out.contains("abcd"));
+		assert!(out.contains("\x1b[J"));
+	}
+
 	use crate::ptt::PttButton;
 	use crate::transmit::Tap;
 	use std::sync::mpsc;
