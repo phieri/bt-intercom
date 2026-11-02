@@ -317,8 +317,7 @@ fn main() {
 			if let Err(error) = run(command) {
 				eprintln!("bt-intercom: {error}");
 				if error.contains("pw-") && error.contains("can't connect") {
-					// SAFETY: geteuid has no preconditions and cannot fail.
-					let root = unsafe { libc::geteuid() } == 0;
+					let root = rustix::process::geteuid().is_root();
 					if root || std::env::var_os("SUDO_USER").is_some() {
 						eprintln!(
 							"hint: PipeWire runs per user; do not run bt-intercom with sudo or as root. Run it as the desktop/login user that owns the PipeWire session"
