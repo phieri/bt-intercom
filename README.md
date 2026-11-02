@@ -218,7 +218,9 @@ SCO links that controller sustains** (use the result as `--sco-limit`). It
 reports headsets connected at once, per-profile failures and timings, then the
 BlueZ/PipeWire summary (pairing, trust, controller roles, capacity bounds).
 Stop any running intercom first: audio is interrupted for several minutes at
-most, profile changes are unsaved and every headset ends on A2DP. The measured
+most, profile changes are unsaved and every headset ends with all profiles released
+(PipeWire `off`; the Bluetooth connection stays up), so none holds the
+controller's single A2DP stream. `run` selects profiles itself. The measured
 limit is bounded by the number of headsets you pass; add more to probe further.
 `--passive` only inspects state without connecting or switching. `run` logs the
 passive findings at startup as non-fatal warnings.

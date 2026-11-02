@@ -3,7 +3,8 @@
 //! Active hardware probe: connects the allowlisted headsets, exercises their
 //! A2DP and HFP profiles and measures how many can use SCO at once per
 //! controller. Only allowlisted devices are touched, profile changes are not
-//! saved (`save: false`), and every headset is returned to A2DP afterwards.
+//! saved (`save: false`), and every headset's profiles are released (PipeWire `off`) afterwards so
+//! none holds the controller's single A2DP stream.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -127,6 +128,34 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Prober<'_, F> {
 			&format!("{{ index: {index}, save: false }}"),
 		])
 		.map(drop)
+	}
+
+	/// Releases every profile so a headset holds no A2DP stream or SCO link.
+	/// Falls back to A2DP when the device has no `off` profile.
+	fn release(&mut self, address: &Address) {
+		let result = self.observe().and_then(|(devices, _)| {
+			let device = devices.get(address).ok_or("not present in PipeWire")?;
+			let Some(index) = device.off_index() else {
+				return self.select(address, ProfileFamily::A2dp);
+			};
+			if device.is_off() {
+				return Ok(());
+			}
+			(self.execute)(&[
+				"pw-cli",
+				"set-param",
+				&device.id.to_string(),
+				"Profile",
+				&format!("{{ index: {index}, save: false }}"),
+			])
+			.map(drop)
+		});
+		if let Err(error) = result {
+			self.warn(format!(
+				"{}: could not release profiles: {error}",
+				self.label(address)
+			));
+		}
 	}
 
 	fn try_profile(
@@ -256,15 +285,15 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Prober<'_, F> {
 					.or_default()
 					.push(address.clone());
 			}
-			// Return to listening before testing the next headset.
-			let _ = self.try_profile(address, ProfileFamily::A2dp);
+			// Free the controller's A2DP stream before testing the next headset.
+			self.release(address);
 		}
 		let mut total = 0;
 		for (controller, headsets) in &hfp_capable {
 			total += self.measure_sco(controller, headsets);
 		}
 		for address in devices.keys() {
-			let _ = self.select(address, ProfileFamily::A2dp);
+			self.release(address);
 		}
 		let connected: usize = connected_per_controller.values().sum();
 		let per_controller = connected_per_controller
@@ -307,13 +336,13 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Prober<'_, F> {
 				Ok(_) => active.push(address.clone()),
 				Err(error) => {
 					limited_by = Some((address.clone(), error));
-					let _ = self.select(address, ProfileFamily::A2dp);
+					self.release(address);
 					break;
 				}
 			}
 		}
 		for address in &active {
-			let _ = self.select(address, ProfileFamily::A2dp);
+			self.release(address);
 		}
 		let count = active.len();
 		match limited_by {
@@ -375,7 +404,7 @@ mod tests {
 					"api.bluez5.path": format!("/org/bluez/hci0/dev_{}", address.replace(':', "_")),
 					"object.serial": 100 + n},
 				"params": {"EnumProfile": [
-					{"index": 1, "name": "a2dp-sink-sbc"}, {"index": 2, "name": "headset-head-unit"}],
+					{"index": 0, "name": "off"}, {"index": 1, "name": "a2dp-sink-sbc"}, {"index": 2, "name": "headset-head-unit"}],
 					"Profile": [{"index": current}]}}}),
 			);
 			let sink = 100 + n * 10;
@@ -384,7 +413,7 @@ mod tests {
 			} else {
 				("a2dp-sink-sbc", false)
 			};
-			if *current == 2 && !source {
+			if *current == 0 || (*current == 2 && !source) {
 				continue;
 			}
 			objects.push(
@@ -431,7 +460,13 @@ mod tests {
 				["bluetoothctl", "info", _] => Ok("Paired: yes\nConnected: yes\n".into()),
 				["pw-dump"] => Ok(dump(&shared.borrow()).to_string()),
 				["pw-cli", "set-param", id, "Profile", value] => {
-					let index = if value.contains("index: 2") { 2 } else { 1 };
+					let index = if value.contains("index: 2") {
+						2
+					} else if value.contains("index: 0") {
+						0
+					} else {
+						1
+					};
 					shared.borrow_mut().profiles[id.parse::<usize>().unwrap() - 10] = index;
 					Ok(String::new())
 				}
@@ -443,7 +478,7 @@ mod tests {
 	}
 
 	#[test]
-	fn measures_the_simultaneous_sco_limit_and_restores_a2dp() {
+	fn measures_the_simultaneous_sco_limit_and_releases_profiles() {
 		let (findings, profiles) = run(3, 2);
 		assert!(
 			findings.iter().any(|f| f.level == Level::Warn
@@ -457,7 +492,7 @@ mod tests {
 				.iter()
 				.any(|f| f.text.contains("3 of 3 headsets connected"))
 		);
-		assert_eq!(profiles, [1, 1, 1]);
+		assert_eq!(profiles, [0, 0, 0]);
 	}
 
 	#[test]
@@ -468,6 +503,6 @@ mod tests {
 				.iter()
 				.any(|f| f.level == Level::Info && f.text.contains("all 2 tested headset(s)"))
 		);
-		assert_eq!(profiles, [1, 1]);
+		assert_eq!(profiles, [0, 0]);
 	}
 }

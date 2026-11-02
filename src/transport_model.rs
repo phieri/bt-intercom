@@ -116,6 +116,17 @@ impl Device {
 		})
 	}
 
+	/// Index of PipeWire's `off` profile, which releases every Bluetooth profile.
+	pub(crate) fn off_index(&self) -> Option<u64> {
+		self.profiles
+			.iter()
+			.find_map(|(index, name)| (name == "off").then_some(*index))
+	}
+
+	pub(crate) fn is_off(&self) -> bool {
+		self.current.is_some() && self.current == self.off_index()
+	}
+
 	pub(crate) fn index(&self, family: ProfileFamily) -> Option<u64> {
 		if family == ProfileFamily::A2dp {
 			return self.a2dp_best;
