@@ -29,7 +29,8 @@ fn has_key(mask: &str, code: u16) -> bool {
 }
 
 /// Finds the event device that reports play/pause for `address` under `root`.
-fn find_in(root: &Path, address: &Address) -> Result<String, String> {
+/// `Ok(None)` means none exists yet, e.g. the headset is not connected.
+fn find_in(root: &Path, address: &Address) -> Result<Option<String>, String> {
 	let mut matches = vec![];
 	let entries = fs::read_dir(root).map_err(|error| format!("{}: {error}", root.display()))?;
 	for entry in entries.flatten() {
@@ -49,10 +50,8 @@ fn find_in(root: &Path, address: &Address) -> Result<String, String> {
 	}
 	matches.sort();
 	match matches.as_slice() {
-		[name] => Ok(format!("/dev/input/{name}")),
-		[] => Err(format!(
-			"no play/pause input device found for {address}; connect the headset first or pass --ptt {address}=/dev/input/eventX"
-		)),
+		[name] => Ok(Some(format!("/dev/input/{name}"))),
+		[] => Ok(None),
 		_ => Err(format!(
 			"several play/pause input devices match {address} ({}); pass --ptt {address}=/dev/input/eventX",
 			matches.join(", ")
@@ -60,13 +59,21 @@ fn find_in(root: &Path, address: &Address) -> Result<String, String> {
 	}
 }
 
+fn missing(address: &Address) -> String {
+	format!(
+		"no play/pause input device found for {address}; connect the headset (its AVRCP input device appears only while connected) or pass --ptt {address}=/dev/input/eventX"
+	)
+}
+
 pub(crate) fn find(address: &Address) -> Result<String, String> {
-	find_in(Path::new(SYS_INPUT), address)
+	find_in(Path::new(SYS_INPUT), address)?.ok_or_else(|| missing(address))
 }
 
 /// Replaces `auto` mappings with discovered input paths.
 ///
-/// A bare `--ptt auto` expands to every listed headset.
+/// A bare `--ptt auto` expands to every listed headset. A headset without an
+/// input device yet (typically still connecting) keeps `auto`; its reader
+/// attaches once the device appears. Ambiguous matches remain errors.
 pub(crate) fn resolve_pending(
 	buttons: &mut Vec<PttButton>,
 	allowed: &std::collections::BTreeSet<Address>,
@@ -93,7 +100,10 @@ fn resolve_at(
 		let Some(address) = &button.address else {
 			return Err("--ptt auto must be resolved to a headset address".into());
 		};
-		button.path = find_in(root, address)?;
+		match find_in(root, address)? {
+			Some(path) => button.path = path,
+			None => log::warn!("{}; waiting for it to appear", missing(address)),
+		}
 	}
 	Ok(())
 }
@@ -144,15 +154,28 @@ mod tests {
 		device(&root, "event5", "aa:bb:cc:dd:ee:02", &keys);
 		assert_eq!(
 			find_in(&root, &address("AA:BB:CC:DD:EE:01")).unwrap(),
-			"/dev/input/event3"
+			Some("/dev/input/event3".into())
 		);
 		assert_eq!(
 			find_in(&root, &address("AA:BB:CC:DD:EE:02")).unwrap(),
-			"/dev/input/event5"
+			Some("/dev/input/event5".into())
 		);
-		assert!(find_in(&root, &address("AA:BB:CC:DD:EE:03")).is_err());
+		assert_eq!(find_in(&root, &address("AA:BB:CC:DD:EE:03")).unwrap(), None);
 		device(&root, "event6", "aa:bb:cc:dd:ee:01", &keys);
 		assert!(find_in(&root, &address("AA:BB:CC:DD:EE:01")).is_err());
+		fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn missing_device_defers_instead_of_failing() {
+		let root = temp("ptt-defer");
+		let allowed = BTreeSet::from([address("AA:BB:CC:DD:EE:01")]);
+		let mut buttons = vec![PttButton {
+			address: None,
+			path: AUTO.into(),
+		}];
+		resolve_at(&root, &mut buttons, &allowed).unwrap();
+		assert_eq!(buttons[0].path, AUTO);
 		fs::remove_dir_all(root).unwrap();
 	}
 

@@ -6,7 +6,7 @@ and WirePlumber provide headset audio. Each headset microphone is routed to the
 other headsets, never back to itself.
 
 By default, each headset's play/pause button is matched automatically and its
-microphone stays muted until the button is held. Half-duplex queues talk
+microphone stays muted until the button is tapped (play). Half-duplex queues talk
 requests and allows one talker at a time. Friends or coworkers
 can pair their headsets with the same host to join.
 
@@ -169,26 +169,33 @@ respect `NO_COLOR`, and only clear the screen on an interactive terminal.
 
 `run` defaults to half-duplex; choose with `--mode half-duplex|full-duplex`.
 Every headset starts in push-to-talk (PTT) using its play/pause button, which is
-matched automatically. The headsets must be connected when `run` starts, and
-startup fails if an input device cannot be matched uniquely.
+matched automatically. A headset that is not yet connected is warned about and
+attached once its input device appears (repeating a warning every minute after
+10 seconds); startup fails if an input device matches ambiguously or an explicit
+device cannot be opened. A press that cannot be honoured (headset disconnected
+or lacking HFP ports) or a request still unconfirmed after 10 seconds is
+reported as a warning.
 
-PTT listens only for play/pause press and release events: `KEY_PLAYPAUSE` (164)
+PTT listens only for play/pause key-down events: `KEY_PLAYPAUSE` (164)
 and the `KEY_PLAYCD` (200)/`KEY_PAUSECD` (201) codes BlueZ emits for AVRCP
 PLAY/PAUSE, not call/answer buttons or keyboard input. No MPRIS player is
-needed. Hold the button to transmit; release to
-mute. A double beep confirms that the microphone route is active.
+needed. Headsets cannot report a held button: each press is a tap that sends
+PLAY or PAUSE. A PLAY tap opens the microphone and a PAUSE tap mutes it, so
+press once to transmit and once more to stop. A headset that sends a single
+toggling play/pause key alternates open and muted on each tap; releases and
+key repeats are ignored. A double beep confirms that the microphone route is
+active. These states reset when the process exits or the headset loses duplex
+audio.
 
-In **full-duplex**, press play/pause three times within one second to switch a
-headset between PTT and always-open. These choices reset when the process exits
-or the headset loses duplex audio.
+In **full-duplex**, every headset that has opened its microphone transmits.
 
-In **half-duplex**, holding the button requests a turn. If another headset is
-talking, the request waits in first-in, first-out order; keep holding and wait
-for the double beep before talking. Releasing cancels a queued request or ends
-your turn. All headsets share one queue. Triple presses do nothing. A routing
+In **half-duplex**, a PLAY tap requests a turn. If another headset is
+talking, the request waits in first-in, first-out order; wait for the double
+beep before talking. A PAUSE tap cancels a queued request or ends your turn.
+All headsets share one queue. A routing
 failure stops the run and releases its links rather than leave the previous
-talker active. After a headset loses duplex audio and reconnects, release and
-press again to talk.
+talker active. After a headset loses duplex audio and reconnects, tap play
+again to talk.
 
 To override automatic matching, map each headset to a Linux input event device:
 
@@ -201,10 +208,10 @@ bt-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 \
 Use `--ptt ADDRESS=auto` (or a lone `--ptt auto`) to request matching
 explicitly. Find devices with `evtest` or `libinput debug-events`, and prefer
 stable `/dev/input/by-id/` or `by-path/` names. The running user must be able to
-read the devices, and the headset must send distinct press and release events.
+read the devices, and the headset must send AVRCP play/pause key events.
 Missing or unreadable devices stop PTT from starting. If a device disappears
 while running (BlueZ recreates it when a headset reconnects or AVRCP restarts),
-the button is released and the reader reattaches by headset address once the
+the open request stays until the headset disconnects, and the reader reattaches by headset address once the
 device reappears. PTT is not a privacy boundary: a failed mute can
 leave audio active until a retry succeeds.
 
@@ -262,7 +269,7 @@ Notes:
 
 - A headset cannot listen over A2DP while its own HFP profile is active, so
   it may briefly be unable to receive while it talks.
-- A short absence of microphone ports during a switch does not cancel a held
+- A short absence of microphone ports during a switch does not cancel an open
   request; a genuine device disappearance does.
 - Half-duplex uses one profile per headset at a time, so only the profile for
   its current role must be available: HFP for the talker, A2DP for listeners.
@@ -279,8 +286,8 @@ Notes:
   Avoid running another profile manager against these devices.
 
 **Hardware validation is required.** Switching can interrupt audio for seconds,
-A2DP adds latency, and some headsets drop play/pause release events across
-profile changes. WirePlumber's automatic profile switching may compete with this
+A2DP adds latency, and some headsets drop play/pause commands across
+profile changes, which can leave your open/muted state out of sync (tap pause, then play). WirePlumber's automatic profile switching may compete with this
 policy: disable it for your deployment and test floor handoffs, disconnects and
 shutdown on the real devices.
 

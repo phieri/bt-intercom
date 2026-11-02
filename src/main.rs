@@ -342,6 +342,7 @@ mod tests {
 	use crate::ptt::{BEEP_WAV, confirm_transmissions, drain_events, read_input_events};
 	use crate::runtime_config::{validate_mode, validate_ptt};
 	use crate::session::{connect_disconnected, guard_half_update, reconnect_worker};
+	use crate::transmit::Tap;
 	use crate::transport::{
 		refresh_transmit_requests as refresh_transport_requests, validate_controller_count,
 		validate_transport,
@@ -452,8 +453,7 @@ mod tests {
 					&reconnected,
 					&BTreeSet::new()
 				));
-				assert!(!transmit.event(&address, true, at + Duration::from_millis(1)));
-				assert!(transmit.event(&address, false, at + Duration::from_millis(2)));
+				assert!(!transmit.event(&address, false, at + Duration::from_millis(1)));
 				assert!(transmit.event(&address, true, at + Duration::from_millis(3)));
 				assert_eq!(transmit.sources(), &[address.clone()].into());
 			}
@@ -524,8 +524,7 @@ mod tests {
 				));
 				transmit.event(&a, false, at + Duration::from_millis(2));
 				assert!(transmit.sources().is_empty());
-				assert!(!transmit.event(&b, true, at + Duration::from_millis(3)));
-				transmit.event(&b, false, at + Duration::from_millis(4));
+				assert!(!transmit.event(&b, false, at + Duration::from_millis(3)));
 				transmit.event(&b, true, at + Duration::from_millis(5));
 				assert_eq!(transmit.sources(), &[b.clone()].into());
 			}
@@ -673,7 +672,7 @@ mod tests {
 		}
 
 		#[test]
-		fn mode_parsing_validation_and_documented_window() {
+		fn mode_parsing_validation_and_documented_taps() {
 			for (name, expected) in [
 				("half-duplex", Mode::HalfDuplex),
 				("full-duplex", Mode::FullDuplex),
@@ -709,8 +708,8 @@ mod tests {
 				.unwrap()
 				.render_long_help()
 				.to_string();
-			assert!(help.contains("1 second"));
-			assert!(help.contains("first to third, inclusive"));
+			assert!(help.contains("tap play"));
+			assert!(help.contains("tap pause"));
 		}
 	}
 
@@ -812,7 +811,7 @@ mod tests {
 			// Release arriving during routing retires the old grant and defers
 			// confirmation of the next source until its own routing update.
 			sender
-				.send(Ok((a.clone(), false, now + Duration::from_millis(1))))
+				.send(Ok((a.clone(), Tap::Pause, now + Duration::from_millis(1))))
 				.unwrap();
 			transmit.pending.insert(a.clone());
 			assert!(
@@ -836,24 +835,17 @@ mod tests {
 		use super::*;
 
 		#[test]
-		fn draining_delayed_input_uses_capture_timestamps_not_processing_time() {
+		fn draining_queued_taps_applies_them_in_order() {
 			let input_address = address("AA:BB:CC:DD:EE:01");
 			let mut transmit = Transmit::new(Mode::FullDuplex, [input_address.clone()]);
 			let now = Instant::now();
 			let (sender, input) = mpsc::channel();
-			for ms in [0, 500, 1001] {
+			for (ms, tap) in [(0, Tap::Play), (1, Tap::Pause)] {
 				sender
 					.send(Ok((
 						input_address.clone(),
-						true,
+						tap,
 						now + Duration::from_millis(ms),
-					)))
-					.unwrap();
-				sender
-					.send(Ok((
-						input_address.clone(),
-						false,
-						now + Duration::from_millis(ms + 1),
 					)))
 					.unwrap();
 			}
@@ -922,7 +914,7 @@ mod tests {
 		}
 
 		#[test]
-		fn ptt_input_only_follows_matching_button_press_and_release() {
+		fn ptt_input_only_follows_matching_button_taps() {
 			fn event(kind: u16, key: u16, value: i32) -> Vec<u8> {
 				let mut bytes = vec![0; std::mem::size_of::<libc::timeval>()];
 				bytes.extend(kind.to_ne_bytes());
@@ -953,14 +945,14 @@ mod tests {
 			let input_address = address("AA:BB:CC:DD:EE:01");
 			read_input_events(std::io::Cursor::new(events), input_address.clone(), sender);
 
-			let (address, pressed, press_at) = receiver.recv().unwrap().unwrap();
-			assert_eq!((address, pressed), (input_address.clone(), true));
-			let (address, pressed, release_at) = receiver.recv().unwrap().unwrap();
-			assert_eq!((address, pressed), (input_address.clone(), false));
-			assert!(release_at >= press_at);
-			for pressed in [true, false, true, false] {
+			let (address, tap, first_at) = receiver.recv().unwrap().unwrap();
+			assert_eq!((address, tap), (input_address.clone(), Tap::Toggle));
+			let (_, tap, second_at) = receiver.recv().unwrap().unwrap();
+			assert_eq!(tap, Tap::Toggle);
+			assert!(second_at >= first_at);
+			for expected in [Tap::Play, Tap::Pause] {
 				let (_, actual, _) = receiver.recv().unwrap().unwrap();
-				assert_eq!(actual, pressed);
+				assert_eq!(actual, expected);
 			}
 			assert!(receiver.recv().unwrap().is_err());
 			assert!(matches!(

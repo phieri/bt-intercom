@@ -45,7 +45,7 @@ pub(crate) fn validate_ptt(
 		if !configured.insert(address.clone()) {
 			return Err(format!("--ptt maps {address} more than once"));
 		}
-		if !paths.insert(&button.path) {
+		if button.path != crate::ptt_discovery::AUTO && !paths.insert(&button.path) {
 			return Err(format!(
 				"--ptt maps input device {} to more than one headset; use a separate device for each",
 				button.path
@@ -243,8 +243,10 @@ mod tests {
 				2 => options.interval = f64::NAN,
 				3 => {
 					options.addresses.clear();
-					options.buttons.clear();
-					options.mode = Some(Mode::HalfDuplex);
+					options.buttons = vec![PttButton {
+						address: Some(A.into()),
+						path: "input".into(),
+					}];
 				}
 				4 => {
 					options.buttons = vec![PttButton {

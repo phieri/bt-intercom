@@ -18,11 +18,16 @@ use crate::network::runtime_directory;
 use crate::process::command_cancellable;
 use crate::router::Headset;
 use crate::routing_status::RoutingStatus;
-use crate::transmit::{Mode, Transmit};
+use crate::transmit::{Mode, Tap, Transmit};
 use crate::worker::Worker;
 
 /// Upper bound for playing the short PTT confirmation tone.
 const BEEP_PLAY_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long a headset may lack a button device before the user is warned, and
+/// how often the warning repeats.
+const PTT_WAIT_WARNING_DELAY: Duration = Duration::from_secs(10);
+const PTT_WAIT_WARNING_REPEAT: Duration = Duration::from_secs(60);
 
 pub(crate) const BEEP_WAV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ptt-beep.wav"));
 
@@ -40,7 +45,7 @@ pub(crate) struct PttButton {
 	pub path: String,
 }
 
-pub(crate) type PttEvent = Result<(Address, bool, Instant), String>;
+pub(crate) type PttEvent = Result<(Address, Tap, Instant), String>;
 
 pub(crate) struct PttBeep {
 	path: PathBuf,
@@ -176,8 +181,8 @@ pub(crate) fn drain_events(
 	let mut changed = false;
 	loop {
 		match input.try_recv() {
-			Ok(Ok((address, pressed, at))) => {
-				changed |= transmit.event(&address, pressed, at);
+			Ok(Ok((address, tap, at))) => {
+				changed |= transmit.tap(&address, tap, at);
 			}
 			Ok(Err(error)) => return Err(error),
 			Err(TryRecvError::Empty) => return Ok(changed),
@@ -199,7 +204,8 @@ pub(crate) fn read_input_events<R: Read>(input: R, address: Address, sender: Sen
 	);
 }
 
-pub(crate) struct PreparedInputs(Vec<(PttButton, File)>);
+/// A mapping whose device is `None` is still waiting for discovery to find it.
+pub(crate) struct PreparedInputs(Vec<(PttButton, Option<File>)>);
 
 pub(crate) struct PttInput {
 	pub events: Receiver<PttEvent>,
@@ -211,12 +217,22 @@ impl PreparedInputs {
 		buttons
 			.iter()
 			.map(|button| {
+				if button.path == crate::ptt_discovery::AUTO {
+					return Ok((button.clone(), None));
+				}
 				OpenOptions::new()
 					.read(true)
 					.custom_flags(libc::O_NONBLOCK)
 					.open(&button.path)
-					.map(|file| (button.clone(), file))
-					.map_err(|error| format!("PTT input {}: {error}", button.path))
+					.map(|file| (button.clone(), Some(file)))
+					.map_err(|error| {
+						let hint = if error.kind() == ErrorKind::PermissionDenied {
+							" (add the user to the `input` group or fix udev permissions, then log in again)"
+						} else {
+							""
+						};
+						format!("PTT input {}: {error}{hint}", button.path)
+					})
 			})
 			.collect::<Result<Vec<_>, _>>()
 			.map(Self)
@@ -271,7 +287,7 @@ impl PttInput {
 /// or AVRCP restarts (e.g. around profile switches), which invalidates the
 /// open descriptor. Rediscover the device by address instead of failing.
 fn supervise_events(
-	file: File,
+	file: Option<File>,
 	path: &str,
 	address: Address,
 	sender: Sender<PttEvent>,
@@ -279,16 +295,34 @@ fn supervise_events(
 	wake: &Receiver<()>,
 	session_wake: &SyncSender<()>,
 ) {
-	let mut file = Some(file);
+	let mut file = file;
 	let mut path = path.to_string();
-	let mut pressed = false;
+	let mut waiting_since = Instant::now();
+	let mut last_warning: Option<Instant> = None;
 	while !stopped.load(Ordering::SeqCst) {
 		let Some(input) = file.take() else {
-			if let Some((new_path, input)) = reopen(&address) {
-				log::info!("PTT input for {address} reattached at {new_path}");
-				path = new_path;
-				file = Some(input);
-			} else if !matches!(
+			match reopen(&address) {
+				Ok((new_path, input)) => {
+					log::info!("PTT input for {address} attached at {new_path}");
+					path = new_path;
+					file = Some(input);
+					last_warning = None;
+				}
+				Err(error) => {
+					let overdue = last_warning.map_or_else(
+						|| waiting_since.elapsed() >= PTT_WAIT_WARNING_DELAY,
+						|at| at.elapsed() >= PTT_WAIT_WARNING_REPEAT,
+					);
+					if overdue {
+						log::warn!("PTT button of {address} is unavailable: {error}");
+						last_warning = Some(Instant::now());
+					}
+				}
+			}
+			if file.is_some() {
+				continue;
+			}
+			if !matches!(
 				wake.recv_timeout(Duration::from_millis(500)),
 				Err(mpsc::RecvTimeoutError::Timeout)
 			) {
@@ -296,39 +330,26 @@ fn supervise_events(
 			}
 			continue;
 		};
-		let Err(reason) = read_loop(
-			input,
-			&address,
-			&sender,
-			stopped,
-			wake,
-			Some(session_wake),
-			&mut pressed,
-		) else {
+		let Err(reason) = read_loop(input, &address, &sender, stopped, wake, Some(session_wake))
+		else {
 			return;
 		};
 		if stopped.load(Ordering::SeqCst) {
 			return;
 		}
 		log::warn!("{reason} ({path}); waiting for the device to reappear");
-		if pressed {
-			pressed = false;
-			let release = Ok((address.clone(), false, Instant::now()));
-			if !send_event(&sender, Some(session_wake), release) {
-				return;
-			}
-		}
+		waiting_since = Instant::now();
 	}
 }
 
-fn reopen(address: &Address) -> Option<(String, File)> {
-	let path = crate::ptt_discovery::find(address).ok()?;
+fn reopen(address: &Address) -> Result<(String, File), String> {
+	let path = crate::ptt_discovery::find(address)?;
 	let file = OpenOptions::new()
 		.read(true)
 		.custom_flags(libc::O_NONBLOCK)
 		.open(&path)
-		.ok()?;
-	Some((path, file))
+		.map_err(|error| format!("{path}: {error}"))?;
+	Ok((path, file))
 }
 
 /// `input` must not block: real devices are opened with O_NONBLOCK.
@@ -341,16 +362,8 @@ pub(crate) fn read_events<R: Read>(
 	wake: &Receiver<()>,
 	session_wake: Option<&SyncSender<()>>,
 ) {
-	let mut pressed = false;
-	if let Err(error) = read_loop(
-		input,
-		&address,
-		&sender,
-		stopped,
-		wake,
-		session_wake,
-		&mut pressed,
-	) && !stopped.load(Ordering::SeqCst)
+	if let Err(error) = read_loop(input, &address, &sender, stopped, wake, session_wake)
+		&& !stopped.load(Ordering::SeqCst)
 	{
 		send_event(&sender, session_wake, Err(error));
 	}
@@ -365,7 +378,6 @@ fn read_loop<R: Read>(
 	stopped: &AtomicBool,
 	wake: &Receiver<()>,
 	session_wake: Option<&SyncSender<()>>,
-	pressed: &mut bool,
 ) -> Result<(), String> {
 	let offset = std::mem::size_of::<libc::timeval>();
 	let mut event = vec![0; offset + 8];
@@ -404,17 +416,26 @@ fn read_loop<R: Read>(
 		if event_type == 0 && event_key == 3 {
 			return Err(format!("PTT input for {address} lost button events"));
 		}
-		if event_type == 1 && PLAY_PAUSE_KEYS.contains(&event_key) && (value == 0 || value == 1) {
-			let next = value == 1;
-			if next != *pressed {
-				*pressed = next;
-				if !send_event(sender, session_wake, Ok((address.clone(), next, at))) {
-					return Ok(());
-				}
-			}
+		// Headsets send each AVRCP command as an instant press and release, so
+		// only the key-down carries meaning; releases and repeats are ignored.
+		if event_type == 1
+			&& value == 1
+			&& let Some(tap) = tap_for_key(event_key)
+			&& !send_event(sender, session_wake, Ok((address.clone(), tap, at)))
+		{
+			return Ok(());
 		}
 	}
 	Ok(())
+}
+
+fn tap_for_key(key: u16) -> Option<Tap> {
+	match key {
+		KEY_PLAYCD => Some(Tap::Play),
+		KEY_PAUSECD => Some(Tap::Pause),
+		KEY_PLAYPAUSE => Some(Tap::Toggle),
+		_ => None,
+	}
 }
 
 fn send_event(sender: &Sender<PttEvent>, wake: Option<&SyncSender<()>>, event: PttEvent) -> bool {
@@ -458,12 +479,16 @@ mod tests {
 		(output, events, session_events, session_wake, worker)
 	}
 
-	fn record(pressed: bool) -> Vec<u8> {
+	fn key_record(key: u16, value: i32) -> Vec<u8> {
 		let mut record = vec![0; std::mem::size_of::<libc::timeval>()];
 		record.extend(1u16.to_ne_bytes());
-		record.extend(KEY_PLAYPAUSE.to_ne_bytes());
-		record.extend(i32::from(pressed).to_ne_bytes());
+		record.extend(key.to_ne_bytes());
+		record.extend(value.to_ne_bytes());
 		record
+	}
+
+	fn record(pressed: bool) -> Vec<u8> {
+		key_record(KEY_PLAYPAUSE, i32::from(pressed))
 	}
 
 	#[test]
@@ -488,8 +513,8 @@ mod tests {
 	#[test]
 	fn split_records_survive_would_block_without_losing_transitions() {
 		let (mut writer, events, session_events, _, worker) = reader();
-		for pressed in [true, false] {
-			let record = record(pressed);
+		for _ in 0..2 {
+			let record = record(true);
 			writer.write_all(&record[..3]).unwrap();
 			assert!(matches!(
 				events.recv_timeout(Duration::from_millis(50)),
@@ -501,7 +526,7 @@ mod tests {
 				.unwrap()
 				.unwrap();
 			assert_eq!(address.as_str(), "AA:BB:CC:DD:EE:01");
-			assert_eq!(actual, pressed);
+			assert_eq!(actual, Tap::Toggle);
 			session_events.recv_timeout(Duration::from_secs(1)).unwrap();
 		}
 		drop(worker);
@@ -512,15 +537,16 @@ mod tests {
 	fn ptt_wake_notifications_coalesce_while_events_remain_queued() {
 		let (mut writer, events, session_events, wake_sender, worker) = reader();
 		wake_sender.try_send(()).unwrap();
-		writer.write_all(&record(true)).unwrap();
-		writer.write_all(&record(false)).unwrap();
+		for (key, value) in [(KEY_PLAYCD, 1), (KEY_PLAYCD, 0), (KEY_PAUSECD, 1)] {
+			writer.write_all(&key_record(key, value)).unwrap();
+		}
 
-		for expected in [true, false] {
-			let (_, pressed, _) = events
+		for expected in [Tap::Play, Tap::Pause] {
+			let (_, tap, _) = events
 				.recv_timeout(Duration::from_secs(1))
 				.unwrap()
 				.unwrap();
-			assert_eq!(pressed, expected);
+			assert_eq!(tap, expected);
 		}
 		drop(worker);
 		assert!(session_events.try_recv().is_ok());

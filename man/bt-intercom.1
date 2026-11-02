@@ -107,26 +107,26 @@ separate LE Audio broadcast hardware and software support and is not implemented
 .BI run " --ptt ADDRESS=/dev/input/eventX"
 Override the default automatic matching of play/pause input devices by mapping
 a headset to its Linux evdev push-to-talk input. Repeat once for every configured
-headset. Only the headset's play/pause key press and release events are used.
-The headset must be connected when run starts; startup fails if its input device
-cannot be matched uniquely. Use ADDRESS=auto, or a lone auto, to request
+headset. Only the headset's play/pause key-down events are used.
+A headset that is not yet connected is warned about and attached once its input
+device appears; startup fails if its input device matches ambiguously. Use ADDRESS=auto, or a lone auto, to request
 automatic matching explicitly. Only KEY_PLAYPAUSE, KEY_PLAYCD, and KEY_PAUSECD
 are recognised.
 .PP
-Hold play/pause to talk in PTT mode; release to mute. In half-duplex, requests
-wait in first-in, first-out order while another headset transmits. Keep holding
-until a double beep confirms an active microphone route; releasing cancels a
+Headsets send each play/pause press as a tap, not a held key. Tap play
+(KEY_PLAYCD) to open the microphone and pause (KEY_PAUSECD) to mute it; a
+headset with one toggling play/pause key (KEY_PLAYPAUSE) alternates on each tap.
+In half-duplex, requests
+wait in first-in, first-out order while another headset transmits. Wait for a
+double beep to confirm an active microphone route; pause cancels a
 queued request or ends the current turn. All headsets share one queue
 with one active talker.
 Half-duplex routing failures stop the run and release owned links. External
 links remain untouched; exclusivity applies only to this process's routes.
 .PP
-In full-duplex, automatically matched or explicitly mapped headsets start in
-PTT mode. Press play/pause three times within one second to toggle that headset
-independently between PTT and always-open. Choices reset when the process exits
-or that headset loses duplex audio.
-Losing duplex audio resets a mapped headset's request and always-open choice;
-release and press again after reconnecting.
+In full-duplex, every headset that has opened its microphone transmits.
+Losing duplex audio resets a mapped headset's request; tap play again after
+reconnecting.
 .TP
 .B run --dashboard
 Show the live terminal dashboard on standard error. Requires an interactive
