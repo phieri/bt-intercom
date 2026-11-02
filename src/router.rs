@@ -15,13 +15,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde_json::Value;
 
 use crate::bluez::Address;
-use crate::groups::TalkGroup;
 pub use crate::pipewire::Headset;
 use crate::pipewire::{Link, OWNER_PROPERTY, Snapshot};
 use crate::process::{COMMAND_TIMEOUT, command};
-use crate::route_policy::desired_links_by_group;
 #[cfg(test)]
-use crate::route_policy::{desired_links, desired_links_in_groups};
+use crate::route_policy::desired_links;
+use crate::route_policy::desired_links_for_sources;
 #[cfg(test)]
 use crate::routing_status::RoutingStatus;
 use crate::transport::{self, Transport};
@@ -294,43 +293,16 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 		&mut self,
 		sources: &BTreeSet<Address>,
 	) -> Result<BTreeMap<Address, Headset>, String> {
-		self.update_sources_in_groups(sources, &[])
-	}
-
-	/// Reconciles routes from the specified microphones within shared groups.
-	pub fn update_sources_in_groups(
-		&mut self,
-		sources: &BTreeSet<Address>,
-		groups: &[TalkGroup],
-	) -> Result<BTreeMap<Address, Headset>, String> {
-		let group_sources = if groups.is_empty() {
-			BTreeMap::from([(None, sources.clone())])
-		} else {
-			groups
-				.iter()
-				.map(|group| (Some(group.name.clone()), sources.clone()))
-				.collect()
-		};
-		self.update_group_sources_in_groups(&group_sources, groups)
-	}
-
-	/// Reconciles routes for sources granted a floor in each talk group.
-	pub fn update_group_sources_in_groups(
-		&mut self,
-		group_sources: &BTreeMap<Option<String>, BTreeSet<Address>>,
-		groups: &[TalkGroup],
-	) -> Result<BTreeMap<Address, Headset>, String> {
-		let sources = group_sources.values().flatten().cloned().collect();
-		if !self.prepare_transport(&sources)? {
+		if !self.prepare_transport(sources)? {
 			log::debug!("Transport not ready for sources {sources:?}; releasing owned links");
 			self.close();
 			return self.inspect().map(|(headsets, _)| headsets);
 		}
 		let snapshot = self.snapshot()?;
 		let (headsets, existing) = snapshot.topology(&self.allowed, self.coordinator.transport);
-		let desired = desired_links_by_group(&headsets, group_sources, groups);
+		let desired = desired_links_for_sources(&headsets, sources);
 		log::debug!(
-			"Routing: sources {group_sources:?}, {} headsets, {} desired links, {} observed links, {} owned links",
+			"Routing: sources {sources:?}, {} headsets, {} desired links, {} observed links, {} owned links",
 			headsets.len(),
 			desired.len(),
 			existing.len(),
@@ -855,50 +827,6 @@ mod tests {
 	fn rejects_link_commands_without_a_program() {
 		assert!(start_link(&[]).is_err());
 		assert!(start_link(&[""]).is_err());
-	}
-
-	#[test]
-	fn routes_only_headsets_sharing_a_talk_group() {
-		let objects = [fixture(), headset(30, C)].concat();
-		let allowed = [address(A), address(B), address(C)].into();
-		let (headsets, _) = topology(&json!(objects), &allowed).unwrap();
-		let groups = [TalkGroup {
-			name: "Team".into(),
-			members: [address(A), address(C)].into(),
-		}];
-		assert_eq!(
-			desired_links_in_groups(&headsets, &groups),
-			[(13, 34), (13, 35), (33, 14), (33, 15)].into()
-		);
-		assert_eq!(
-			desired_links_in_groups(&headsets, &[]),
-			desired_links(&headsets)
-		);
-	}
-
-	#[test]
-	fn half_duplex_routes_each_source_only_in_groups_where_it_holds_the_floor() {
-		let objects = [fixture(), headset(30, C)].concat();
-		let allowed = [address(A), address(B), address(C)].into();
-		let (headsets, _) = topology(&json!(objects), &allowed).unwrap();
-		let groups = [
-			TalkGroup {
-				name: "North".into(),
-				members: [address(A), address(B)].into(),
-			},
-			TalkGroup {
-				name: "South".into(),
-				members: [address(A), address(B), address(C)].into(),
-			},
-		];
-		let sources = BTreeMap::from([
-			(Some("North".into()), [address(A)].into()),
-			(Some("South".into()), [address(C)].into()),
-		]);
-		assert_eq!(
-			desired_links_by_group(&headsets, &sources, &groups),
-			[(13, 24), (13, 25), (33, 14), (33, 15), (33, 24), (33, 25),].into()
-		);
 	}
 
 	#[test]

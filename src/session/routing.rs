@@ -4,12 +4,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::AtomicBool;
 
 use crate::bluez::Address;
-use crate::groups;
 use crate::process::{COMMAND_TIMEOUT, command_cancellable};
 use crate::ptt::{PttBeep, PttInput, confirm_connections, confirm_transmissions, drain_events};
 use crate::router::{Headset, Router};
 use crate::runtime_config::RunConfig;
-use crate::transmit::{Mode, Transmit};
+use crate::transmit::Transmit;
 use crate::transport::{self, Transport};
 
 type Execute = Box<dyn FnMut(&[&str]) -> Result<String, String>>;
@@ -21,14 +20,12 @@ pub(crate) struct InspectionOutcome {
 
 pub(crate) struct RouteUpdateOutcome {
 	pub(crate) update: Result<BTreeMap<Address, Headset>, String>,
-	pub(crate) config_error: Option<String>,
 	pub(crate) inspect_error: Option<String>,
 	pub(crate) changed: bool,
 	pub(crate) invalidated: bool,
 }
 
 struct PreparedCycle {
-	config_error: Option<String>,
 	sources: BTreeSet<Address>,
 	transport_ready: bool,
 }
@@ -71,15 +68,9 @@ impl RoutingCoordinator {
 		if let Some(input) = input
 			&& drain_events(&input.events, transmit)?
 		{
-			return Ok(self.invalidate_cycle(cycle.config_error));
+			return Ok(self.invalidate_cycle());
 		}
-		let update = self.update_route_set(
-			config,
-			input,
-			&cycle.sources,
-			cycle.transport_ready,
-			transmit,
-		);
+		let update = self.update_route_set(input, &cycle.sources, cycle.transport_ready);
 		super::guard_half_update(config.mode, &update, || self.router.close())?;
 		let inspection = self.inspect_and_confirm(config, transmit, input, beep, stopped)?;
 		if inspection.changed {
@@ -88,7 +79,6 @@ impl RoutingCoordinator {
 		}
 		Ok(RouteUpdateOutcome {
 			update,
-			config_error: cycle.config_error,
 			inspect_error: inspection.error,
 			changed: inspection.changed,
 			invalidated: false,
@@ -101,39 +91,25 @@ impl RoutingCoordinator {
 		transmit: &mut Transmit,
 		input: Option<&PttInput>,
 	) -> Result<PreparedCycle, String> {
-		let config_error = self.reload_groups(config, transmit);
 		self.refresh_topology(config, transmit, input)?;
 		let sources = self.routing_sources(input, transmit);
 		let prepared = self.router.prepare_transport(&sources);
 		super::guard_half_update(config.mode, &prepared, || self.router.close())?;
 		let transport_ready = prepared?;
 		Ok(PreparedCycle {
-			config_error,
 			sources,
 			transport_ready,
 		})
 	}
 
-	fn invalidate_cycle(&mut self, config_error: Option<String>) -> RouteUpdateOutcome {
+	fn invalidate_cycle(&mut self) -> RouteUpdateOutcome {
 		self.router.close();
 		self.links.clear();
 		RouteUpdateOutcome {
 			update: Ok(BTreeMap::new()),
-			config_error,
 			inspect_error: None,
 			changed: true,
 			invalidated: true,
-		}
-	}
-
-	fn reload_groups(&mut self, config: &mut RunConfig, transmit: &mut Transmit) -> Option<String> {
-		match groups::load(&config.groups_path) {
-			Ok(groups) => {
-				transmit.set_groups(&groups);
-				config.groups = groups;
-				None
-			}
-			Err(error) => Some(error),
 		}
 	}
 
@@ -203,22 +179,16 @@ impl RoutingCoordinator {
 
 	fn update_route_set(
 		&mut self,
-		config: &RunConfig,
 		input: Option<&PttInput>,
 		sources: &BTreeSet<Address>,
 		transport_ready: bool,
-		transmit: &Transmit,
 	) -> Result<BTreeMap<Address, Headset>, String> {
 		if !transport_ready {
 			self.router.inspect().map(|(headsets, _)| headsets)
-		} else if config.groups.is_empty() && input.is_none() {
+		} else if input.is_none() {
 			self.router.update(true)
-		} else if config.mode == Mode::HalfDuplex && !config.groups.is_empty() {
-			self.router
-				.update_group_sources_in_groups(transmit.group_sources(), &config.groups)
 		} else {
-			self.router
-				.update_sources_in_groups(sources, &config.groups)
+			self.router.update_sources(sources)
 		}
 	}
 

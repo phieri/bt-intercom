@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
     <meta name="theme-color" content="#123B35">
-    <meta name="description" content="A local Bluetooth headset intercom for Linux. Check headset audio, manage talk groups, and choose full- or half-duplex conversation.">
+    <meta name="description" content="A local Bluetooth headset intercom for Linux. Check headset audio, monitor status, and choose full- or half-duplex conversation.">
     <title>bt-intercom · Your headsets, in conversation</title>
     <link rel="preload" href="demo.cast" as="fetch" crossorigin>
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -22,7 +22,6 @@
       <a class="wordmark" href="./" aria-label="bt-intercom home"><span class="wordmark-mark" aria-hidden="true">bt</span> intercom</a>
       <nav aria-label="Main navigation">
         <a href="#how-it-works">How it works</a>
-        <a href="#control-panel">Control panel</a>
         <a href="slides.html">Headset briefing</a>
         <a class="nav-cta" href="https://github.com/phieri/bt-intercom#requirements">Setup guide <span aria-hidden="true">↗</span></a>
       </nav>
@@ -62,56 +61,18 @@
       </section>
 
       <section class="feature-band" aria-label="Intercom capabilities">
-        <div><span class="feature-number">01</span><p><strong>Groups that make sense</strong><br>Route conversations by team.</p></div>
+        <div><span class="feature-number">01</span><p><strong>One shared channel</strong><br>Every headset hears the others.</p></div>
         <div><span class="feature-number">02</span><p><strong>Two ways to talk</strong><br>Open microphones or take turns.</p></div>
         <div><span class="feature-number">03</span><p><strong>Local by design</strong><br>Your audio stays on the host.</p></div>
       </section>
 
-      <section class="section how-section" id="how-it-works" aria-labelledby="groups-title">
+      <section class="section how-section" id="how-it-works" aria-labelledby="how-title">
         <div class="section-heading">
-          <p class="eyebrow">Conversations with boundaries</p>
-          <h2 id="groups-title">Make room for the right voices</h2>
-          <p>Talk groups decide where each headset’s microphone goes. Build a shared workshop, separate crews, or overlapping circles with one headset in more than one group.</p>
+          <p class="eyebrow">One conversation</p>
+          <h2 id="how-title">Make room for every voice</h2>
+          <p>Each headset’s microphone is routed to all other paired headsets—never back to its own headset.</p>
         </div>
-        <div class="group-explainer">
-          <article class="group-card">
-            <span class="card-index">01 / MEMBERSHIP</span>
-            <h3>Choose who’s in</h3>
-            <p>Assign paired headsets to one or more groups. When groups are configured, an unassigned headset is kept out of group routes.</p>
-            <div class="mini-group-list" aria-label="Example group memberships">
-              <div><span class="mini-dot dot-mint"></span><strong>Office</strong><span>Alex · Jules</span></div>
-              <div><span class="mini-dot dot-orange"></span><strong>Workshop</strong><span>Jules · Morgan</span></div>
-            </div>
-          </article>
-          <article class="group-card group-card-dark">
-            <span class="card-index">02 / ROUTING</span>
-            <h3>Hear only your group</h3>
-            <p>A microphone reaches other headsets sharing at least one group—never its own headset. With no groups configured, the intercom stays all-to-all.</p>
-            <div class="route-example">
-              <span>Alex</span><i aria-hidden="true"></i><span>Jules</span><i aria-hidden="true"></i><span>Morgan</span>
-              <small>Jules bridges both groups</small>
-            </div>
-          </article>
-        </div>
-        <p class="mode-note"><strong>Taking turns?</strong> In half-duplex mode, each group has its own first-in, first-out queue. Separate groups can have a talker at the same time.</p>
-      </section>
-
-      <section class="section panel-section panel-section-single" id="control-panel" aria-labelledby="panel-title">
-        <div class="panel-copy">
-          <p class="eyebrow">A small terminal, a clear picture</p>
-          <h2 id="panel-title">Keep the network in hand</h2>
-          <p>Open <code>bt-intercom panel</code> for the terminal control panel. Check Bluetooth connection and signal, confirm duplex audio is available, then manage groups and membership without editing config files.</p>
-          <ul class="key-list">
-            <li><kbd>Tab</kbd><span>Switch between groups and headsets</span></li>
-            <li><kbd>↑ ↓</kbd><span>Select a group or member</span></li>
-            <li><kbd>n</kbd><span>Create a talk group</span></li>
-            <li><kbd>d</kbd><span>Remove the selected group</span></li>
-            <li><kbd>Space</kbd><span>Toggle headset membership</span></li>
-            <li><kbd>Enter</kbd><span>Save a new group name</span></li>
-            <li><kbd>Esc</kbd><span>Cancel name entry or quit the panel</span></li>
-          </ul>
-          <p class="panel-update">Changes save to your user config and a running intercom picks them up on its next routing update.</p>
-        </div>
+        <p class="mode-note"><strong>Taking turns?</strong> In half-duplex mode, requests share one first-in, first-out queue and one headset talks at a time.</p>
       </section>
 
       <section class="section demo-section" id="demo" aria-labelledby="demo-title">

@@ -10,10 +10,6 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use crate::bluez::Address;
-use crate::groups::TalkGroup;
-
-mod floor;
-use floor::allocate_floors;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
 pub enum Mode {
@@ -33,13 +29,9 @@ struct Button {
 pub struct Transmit {
 	mode: Mode,
 	buttons: BTreeMap<Address, Button>,
-	groups: Vec<TalkGroup>,
-	queues: BTreeMap<Option<String>, VecDeque<Address>>,
-	group_sources: BTreeMap<Option<String>, BTreeSet<Address>>,
+	queue: VecDeque<Address>,
 	active: BTreeSet<Address>,
 	controllers: Option<BTreeMap<Address, String>>,
-	sco_limit: usize,
-	request_order: VecDeque<Address>,
 	pub pending: BTreeSet<Address>,
 }
 
@@ -48,51 +40,22 @@ impl Transmit {
 		Self {
 			mode,
 			buttons: mapped.into_iter().map(|a| (a, Button::default())).collect(),
-			groups: Vec::new(),
-			queues: BTreeMap::new(),
-			group_sources: BTreeMap::new(),
+			queue: VecDeque::new(),
 			active: BTreeSet::new(),
 			controllers: None,
-			sco_limit: 1,
-			request_order: VecDeque::new(),
 			pending: BTreeSet::new(),
 		}
 	}
 
-	/// Apply a per-controller SCO source limit, independently of talk groups.
-	/// Missing mappings cannot receive a grant, but held requests remain queued.
+	/// Half-duplex requests from headsets without a known controller stay
+	/// queued but cannot receive the floor.
 	pub fn set_controllers(&mut self, controllers: &BTreeMap<Address, String>) {
 		self.controllers = Some(controllers.clone());
 		self.refresh();
 	}
 
-	pub fn set_sco_limit(&mut self, limit: usize) {
-		self.sco_limit = limit;
-		self.refresh();
-	}
-
-	/// Replace talk groups. Half-duplex requests are retired when membership
-	/// changes so a held button must be released and pressed again.
-	pub fn set_groups(&mut self, groups: &[TalkGroup]) -> bool {
-		if self.groups == groups {
-			return false;
-		}
-		self.groups = groups.to_vec();
-		if self.mode == Mode::HalfDuplex {
-			self.queues.clear();
-			self.request_order.clear();
-			for button in self.buttons.values_mut() {
-				button.requested = false;
-			}
-			self.pending.clear();
-			self.refresh();
-		}
-		true
-	}
-
 	/// Returns whether a genuine transition was processed.
 	pub fn event(&mut self, address: &Address, pressed: bool, at: Instant) -> bool {
-		let memberships = self.memberships(address);
 		let Some(button) = self.buttons.get_mut(address) else {
 			return false;
 		};
@@ -104,18 +67,9 @@ impl Transmit {
 		match self.mode {
 			Mode::HalfDuplex => {
 				if pressed {
-					self.request_order.push_back(address.to_owned());
-					for membership in memberships {
-						self.queues
-							.entry(membership)
-							.or_default()
-							.push_back(address.to_owned());
-					}
+					self.queue.push_back(address.to_owned());
 				} else {
-					self.request_order.retain(|queued| queued != address);
-					for queue in self.queues.values_mut() {
-						queue.retain(|queued| queued != address);
-					}
+					self.queue.retain(|queued| queued != address);
 				}
 			}
 			Mode::FullDuplex if pressed => {
@@ -142,13 +96,10 @@ impl Transmit {
 		let before = self.active.clone();
 		for (address, button) in &mut self.buttons {
 			if !available.contains(address) {
-				self.request_order.retain(|queued| queued != address);
+				self.queue.retain(|queued| queued != address);
 				button.requested = false;
 				button.open = false;
 				button.presses.clear();
-				for queue in self.queues.values_mut() {
-					queue.retain(|queued| queued != address);
-				}
 			}
 		}
 		self.refresh();
@@ -156,59 +107,32 @@ impl Transmit {
 	}
 
 	fn refresh(&mut self) {
-		let (next, group_sources) = match self.mode {
-			Mode::HalfDuplex => {
-				let candidates = self
-					.queues
-					.iter()
-					.filter_map(|(group, queue)| {
-						queue
-							.front()
-							.map(|address| (group.clone(), BTreeSet::from([address.clone()])))
-					})
-					.collect::<BTreeMap<_, _>>();
-				let group_sources = allocate_floors(
-					&candidates,
-					&self.group_sources,
-					&self.request_order,
-					self.controllers.as_ref(),
-					self.sco_limit,
-				);
-				let active = group_sources.values().flatten().cloned().collect();
-				(active, group_sources)
-			}
-			Mode::FullDuplex => (
-				self.buttons
-					.iter()
-					.filter(|(_, b)| b.requested || b.open)
-					.map(|(a, _)| a.clone())
-					.collect::<BTreeSet<_>>(),
-				BTreeMap::new(),
-			),
+		let next = match self.mode {
+			Mode::HalfDuplex => self
+				.queue
+				.front()
+				.filter(|address| {
+					self.controllers
+						.as_ref()
+						.is_none_or(|controllers| controllers.contains_key(*address))
+				})
+				.cloned()
+				.into_iter()
+				.collect(),
+			Mode::FullDuplex => self
+				.buttons
+				.iter()
+				.filter(|(_, b)| b.requested || b.open)
+				.map(|(a, _)| a.clone())
+				.collect::<BTreeSet<_>>(),
 		};
 		self.pending.retain(|a| next.contains(a));
 		self.pending.extend(next.difference(&self.active).cloned());
 		self.active = next;
-		self.group_sources = group_sources;
-	}
-
-	fn memberships(&self, address: &Address) -> Vec<Option<String>> {
-		if self.groups.is_empty() {
-			return vec![None];
-		}
-		self.groups
-			.iter()
-			.filter(|group| group.members.contains(address))
-			.map(|group| Some(group.name.clone()))
-			.collect()
 	}
 
 	pub fn sources(&self) -> &BTreeSet<Address> {
 		&self.active
-	}
-
-	pub fn group_sources(&self) -> &BTreeMap<Option<String>, BTreeSet<Address>> {
-		&self.group_sources
 	}
 
 	pub(crate) fn dashboard_state(&self, address: &Address) -> String {
@@ -220,19 +144,9 @@ impl Transmit {
 				Some(_) => "muted".into(),
 			};
 		}
-		if !self.groups.is_empty() && self.memberships(address).is_empty() {
-			return "unassigned".into();
-		}
-		let waiting = self.queues.iter().any(|(group, queue)| {
-			queue.contains(address)
-				&& !self
-					.group_sources
-					.get(group)
-					.is_some_and(|sources| sources.contains(address))
-		});
-		match (self.active.contains(address), waiting) {
-			(true, true) => "floor + waiting".into(),
-			(true, false) => "has floor".into(),
+		let queued = self.queue.contains(address);
+		match (self.active.contains(address), queued) {
+			(true, _) => "has floor".into(),
 			(false, true) => "queued".into(),
 			(false, false) => "idle".into(),
 		}
@@ -242,7 +156,6 @@ impl Transmit {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::groups::TalkGroup;
 
 	fn address(value: &str) -> Address {
 		Address::parse(value).unwrap_or_else(|_| {
@@ -257,13 +170,6 @@ mod tests {
 
 	fn set(addresses: &[&str]) -> BTreeSet<Address> {
 		addresses.iter().map(|value| address(value)).collect()
-	}
-
-	fn group(name: &str, members: &[&str]) -> TalkGroup {
-		TalkGroup {
-			name: name.into(),
-			members: set(members),
-		}
 	}
 
 	fn press(t: &mut Transmit, a: &str, base: Instant, ms: u64) {
@@ -323,126 +229,22 @@ mod tests {
 	}
 
 	#[test]
-	fn half_duplex_queues_are_independent_per_talk_group() {
+	fn controller_mapping_gates_the_single_floor() {
 		let (mut t, now) = setup(Mode::HalfDuplex);
-		t.set_groups(&[group("Red", &["a", "b"]), group("Blue", &["c", "d"])]);
-		press(&mut t, "a", now, 0);
-		press(&mut t, "b", now, 1);
-		press(&mut t, "c", now, 2);
-		press(&mut t, "d", now, 3);
-		assert_eq!(t.sources(), &set(&["a", "c"]));
-		assert_eq!(
-			t.group_sources(),
-			&BTreeMap::from([
-				(Some("Blue".into()), set(&["c"])),
-				(Some("Red".into()), set(&["a"])),
-			])
-		);
-		release(&mut t, "a", now, 4);
-		assert_eq!(t.sources(), &set(&["b", "c"]));
-	}
-
-	#[test]
-	fn controller_floors_preserve_held_reservations_and_global_fifo() {
-		let (mut t, now) = setup(Mode::HalfDuplex);
-		t.set_groups(&[
-			group("Zulu", &["a"]),
-			group("Alpha", &["b"]),
-			group("Middle", &["c"]),
-		]);
-		t.set_controllers(&BTreeMap::from([
-			(address("a"), "hci0".into()),
-			(address("b"), "hci0".into()),
-			(address("c"), "hci0".into()),
-		]));
-		press(&mut t, "a", now, 0);
-		press(&mut t, "c", now, 1);
-		press(&mut t, "b", now, 2);
-		assert_eq!(t.sources(), &set(&["a"]));
-		release(&mut t, "a", now, 3);
-		assert_eq!(t.sources(), &set(&["c"]));
-		release(&mut t, "c", now, 4);
-		assert_eq!(t.sources(), &set(&["b"]));
-	}
-
-	#[test]
-	fn configured_controller_capacity_grants_multiple_queued_floors() {
-		let (mut t, now) = setup(Mode::HalfDuplex);
-		t.set_groups(&[
-			group("Zulu", &["a"]),
-			group("Alpha", &["b"]),
-			group("Middle", &["c"]),
-		]);
-		t.set_sco_limit(2);
-		t.set_controllers(&BTreeMap::from([
-			(address("a"), "hci0".into()),
-			(address("b"), "hci0".into()),
-			(address("c"), "hci0".into()),
-		]));
-		press(&mut t, "a", now, 0);
-		press(&mut t, "c", now, 1);
-		press(&mut t, "b", now, 2);
-		assert_eq!(t.sources(), &set(&["a", "c"]));
-		release(&mut t, "a", now, 3);
-		assert_eq!(t.sources(), &set(&["b", "c"]));
-	}
-
-	#[test]
-	fn unmapped_controller_requests_are_retained_but_not_granted() {
-		let (mut t, now) = setup(Mode::HalfDuplex);
-		t.set_groups(&[group("Red", &["a"]), group("Blue", &["b"])]);
 		t.set_controllers(&BTreeMap::new());
 		press(&mut t, "a", now, 0);
 		press(&mut t, "b", now, 1);
 		assert!(t.sources().is_empty());
-		t.set_controllers(&BTreeMap::from([
-			(address("a"), "hci0".into()),
-			(address("b"), "hci1".into()),
-		]));
-		assert_eq!(t.sources(), &set(&["a", "b"]));
+		t.set_controllers(&BTreeMap::from([(address("a"), "hci0".into())]));
+		assert_eq!(t.sources(), &set(&["a"]));
 		t.set_controllers(&BTreeMap::from([(address("b"), "hci1".into())]));
-		assert_eq!(t.sources(), &set(&["b"]));
+		assert!(t.sources().is_empty());
 		t.set_controllers(&BTreeMap::from([
 			(address("a"), "hci0".into()),
 			(address("b"), "hci1".into()),
 		]));
-		assert_eq!(t.sources(), &set(&["a", "b"]));
-	}
-
-	#[test]
-	fn enabling_constraints_keeps_the_oldest_existing_reservation() {
-		let (mut t, now) = setup(Mode::HalfDuplex);
-		t.set_groups(&[group("Zulu", &["a"]), group("Alpha", &["b"])]);
-		press(&mut t, "a", now, 0);
-		press(&mut t, "b", now, 1);
-		assert_eq!(t.sources(), &set(&["a", "b"]));
-		t.set_controllers(&BTreeMap::from([
-			(address("a"), "hci0".into()),
-			(address("b"), "hci0".into()),
-		]));
 		assert_eq!(t.sources(), &set(&["a"]));
-	}
-
-	#[test]
-	fn half_duplex_ignores_requests_without_a_group_membership() {
-		let (mut t, now) = setup(Mode::HalfDuplex);
-		t.set_groups(&[group("Team", &["a", "b"])]);
-		press(&mut t, "c", now, 0);
-		press(&mut t, "a", now, 1);
-		assert_eq!(t.sources(), &set(&["a"]));
-	}
-
-	#[test]
-	fn changing_groups_retires_requests_until_buttons_are_repressed() {
-		let (mut t, now) = setup(Mode::HalfDuplex);
-		t.set_groups(&[group("Team", &["a", "b"])]);
-		press(&mut t, "a", now, 0);
-		press(&mut t, "b", now, 1);
-		assert!(t.set_groups(&[group("Team", &["b", "c"])]));
-		assert!(t.sources().is_empty());
-		assert!(!t.event(&address("a"), true, now + Duration::from_millis(2)));
-		release(&mut t, "b", now, 3);
-		press(&mut t, "b", now, 4);
+		release(&mut t, "a", now, 2);
 		assert_eq!(t.sources(), &set(&["b"]));
 	}
 

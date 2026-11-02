@@ -86,15 +86,13 @@ impl Session {
 		let (wake_sender, wake) = mpsc::sync_channel(1);
 		let update_interval = config.interval;
 		let routing = RoutingCoordinator::new(&config, &stopped);
-		let mut transmit = Transmit::new(
+		let transmit = Transmit::new(
 			config.mode,
 			config
 				.buttons
 				.iter()
 				.filter_map(|button| button.address.clone()),
 		);
-		transmit.set_sco_limit(config.sco_limit);
-		transmit.set_groups(&config.groups);
 		Self {
 			config,
 			stopped,
@@ -277,7 +275,7 @@ impl Session {
 			self.update_interval = ROUTE_CHANGE_RETRY_INTERVAL;
 			return Ok(());
 		}
-		self.report_update(outcome.update, outcome.config_error, outcome.inspect_error);
+		self.report_update(outcome.update, outcome.inspect_error);
 		self.last_update = Some(Instant::now());
 		self.update_interval = if outcome.changed {
 			ROUTE_CHANGE_RETRY_INTERVAL
@@ -290,18 +288,14 @@ impl Session {
 	fn report_update(
 		&mut self,
 		update: Result<BTreeMap<Address, Headset>, String>,
-		config_error: Option<String>,
 		inspect_error: Option<String>,
 	) {
 		if self.dashboard.is_some() {
-			self.last_error = config_error.or_else(|| update.err()).or(inspect_error);
+			self.last_error = update.err().or(inspect_error);
 			self.redraw = true;
 		} else {
 			if let Some(error) = inspect_error {
 				log::warn!("Routing inspection failed: {error}");
-			}
-			if let Some(error) = config_error {
-				log::warn!("Talk-group configuration unavailable: {error}");
 			}
 			match update {
 				Ok(headsets) => {
@@ -401,9 +395,7 @@ mod tests {
 			a2dp_limit: 1,
 			dashboard: false,
 			explicit_network: true,
-			groups_path: network_path.with_extension("groups"),
 			network_path,
-			groups: vec![],
 		}
 	}
 

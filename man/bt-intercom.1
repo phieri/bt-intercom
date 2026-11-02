@@ -8,8 +8,8 @@ bt-intercom \- half-duplex or full-duplex Bluetooth headset intercom
 .SH DESCRIPTION
 .B bt-intercom
 routes configured Bluetooth Classic headsets using BlueZ, PipeWire, and
-WirePlumber. When talk groups are configured, a microphone is routed only to
-other members of its groups; otherwise all headsets share the intercom. Run it
+WirePlumber. A microphone is routed to all other headsets, never back to
+itself. Run it
 as the same user that owns the PipeWire session; do not run it with
 .BR sudo .
 The default half-duplex SCO/A2DP transport changes only configured headset
@@ -51,12 +51,6 @@ previously saved network is restored.
 .BI completions " SHELL"
 Write shell completion definitions to standard output. Supported shells include
 Bash, Zsh, Fish, and Elvish.
-.TP
-.B panel
-Open the interactive terminal control panel to monitor headsets and edit talk
-groups. Use Tab and arrow keys to navigate; press n to add a group, d to remove
-the selected group, and Space to toggle headset membership.
-Home and End jump to the first and last item in the focused list.
 .SH OPTIONS
 .TP
 .BI scan " --seconds SECONDS"
@@ -67,7 +61,7 @@ Set the routing update interval (default: 2 seconds; minimum: 1 second).
 .TP
 .BI run " --sco-limit N"
 Set the maximum simultaneous SCO/eSCO links per Bluetooth controller (default:
-1). In SCO/A2DP transport, this limits simultaneous talkers per controller.
+1).
 The HFP transport leaves profiles unchanged and warns if observed
 headset usage exceeds the budget. Increase N only after verifying the adapter,
 firmware, and headset capacity.
@@ -98,8 +92,7 @@ listeners' SCO/eSCO usage.
 SCO/A2DP requires half-duplex mode, PTT for every headset, and both
 HFP/HSP and A2DP playback profiles. Listeners switch to A2DP before a talker
 switches to HFP; profile indices and controller identities are discovered from
-PipeWire. Up to --sco-limit talkers are granted per controller, shared across
-talk groups.
+PipeWire.
 Profile transitions are asynchronous and may interrupt audio. Profiles remain
 in their last selected state on exit; owned links are released.
 .PP
@@ -122,9 +115,8 @@ are recognised.
 Hold play/pause to talk in PTT mode; release to mute. In half-duplex, requests
 wait in first-in, first-out order while another headset transmits. Keep holding
 until a double beep confirms an active microphone route; releasing cancels a
-queued request or ends the current turn. Each talk group has an independent
-queue and can have one active talker. A headset in multiple groups can hold the
-floor in each; with no groups configured, all headsets share one queue.
+queued request or ends the current turn. All headsets share one queue
+with one active talker.
 Half-duplex routing failures stop the run and release owned links. External
 links remain untouched; exclusivity applies only to this process's routes.
 .PP
@@ -159,15 +151,6 @@ when
 is unset or not absolute. Temporary PTT confirmation audio uses
 .B XDG_RUNTIME_DIR
 when it is absolute and otherwise uses the system temporary directory.
-.PP
-Talk groups are stored in
-.IR $XDG_CONFIG_HOME/bt-intercom/talk-groups.json ,
-or
-.IR ~/.config/bt-intercom/talk-groups.json
-when
-.B XDG_CONFIG_HOME
-is unset or not absolute. A running intercom reloads group changes on the next
-routing update.
 .PP
 Runtime log levels are controlled by
 .BR RUST_LOG .

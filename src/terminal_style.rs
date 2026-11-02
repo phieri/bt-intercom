@@ -4,8 +4,6 @@
 
 use std::{env, ffi::OsString};
 
-use ratatui::style::{Color, Style};
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ColorLevel {
 	None,
@@ -19,13 +17,19 @@ pub struct Palette {
 	level: ColorLevel,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Color {
+	Reset,
+	Rgb(u8, u8, u8),
+	Indexed(u8),
+	Green,
+	Yellow,
+}
+
 #[derive(Clone, Copy)]
 pub enum Meaning {
 	Success,
-	Error,
 	Warning,
-	Info,
-	Selection,
 }
 
 impl Palette {
@@ -38,26 +42,17 @@ impl Palette {
 		}
 	}
 
-	pub fn color(self, meaning: Meaning) -> Color {
+	fn color(self, meaning: Meaning) -> Color {
 		if self.level == ColorLevel::None {
 			return Color::Reset;
 		}
 		match (self.level, meaning) {
 			(ColorLevel::TrueColor, Meaning::Success) => Color::Rgb(0, 160, 0),
-			(ColorLevel::TrueColor, Meaning::Error) => Color::Rgb(200, 40, 40),
 			(ColorLevel::TrueColor, Meaning::Warning) => Color::Rgb(180, 120, 0),
-			(ColorLevel::TrueColor, Meaning::Info) => Color::Rgb(40, 100, 200),
-			(ColorLevel::TrueColor, Meaning::Selection) => Color::Rgb(0, 140, 160),
 			(ColorLevel::Ansi256, Meaning::Success) => Color::Indexed(2),
-			(ColorLevel::Ansi256, Meaning::Error) => Color::Indexed(1),
 			(ColorLevel::Ansi256, Meaning::Warning) => Color::Indexed(3),
-			(ColorLevel::Ansi256, Meaning::Info) => Color::Indexed(4),
-			(ColorLevel::Ansi256, Meaning::Selection) => Color::Indexed(6),
 			(_, Meaning::Success) => Color::Green,
-			(_, Meaning::Error) => Color::Red,
 			(_, Meaning::Warning) => Color::Yellow,
-			(_, Meaning::Info) => Color::Blue,
-			(_, Meaning::Selection) => Color::Cyan,
 		}
 	}
 
@@ -67,22 +62,10 @@ impl Palette {
 			Color::Reset => return text.to_string(),
 			Color::Rgb(r, g, b) => format!("38;2;{r};{g};{b}"),
 			Color::Indexed(index) => format!("38;5;{index}"),
-			Color::Red => "31".into(),
 			Color::Green => "32".into(),
 			Color::Yellow => "33".into(),
-			Color::Blue => "34".into(),
-			Color::Cyan => "36".into(),
-			_ => return text.to_string(),
 		};
 		format!("\x1b[{code}m{text}\x1b[0m")
-	}
-
-	pub fn style(self, meaning: Meaning) -> Style {
-		if self.level == ColorLevel::None {
-			Style::default()
-		} else {
-			Style::default().fg(self.color(meaning))
-		}
 	}
 }
 
@@ -150,13 +133,7 @@ mod tests {
 		let palette = Palette {
 			level: ColorLevel::None,
 		};
-		for meaning in [
-			Meaning::Success,
-			Meaning::Error,
-			Meaning::Warning,
-			Meaning::Info,
-			Meaning::Selection,
-		] {
+		for meaning in [Meaning::Success, Meaning::Warning] {
 			assert_eq!(palette.color(meaning), Color::Reset);
 			assert_eq!(palette.paint(meaning, "ok"), "ok");
 		}

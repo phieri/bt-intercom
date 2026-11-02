@@ -22,7 +22,7 @@ use clap_complete::Shell;
 		env!("BT_INTERCOM_BUILD_DATETIME")
 	),
 	about = "A Bluetooth headset intercom for Linux",
-	after_help = "Quick start (with two HFP/HSP headsets):\n  bt-intercom scan\n  bt-intercom pair ADDRESS\n  bt-intercom status ADDRESS_1 ADDRESS_2\n  bt-intercom run ADDRESS_1 ADDRESS_2\n\nRun `bt-intercom <command> --help` for options; `pair` and `panel` need an interactive terminal.",
+	after_help = "Quick start (with two HFP/HSP headsets):\n  bt-intercom scan\n  bt-intercom pair ADDRESS\n  bt-intercom status ADDRESS_1 ADDRESS_2\n  bt-intercom run ADDRESS_1 ADDRESS_2\n\nRun `bt-intercom <command> --help` for options; `pair` needs an interactive terminal.",
 	arg_required_else_help = true
 )]
 pub(crate) struct Cli {
@@ -133,8 +133,6 @@ pub(crate) enum CliCommand {
 		#[arg(value_enum)]
 		shell: Shell,
 	},
-	/// Open the interactive terminal control panel.
-	Panel,
 }
 
 fn parse_sco_limit(value: &str) -> Result<usize, String> {
@@ -241,17 +239,6 @@ mod tests {
 	}
 
 	#[test]
-	fn terminal_control_panel_uses_panel_subcommand() {
-		assert!(matches!(
-			Cli::try_parse_from(["bt-intercom", "panel"])
-				.unwrap()
-				.command,
-			CliCommand::Panel
-		));
-		assert!(Cli::try_parse_from(["bt-intercom", "tui"]).is_err());
-	}
-
-	#[test]
 	fn verbose_is_global_and_version_short_alias_is_preserved() {
 		for args in [
 			["bt-intercom", "--verbose", "run"],
@@ -294,10 +281,9 @@ mod tests {
 	}
 
 	#[test]
-	fn top_level_help_mentions_dashboard_and_control_panel() {
+	fn top_level_help_mentions_dashboard() {
 		let help = cli_command().render_help().to_string();
 		assert!(help.contains("dashboard"));
-		assert!(help.contains("control panel"));
 		assert!(help.contains("Quick start"));
 		assert!(help.contains("bt-intercom status ADDRESS_1 ADDRESS_2"));
 	}
