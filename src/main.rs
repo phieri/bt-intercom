@@ -11,8 +11,6 @@ mod cli;
 mod dashboard;
 mod device_status;
 mod diagnostics;
-mod group_editor;
-mod groups;
 mod network;
 mod pipewire;
 mod process;
@@ -28,8 +26,6 @@ mod transmit;
 mod transport;
 mod transport_model;
 mod worker;
-
-mod tui;
 
 use std::collections::BTreeSet;
 use std::io::{self, IsTerminal};
@@ -51,7 +47,6 @@ use bluez::parse_address;
 use bluez::{Address, bluetooth_name, device_flag};
 use clap::FromArgMatches;
 use cli::{Cli, CliCommand, cli_command};
-use groups::config_path as talk_groups_path;
 use network::{
 	headset_path as headset_network_path, load as load_headsets, remove as remove_headset,
 };
@@ -127,11 +122,6 @@ fn addresses(args: &[Address]) -> Result<BTreeSet<Address>, String> {
 /// Executes one CLI action, including the main polling and routing loop.
 fn run(action: CliCommand) -> Result<(), String> {
 	match action {
-		CliCommand::Panel => {
-			let network_path = headset_network_path()?;
-			let allowed = load_headsets(&network_path)?;
-			tui::run(allowed, talk_groups_path(&network_path)?)?;
-		}
 		CliCommand::Scan { seconds } => {
 			print!("{}", scan_command(seconds)?);
 		}

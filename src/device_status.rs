@@ -61,14 +61,6 @@ impl ConnectionState {
 			Self::Unknown => "?",
 		}
 	}
-
-	pub(crate) fn panel_label(self) -> &'static str {
-		match self {
-			Self::Connected => "connected",
-			Self::Disconnected => "disconnected",
-			Self::Unknown => "unknown",
-		}
-	}
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,19 +125,6 @@ impl<'a> StatusPresentation<'a> {
 		}
 	}
 
-	pub(crate) fn panel_duplex_label(&self) -> &'static str {
-		match self.duplex {
-			Some(true) => "ready",
-			Some(false) => "unavailable",
-			None => "unknown",
-		}
-	}
-
-	pub(crate) fn rssi_label(&self) -> String {
-		self.rssi
-			.map_or_else(|| "—".to_string(), |rssi| format!("{rssi} dBm"))
-	}
-
 	/// Battery is only meaningful while the headset is connected.
 	pub(crate) fn battery_label(&self) -> String {
 		match (self.connection, self.battery) {
@@ -170,8 +149,6 @@ pub(crate) struct StatusUpdate {
 	pub error: Option<String>,
 }
 
-/// Dashboard routing is already sampled by the session; only the standalone
-/// control panel needs an additional PipeWire inspection.
 pub(crate) fn start_polling(
 	allowed: BTreeSet<Address>,
 	include_audio: bool,
@@ -408,20 +385,14 @@ mod tests {
 
 		assert_eq!(presentation.name_or("fallback"), "Dispatch headset");
 		assert_eq!(presentation.connection.dashboard_label(), "yes");
-		assert_eq!(presentation.connection.panel_label(), "connected");
 		assert_eq!(presentation.dashboard_duplex_label(), "yes");
-		assert_eq!(presentation.panel_duplex_label(), "ready");
-		assert_eq!(presentation.rssi_label(), "-67 dBm");
 		assert_eq!(presentation.dashboard_signal(), "-67 dBm (good)");
 		assert_eq!(presentation.battery_label(), "80%");
 
 		let unknown = StatusPresentation::new(None, None);
 		assert_eq!(unknown.name_or("fallback"), "fallback");
 		assert_eq!(unknown.connection.dashboard_label(), "?");
-		assert_eq!(unknown.connection.panel_label(), "unknown");
 		assert_eq!(unknown.dashboard_duplex_label(), "?");
-		assert_eq!(unknown.panel_duplex_label(), "unknown");
-		assert_eq!(unknown.rssi_label(), "—");
 		assert_eq!(unknown.dashboard_signal(), "unknown");
 		assert_eq!(unknown.battery_label(), "—");
 
@@ -433,7 +404,6 @@ mod tests {
 		};
 		let disconnected = StatusPresentation::new(Some(&disconnected_status), Some(false));
 		assert_eq!(disconnected.dashboard_signal(), "unknown");
-		assert_eq!(disconnected.rssi_label(), "-40 dBm");
 		assert_eq!(disconnected.battery_label(), "—");
 		assert_eq!(SignalQuality::from_rssi(Some(-60)), SignalQuality::Strong);
 		assert_eq!(SignalQuality::from_rssi(Some(-70)), SignalQuality::Good);

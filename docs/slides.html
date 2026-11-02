@@ -45,16 +45,16 @@
         <section aria-labelledby="route-title">
           <p class="chapter">How audio moves <span>02 / 09</span></p>
           <h2 id="route-title">Your voice goes through the host</h2>
-          <p class="lead">Headsets do not connect directly to each other. The Linux host routes your microphone to other headsets in your talk group.</p>
-          <div class="route-map" role="img" aria-label="Your headset sends audio to the host, which routes it to other members of your talk group">
+          <p class="lead">Headsets do not connect directly to each other. The Linux host routes your microphone to the other headsets.</p>
+          <div class="route-map" role="img" aria-label="Your headset sends audio to the host, which routes it to the other headsets">
             <div class="route-node"><span class="node-icon">01</span><strong>Your headset</strong><small>microphone</small></div>
             <span class="route-link" aria-hidden="true">→</span>
-            <div class="route-node route-host"><span class="node-icon">bt</span><strong>Intercom host</strong><small>checks group membership</small></div>
+            <div class="route-node route-host"><span class="node-icon">bt</span><strong>Intercom host</strong><small>routes audio locally</small></div>
             <span class="route-link" aria-hidden="true">→</span>
-            <div class="route-node"><span class="node-icon">02</span><strong>Other members</strong><small>headset speakers</small></div>
+            <div class="route-node"><span class="node-icon">02</span><strong>Other headsets</strong><small>headset speakers</small></div>
           </div>
-          <p class="takeaway"><b>Remember</b> Your group decides who can hear you. Your voice is never sent back to your own headset.</p>
-          <aside class="notes">Point out that the host routes audio locally. Members hear only people in their configured talk group; separate groups stay isolated.</aside>
+          <p class="takeaway"><b>Remember</b> Everyone else hears you. Your voice is never sent back to your own headset.</p>
+          <aside class="notes">Point out that the host routes audio locally. Every other headset hears the talker.</aside>
         </section>
 
         <section aria-labelledby="ready-title">
@@ -119,7 +119,7 @@
             <li>Talk after the double beep confirms your turn.</li>
             <li>Release to cancel your wait or end your turn.</li>
           </ul>
-          <p class="takeaway"><b>One queue per group</b> Separate groups can have different people talking at once.</p>
+          <p class="takeaway"><b>One queue</b> Only one person talks at a time.</p>
           <aside class="notes">Explain that holding the button keeps the request queued. The double beep signals that the floor is theirs; releasing cancels a wait or ends a turn.</aside>
         </section>
 

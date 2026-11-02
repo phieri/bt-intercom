@@ -3,12 +3,11 @@
 A local Bluetooth Classic intercom for two or more headsets on Linux, with
 selectable half-duplex and full-duplex modes. BlueZ manages Bluetooth; PipeWire
 and WirePlumber provide headset audio. Each headset microphone is routed to the
-other headsets in its talk groups, never back to itself. With no talk groups
-configured, all headsets hear one another.
+other headsets, never back to itself.
 
 By default, each headset's play/pause button is matched automatically and its
 microphone stays muted until the button is held. Half-duplex queues talk
-requests and allows one talker per talk group at a time. Friends or coworkers
+requests and allows one talker at a time. Friends or coworkers
 can pair their headsets with the same host to join.
 
 [Watch the illustrative CLI demo](https://phieri.github.io/bt-intercom/) ·
@@ -146,9 +145,9 @@ button inputs never overwrite the saved network.
 - Ctrl-C or SIGTERM closes the links this process created and stops all
   workers. Existing PipeWire links are never modified.
 - `--sco-limit N` sets the SCO/eSCO budget per controller (default 1). With
-  `sco-a2dp` it limits simultaneous talkers per controller (each controller also
-  hosts `--a2dp-limit` A2DP listeners); with `hfp` it only warns when the number of
-  headsets on a controller exceeds the budget.
+  `sco-a2dp` each controller also hosts `--a2dp-limit` A2DP listeners; with
+  `hfp` it only warns when the number of headsets on a controller exceeds the
+  budget.
 - `--a2dp-limit N` sets the assumed A2DP streams per controller (default 1).
   With `sco-a2dp`, talkers use HFP/SCO and listeners stream A2DP up to this
   limit; further listeners on the same controller keep HFP/SCO (receiving only),
@@ -186,9 +185,7 @@ or the headset loses duplex audio.
 In **half-duplex**, holding the button requests a turn. If another headset is
 talking, the request waits in first-in, first-out order; keep holding and wait
 for the double beep before talking. Releasing cancels a queued request or ends
-your turn. Each talk group has its own queue, so different groups can have
-active talkers at once; a headset in several groups requests a turn in each. With
-no groups, all headsets share one queue. Triple presses do nothing. A routing
+your turn. All headsets share one queue. Triple presses do nothing. A routing
 failure stops the run and releases its links rather than leave the previous
 talker active. After a headset loses duplex audio and reconnects, release and
 press again to talk.
@@ -238,7 +235,7 @@ With `hfp`, half-duplex only gates PipeWire links: listeners still use SCO/eSCO,
 so it does **not** relieve a controller's synchronous-link limit.
 
 `sco-a2dp` keeps idle listeners on A2DP and switches granted talkers to HFP/HSP,
-up to `--sco-limit` per controller. Before granting another SCO link, it closes
+within the `--sco-limit` budget per controller. Before granting a SCO link, it closes
 old routes, switches listeners to A2DP and waits for the profile changes to
 appear. Profile indices come from PipeWire, and SBC is preferred for
 compatibility and latency (voice needs no high-resolution audio), then SBC-XQ,
@@ -261,10 +258,8 @@ bt-intercom run AA:BB:CC:DD:EE:01 AA:BB:CC:DD:EE:02 \
 
 Notes:
 
-- Groups on the same radio share its SCO slots; different radios can have
-  independent talkers.
 - A headset cannot listen over A2DP while its own HFP profile is active, so
-  overlapping groups may briefly leave listeners unable to receive.
+  it may briefly be unable to receive while it talks.
 - A short absence of microphone ports during a switch does not cancel a held
   request; a genuine device disappearance does.
 - Half-duplex uses one profile per headset at a time, so only the profile for
@@ -317,30 +312,13 @@ SCO/eSCO stream count per radio (`btmon` shows synchronous connection
 completion; see the BlueZ
 [SCO](https://github.com/bluez/bluez/blob/master/doc/sco-protocol.rst) and
 [HFP tracing](https://github.com/bluez/bluez/blob/master/doc/btmon-hfp.rst)
-docs), microphone audio reaching every intended listener and no other group,
+docs), microphone audio reaching every intended listener,
 profile handoff timing, and A2DP stability under full listener load. A linked
 PipeWire graph and a confirmation beep show routing state, not voice quality or
 certified controller capacity. Auracast (LE Audio broadcast) is a different
 transport and is not supported.
 
-## Talk groups and monitoring
-
-### Control panel
-
-```sh
-bt-intercom panel
-```
-
-The panel shows Bluetooth connection, signal and duplex availability, and edits
-talk groups. `Tab` switches between the group and member lists, arrows and
-`Home`/`End` move, `n` creates a group (Enter saves the name), `d` removes the
-selected group, `Space` toggles membership, and Esc cancels name entry or quits.
-
-Groups are saved to `${XDG_CONFIG_HOME:-~/.config}/bt-intercom/talk-groups.json`,
-and a running `bt-intercom run` picks up changes on its next routing update. A
-headset's microphone reaches only headsets sharing a group with it, and
-headsets in no group are not routed while any group exists. With no groups,
-routing is all-to-all, so deleting the last group asks for confirmation.
+## Monitoring
 
 ### Dashboard
 

@@ -24,23 +24,20 @@ When a change affects those topics, update the README as well.
   coordination (`routing.rs`) and bounded reconnection (`reconnect.rs`).
 - `src/process.rs`: bounded subprocess execution, cancellation, and process
   cleanup; `src/worker.rs`: owned workers with cancellation and joined teardown.
-- `src/bluez.rs`: parsing of `bluetoothctl` output shared by the CLI, dashboard
-  and panel; `src/device_status.rs`: shared status sampling.
-- `src/network.rs`, `src/groups.rs`, `src/group_editor.rs`: persistence and
-  validation for the headset network and talk groups.
+- `src/bluez.rs`: parsing of `bluetoothctl` output shared by the CLI and
+  dashboard; `src/device_status.rs`: shared status sampling.
+- `src/network.rs`: persistence and validation for the headset network.
 - `src/pipewire.rs`: typed PipeWire topology; `src/route_policy.rs`: pure route
-  and talk-group selection; `src/router.rs`: discovery and owned managed links;
+  selection; `src/router.rs`: discovery and owned managed links;
   `src/routing_status.rs`: metrics from observed links.
-- `src/transmit.rs`, `src/transmit/floor.rs`: transmit state and half-duplex
-  floor/queue behavior, including per-controller SCO limits.
+- `src/transmit.rs`: transmit state and half-duplex floor/queue behavior.
 - `src/transport.rs`, `src/transport_model.rs`, `src/transport/profile_plan.rs`:
   `sco-a2dp` profile transitions (pure planning, then verified mutation).
 - `src/ptt.rs`, `src/ptt_discovery.rs`: evdev PTT readers and automatic
   matching of each headset's play/pause device.
 - `src/diagnostics.rs`, `src/diagnostics/probe.rs`: passive and active hardware
   diagnosis (`diagnose`).
-- `src/dashboard.rs`, `src/tui.rs`, `src/tui/panel.rs`, `src/terminal_style.rs`:
-  terminal status views, control panel and styling.
+- `src/dashboard.rs`, `src/terminal_style.rs`: terminal status view and styling.
 - `src/atomic_file.rs`: atomic replacement for persisted files.
 - `man/`, `packaging/`, `examples/`: man page and systemd
   units. Update the man page alongside README changes to CLI behavior.
@@ -66,8 +63,8 @@ over requiring Bluetooth hardware or a live PipeWire session.
 - With `--transport sco-a2dp`, change profiles only per headset after
   re-verifying its PipeWire identity, respect per-controller `--sco-limit` and
   `--a2dp-limit`, and never assume capacity when controller identity is missing.
-- Keep talk-group routing and half-duplex floor behavior isolated by group.
-  With no configured groups, retain the documented all-to-all behavior.
+- Routing is all-to-all among allowlisted headsets; half-duplex uses one shared
+  floor queue.
 - Use `crate::atomic_file::write` when replacing persisted configuration files.
 
 ## Validation

@@ -7,7 +7,6 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::bluez::Address;
-use crate::groups::{self, TalkGroup};
 use crate::network;
 use crate::ptt::PttButton;
 use crate::transmit::Mode;
@@ -102,8 +101,6 @@ pub(crate) struct RunConfig {
 	pub dashboard: bool,
 	pub network_path: PathBuf,
 	pub explicit_network: bool,
-	pub groups_path: PathBuf,
-	pub groups: Vec<TalkGroup>,
 }
 
 impl RunConfig {
@@ -166,8 +163,6 @@ impl RunConfig {
 			}
 		}
 		validate_mode(mode, &options.buttons, &allowed)?;
-		let groups_path = groups::config_path(&network_path)?;
-		let groups = groups::load(&groups_path)?;
 		Ok(Self {
 			allowed,
 			interval,
@@ -180,8 +175,6 @@ impl RunConfig {
 			dashboard: options.dashboard,
 			network_path,
 			explicit_network,
-			groups_path,
-			groups,
 		})
 	}
 }
@@ -269,18 +262,6 @@ mod tests {
 			);
 			assert_eq!(network::load(&path).unwrap(), [B.into()].into());
 		}
-	}
-
-	#[test]
-	fn malformed_groups_do_not_create_or_replace_network() {
-		let fixture = Fixture::new();
-		let path = fixture.network();
-		fs::write(groups::config_path(&path).unwrap(), "{invalid").unwrap();
-		assert!(RunConfig::resolve_at(options(), true, path.clone()).is_err());
-		assert!(!path.exists());
-		network::save(&path, &[B.into()].into()).unwrap();
-		assert!(RunConfig::resolve_at(options(), true, path.clone()).is_err());
-		assert_eq!(network::load(&path).unwrap(), [B.into()].into());
 	}
 
 	#[test]
