@@ -18,10 +18,13 @@ use crate::transport_model::ProfileFamily;
 mod probe;
 pub(crate) use probe::{Timing, probe};
 
+/// `bluetoothctl --timeout` allows 30 s to connect; leave headroom to exit.
+const CONNECT_COMMAND_TIMEOUT: Duration = Duration::from_secs(35);
+
 /// Deadline for a diagnostic subprocess; connecting may take up to 30 s.
 pub(crate) fn command_timeout(args: &[&str]) -> Duration {
 	if args.contains(&"--timeout") {
-		Duration::from_secs(35)
+		CONNECT_COMMAND_TIMEOUT
 	} else {
 		crate::process::COMMAND_TIMEOUT
 	}
@@ -513,6 +516,19 @@ pub(crate) fn log_findings(findings: &[Finding]) {
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn connect_commands_get_extended_timeout() {
+		assert_eq!(
+			command_timeout(&["bluetoothctl", "--timeout", "30", "connect"]),
+			CONNECT_COMMAND_TIMEOUT
+		);
+		assert_eq!(
+			command_timeout(&["bluetoothctl", "info"]),
+			crate::process::COMMAND_TIMEOUT
+		);
+		assert!(CONNECT_COMMAND_TIMEOUT > crate::process::COMMAND_TIMEOUT);
+	}
 
 	const ONE: &str = "AA:BB:CC:DD:EE:01";
 

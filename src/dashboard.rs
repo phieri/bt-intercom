@@ -14,6 +14,8 @@ use crate::device_status::{HeadsetStatus, StatusPresentation, StatusUpdate, star
 use crate::router::Headset;
 use crate::routing_status::RoutingStatus;
 use crate::transmit::{Mode, Transmit};
+
+const STATUS_POLL_INTERVAL: Duration = Duration::from_secs(10);
 use crate::worker::Worker;
 
 /// Collects Bluetooth status updates and draws the current routing state.
@@ -34,7 +36,7 @@ pub struct RunStatus<'a> {
 impl Dashboard {
 	/// Starts polling each allowlisted device until shutdown or cancellation.
 	pub fn start(allowed: BTreeSet<Address>, stopped: Arc<AtomicBool>) -> Self {
-		let (worker, receiver) = start_polling(allowed, false, Duration::from_secs(10), stopped);
+		let (worker, receiver) = start_polling(allowed, false, STATUS_POLL_INTERVAL, stopped);
 		Self {
 			receiver,
 			state: BTreeMap::new(),

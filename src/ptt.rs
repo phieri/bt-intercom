@@ -21,6 +21,9 @@ use crate::routing_status::RoutingStatus;
 use crate::transmit::{Mode, Transmit};
 use crate::worker::Worker;
 
+/// Upper bound for playing the short PTT confirmation tone.
+const BEEP_PLAY_TIMEOUT: Duration = Duration::from_secs(2);
+
 pub(crate) const BEEP_WAV: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/ptt-beep.wav"));
 
 pub(crate) const KEY_PLAYPAUSE: u16 = 164;
@@ -72,7 +75,7 @@ impl PttBeep {
 		let path = self.path.to_string_lossy().into_owned();
 		command_cancellable(
 			&["pw-play", &target, &path],
-			Duration::from_secs(2),
+			BEEP_PLAY_TIMEOUT,
 			Some(stopped),
 		)
 		.map(|_| ())
