@@ -332,7 +332,7 @@ speech or audio quality. Failed Bluetooth queries show as unknown with the
 error until a later poll succeeds. Battery and RSSI come from `bluetoothctl
 info` and appear only if the headset exposes them (battery over HFP may need
 `bluetoothd --experimental`; RSSI on BR/EDR links is often absent), otherwise
-shown as "—".
+shown as "—" (for a disconnected or unqueryable headset, RSSI is "unknown").
 
 ### User service
 
