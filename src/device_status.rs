@@ -139,6 +139,7 @@ impl<'a> StatusPresentation<'a> {
 				"{rssi} dBm ({})",
 				SignalQuality::from_rssi(Some(rssi)).label()
 			),
+			(ConnectionState::Connected, None) => "—".to_string(),
 			_ => "unknown".to_string(),
 		}
 	}

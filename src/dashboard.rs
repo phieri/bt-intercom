@@ -78,7 +78,8 @@ impl Dashboard {
 		)?;
 		writeln!(
 			output,
-			"HEADSET NAME      ADDRESS             CONNECTED  DUPLEX  TX/RX  TX / FLOOR       BATTERY  SIGNAL"
+			"{:<16} {:<17}  {:<9}  {:<6}  {:<5}  {:<15} {:<7}  SIGNAL",
+			"HEADSET NAME", "ADDRESS", "CONNECTED", "DUPLEX", "TX/RX", "TX / FLOOR", "BATTERY"
 		)?;
 		for address in allowed {
 			let bluetooth = self.state.get(address);
@@ -90,7 +91,7 @@ impl Dashboard {
 			let signal = presentation.dashboard_signal();
 			writeln!(
 				output,
-				"{:<16} {address}  {:<9}  {:<6}  {tx:>2}/{rx:<2}  {:<15} {:<7}  {signal}",
+				"{:<16} {address}  {:<9}  {:<6}  {:<5}  {:<15} {:<7}  {signal}",
 				presentation
 					.name_or("—")
 					.chars()
@@ -98,6 +99,7 @@ impl Dashboard {
 					.collect::<String>(),
 				presentation.connection.dashboard_label(),
 				presentation.dashboard_duplex_label(),
+				format!("{tx}/{rx}"),
 				transmit_state,
 				presentation.battery_label()
 			)?;
@@ -221,12 +223,18 @@ mod tests {
 		let text = String::from_utf8(output).unwrap();
 		assert!(!text.contains('\u{1b}'));
 		assert!(text.contains("half-duplex | 0 owned active links"));
-		assert!(text.contains("HEADSET NAME      ADDRESS             CONNECTED"));
+		assert!(text.contains("HEADSET NAME     ADDRESS            CONNECTED"));
 		assert!(!text.contains("PAIRED"));
 		assert!(text.contains("AA:BB:CC:DD:EE:01  ?"));
 		assert!(text.contains("no"));
 		assert!(text.contains("0/0"));
 		assert!(text.contains("unknown"));
+		let column = |line: &str, label: &str| line[..line.find(label).unwrap()].chars().count();
+		let mut lines = text.lines().skip(1);
+		let (header, row) = (lines.next().unwrap(), lines.next().unwrap());
+		assert_eq!(column(header, "CONNECTED"), column(row, "?  "));
+		assert_eq!(column(header, "ADDRESS"), column(row, "AA:BB"));
+		assert_eq!(column(header, "TX/RX"), column(row, "0/0"));
 	}
 
 	#[test]
