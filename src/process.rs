@@ -89,15 +89,21 @@ fn wait_child(
 /// Kills the child's entire process group, so descendants that keep the
 /// child's inherited pipes open are also terminated.
 pub(crate) fn kill_process_group(child: &mut Child) {
-	let pid = child.id() as libc::pid_t;
-	if pid <= 0 {
+	// `Pid::from_raw` rejects zero and negative values.
+	let Some(pid) = i32::try_from(child.id())
+		.ok()
+		.and_then(rustix::process::Pid::from_raw)
+	else {
 		return;
-	}
-	// SAFETY: `pid` is the child's own process ID, which was placed in its
-	// own process group via `process_group(0)` when spawned, so `-pid`
-	// refers to a valid process group led by that child.
-	unsafe {
-		libc::kill(-pid, libc::SIGKILL);
+	};
+	// ESRCH means the group already exited; other errors are unexpected.
+	if let Err(error) = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL)
+		&& error != rustix::io::Errno::SRCH
+	{
+		log::debug!(
+			"failed to kill process group {}: {error}",
+			pid.as_raw_nonzero()
+		);
 	}
 }
 
@@ -135,16 +141,22 @@ pub(crate) fn command_cancellable(
 		return Err(format!("{name}: failed to capture command output"));
 	};
 	let output = thread::spawn(move || read_bounded(&mut stdout, MAX_CAPTURED_OUTPUT));
-	let error = thread::spawn(move || read_bounded(&mut stderr, MAX_CAPTURED_OUTPUT));
-	let status = wait_child(&mut child, name, timeout, stopped, KillMode::ProcessGroup)
-		.inspect_err(|error| {
-			log::debug!("{name} stopped after {:?}: {error}", started.elapsed())
-		})?;
-	while !output.is_finished() || !error.is_finished() {
+	let error_reader = thread::spawn(move || read_bounded(&mut stderr, MAX_CAPTURED_OUTPUT));
+	let status = match wait_child(&mut child, name, timeout, stopped, KillMode::ProcessGroup) {
+		Ok(status) => status,
+		Err(error) => {
+			log::debug!("{name} stopped after {:?}: {error}", started.elapsed());
+			// The group was killed, so its pipes close and the readers finish.
+			let _ = output.join();
+			let _ = error_reader.join();
+			return Err(error);
+		}
+	};
+	while !output.is_finished() || !error_reader.is_finished() {
 		if started.elapsed() >= timeout {
 			kill_process_group(&mut child);
 			let _ = output.join();
-			let _ = error.join();
+			let _ = error_reader.join();
 			return Err(format!("{name} timed out while draining command output"));
 		}
 		thread::sleep(CHILD_POLL_INTERVAL);
@@ -153,7 +165,7 @@ pub(crate) fn command_cancellable(
 		.join()
 		.map_err(|_| "stdout reader panicked".to_string())?
 		.map_err(|e| format!("stdout: {e}"))?;
-	let stderr = error
+	let stderr = error_reader
 		.join()
 		.map_err(|_| "stderr reader panicked".to_string())?
 		.map_err(|e| format!("stderr: {e}"))?;
