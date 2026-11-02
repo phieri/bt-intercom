@@ -34,6 +34,8 @@ pub(crate) use reconnect::ensure_adapter_powered;
 pub(crate) use reconnect::reconnect_worker;
 
 const ROUTE_CHANGE_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+/// How long a PTT request may stay unconfirmed before the user is warned.
+const PTT_STALL_WARNING_DELAY: Duration = Duration::from_secs(10);
 
 #[cfg(test)]
 type Execute = Box<dyn FnMut(&[&str]) -> Result<String, String>>;
@@ -71,6 +73,9 @@ pub(crate) struct Session {
 	wake_sender: SyncSender<()>,
 	last_error: Option<String>,
 	last_duplex_count: Option<usize>,
+	last_warning: Option<String>,
+	pending_since: Option<Instant>,
+	stall_warned: bool,
 	last_update: Option<Instant>,
 	update_interval: Duration,
 	redraw: bool,
@@ -107,6 +112,9 @@ impl Session {
 			wake_sender,
 			last_error: None,
 			last_duplex_count: None,
+			last_warning: None,
+			pending_since: None,
+			stall_warned: false,
 			last_update: None,
 			update_interval,
 			redraw: true,
@@ -197,10 +205,10 @@ impl Session {
 			self.input = Some(inputs.start(Arc::clone(&self.stopped), self.wake_sender.clone()));
 			match self.config.mode {
 				Mode::HalfDuplex => log::info!(
-					"Half-duplex: Hold play/pause to request the FIFO floor; release to cancel or relinquish. Double beep confirms a ready route."
+					"Half-duplex: Tap play to request the FIFO floor; tap pause to cancel or relinquish. Double beep confirms a ready route."
 				),
 				Mode::FullDuplex => log::info!(
-					"Full-duplex: Hold play/pause to transmit; release to mute. Three presses within 1 second (first to third, inclusive) toggle this headset's PTT/always-open mode."
+					"Full-duplex: Tap play to transmit; tap pause to mute. A single toggling play/pause key alternates on each tap."
 				),
 			}
 		}
@@ -272,6 +280,8 @@ impl Session {
 			self.beep.as_ref(),
 			&self.stopped,
 		)?;
+		self.warn_dropped_requests();
+		self.warn_stalled_requests();
 		if outcome.invalidated {
 			self.last_update = Some(Instant::now());
 			self.update_interval = ROUTE_CHANGE_RETRY_INTERVAL;
@@ -279,12 +289,54 @@ impl Session {
 		}
 		self.report_update(outcome.update, outcome.inspect_error);
 		self.last_update = Some(Instant::now());
-		self.update_interval = if outcome.changed {
+		// Links and profile changes appear asynchronously, so poll quickly until
+		// every requested transmission is confirmed.
+		self.update_interval = if outcome.changed || !self.transmit.pending.is_empty() {
 			ROUTE_CHANGE_RETRY_INTERVAL
 		} else {
 			self.config.interval
 		};
 		Ok(())
+	}
+
+	fn warn_dropped_requests(&mut self) {
+		for address in self.transmit.take_dropped() {
+			log::warn!(
+				"PTT press from {address} ignored: the headset is not connected or lacks a headset-head-unit (HFP/HSP) microphone and speaker in PipeWire; connect it, then press again"
+			);
+		}
+	}
+
+	/// A held button that never reaches a confirmed route usually means a
+	/// configuration problem rather than a transient transition.
+	fn warn_stalled_requests(&mut self) {
+		if self.transmit.pending.is_empty() {
+			self.pending_since = None;
+			self.stall_warned = false;
+			return;
+		}
+		let since = *self.pending_since.get_or_insert_with(Instant::now);
+		if !self.stall_warned && since.elapsed() >= PTT_STALL_WARNING_DELAY {
+			self.stall_warned = true;
+			let pending: Vec<_> = self
+				.transmit
+				.pending
+				.iter()
+				.map(|a| a.to_string())
+				.collect();
+			log::warn!(
+				"PTT from {} is not transmitting after {} s: it needs at least one other connected headset with a speaker, working PipeWire (`pw-dump`, `pw-cli`) and, with --transport sco-a2dp, an HFP profile that WirePlumber exposes; run `bt-intercom diagnose` for details",
+				pending.join(", "),
+				PTT_STALL_WARNING_DELAY.as_secs()
+			);
+		}
+	}
+
+	fn warn_once(&mut self, message: String) {
+		if self.last_warning.as_deref() != Some(&message) {
+			log::warn!("{message}");
+			self.last_warning = Some(message);
+		}
 	}
 
 	fn report_update(
@@ -297,7 +349,7 @@ impl Session {
 			self.redraw = true;
 		} else {
 			if let Some(error) = inspect_error {
-				log::warn!("Routing inspection failed: {error}");
+				self.warn_once(format!("Routing inspection failed: {error}"));
 			}
 			match update {
 				Ok(headsets) => {
@@ -315,7 +367,7 @@ impl Session {
 						);
 					}
 				}
-				Err(error) => log::warn!("Routing update failed: {error}"),
+				Err(error) => self.warn_once(format!("Routing update failed: {error}")),
 			}
 		}
 	}
@@ -383,6 +435,7 @@ impl Drop for Session {
 mod tests {
 	use super::*;
 	use crate::ptt::PttButton;
+	use crate::transmit::Tap;
 	use std::sync::mpsc;
 
 	fn config() -> RunConfig {
@@ -470,7 +523,7 @@ mod tests {
 			snapshots += 1;
 			if snapshots == 3 {
 				sender
-					.send(Ok((address.into(), false, Instant::now())))
+					.send(Ok((address.into(), Tap::Pause, Instant::now())))
 					.unwrap();
 			}
 			Ok(snapshot.clone())

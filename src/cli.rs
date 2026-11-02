@@ -111,12 +111,11 @@ pub(crate) enum CliCommand {
 		ptt: Vec<PttButton>,
 		/// Transmit policy (default: half-duplex).
 		/// Half-duplex uses PTT for every headset:
-		/// hold play/pause to request the FIFO floor; release to cancel/relinquish.
-		/// Full-duplex mappings start in PTT; three play/pause presses within
-		/// 1 second (first to third, inclusive; release between presses) toggle
-		/// that headset independently between PTT and always open.
+		/// tap play to request the FIFO floor; tap pause to cancel/relinquish.
+		/// Full-duplex lets every headset that tapped play transmit until it
+		/// taps pause. A single toggling play/pause key alternates each tap.
 		/// Without active mappings full-duplex is always open. Disconnected mapped
-		/// headsets reset to PTT and require a fresh press after reconnection.
+		/// headsets are muted and require a fresh play tap after reconnection.
 		#[arg(long, value_enum)]
 		mode: Option<Mode>,
 		/// Audio transport: hfp leaves profiles unchanged; sco-a2dp switches

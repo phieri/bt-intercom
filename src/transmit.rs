@@ -2,12 +2,14 @@
 
 //! Timestamped, hardware-independent transmit policy.
 //!
-//! Full-duplex mappings start in PTT. Three distinct play/pause presses whose
-//! first-to-third span is at most one second toggle that headset's always-open
-//! mode. Releases are required between presses; repeats never count.
+//! Headsets cannot report a held button: each press is a tap that sends AVRCP
+//! PLAY or PAUSE (or a toggling play/pause). A play tap opens the headset's
+//! microphone request and a pause tap releases it; the request is latched in
+//! between. Full-duplex lets every requesting headset transmit at once,
+//! half-duplex grants one shared floor in FIFO order.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::bluez::Address;
 
@@ -18,12 +20,17 @@ pub enum Mode {
 	FullDuplex,
 }
 
+/// A decoded button tap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tap {
+	Play,
+	Pause,
+	Toggle,
+}
+
 #[derive(Default)]
 struct Button {
-	pressed: bool,
 	requested: bool,
-	open: bool,
-	presses: VecDeque<Instant>,
 }
 
 pub struct Transmit {
@@ -32,6 +39,7 @@ pub struct Transmit {
 	queue: VecDeque<Address>,
 	active: BTreeSet<Address>,
 	controllers: Option<BTreeMap<Address, String>>,
+	dropped: BTreeSet<Address>,
 	pub pending: BTreeSet<Address>,
 }
 
@@ -43,6 +51,7 @@ impl Transmit {
 			queue: VecDeque::new(),
 			active: BTreeSet::new(),
 			controllers: None,
+			dropped: BTreeSet::new(),
 			pending: BTreeSet::new(),
 		}
 	}
@@ -54,56 +63,61 @@ impl Transmit {
 		self.refresh();
 	}
 
-	/// Returns whether a genuine transition was processed.
-	pub fn event(&mut self, address: &Address, pressed: bool, at: Instant) -> bool {
+	/// Apply a tap; a repeated play or pause is not a transition.
+	pub fn tap(&mut self, address: &Address, tap: Tap, at: Instant) -> bool {
+		let Some(button) = self.buttons.get(address) else {
+			return false;
+		};
+		let talking = match tap {
+			Tap::Play => true,
+			Tap::Pause => false,
+			Tap::Toggle => !button.requested,
+		};
+		self.event(address, talking, at)
+	}
+
+	/// Set whether a headset requests to transmit. Returns whether this changed
+	/// its request.
+	pub fn event(&mut self, address: &Address, talking: bool, _at: Instant) -> bool {
 		let Some(button) = self.buttons.get_mut(address) else {
 			return false;
 		};
-		if button.pressed == pressed {
+		if button.requested == talking {
 			return false;
 		}
-		button.pressed = pressed;
-		button.requested = pressed;
-		match self.mode {
-			Mode::HalfDuplex => {
-				if pressed {
-					self.queue.push_back(address.to_owned());
-				} else {
-					self.queue.retain(|queued| queued != address);
-				}
+		button.requested = talking;
+		if self.mode == Mode::HalfDuplex {
+			if talking {
+				self.queue.push_back(address.to_owned());
+			} else {
+				self.queue.retain(|queued| queued != address);
 			}
-			Mode::FullDuplex if pressed => {
-				button.presses.retain(|previous| {
-					at.checked_duration_since(*previous)
-						.is_some_and(|elapsed| elapsed <= Duration::from_secs(1))
-				});
-				button.presses.push_back(at);
-				if button.presses.len() == 3 {
-					button.open = !button.open;
-					button.presses.clear();
-				}
-			}
-			Mode::FullDuplex => {}
 		}
 		self.refresh();
 		true
 	}
 
 	/// Drop disconnected requests, including the floor. Reconnection alone must
-	/// not restart a held or always-open mapped microphone: require a new press.
-	/// Preserve the physical pressed bit so duplicate presses cannot re-arm it.
+	/// not restart a mapped microphone: require a new play tap.
 	pub fn topology(&mut self, available: &BTreeSet<Address>) -> bool {
 		let before = self.active.clone();
 		for (address, button) in &mut self.buttons {
 			if !available.contains(address) {
+				if button.requested {
+					self.dropped.insert(address.clone());
+				}
 				self.queue.retain(|queued| queued != address);
 				button.requested = false;
-				button.open = false;
-				button.presses.clear();
 			}
 		}
 		self.refresh();
 		before != self.active
+	}
+
+	/// Headsets whose held or always-open request was discarded because the
+	/// headset was unavailable, so callers can tell the user why nothing happened.
+	pub fn take_dropped(&mut self) -> BTreeSet<Address> {
+		std::mem::take(&mut self.dropped)
 	}
 
 	fn refresh(&mut self) {
@@ -122,7 +136,7 @@ impl Transmit {
 			Mode::FullDuplex => self
 				.buttons
 				.iter()
-				.filter(|(_, b)| b.requested || b.open)
+				.filter(|(_, b)| b.requested)
 				.map(|(a, _)| a.clone())
 				.collect::<BTreeSet<_>>(),
 		};
@@ -139,8 +153,7 @@ impl Transmit {
 		if self.mode == Mode::FullDuplex {
 			return match self.buttons.get(address) {
 				None => "always open".into(),
-				Some(button) if button.open => "always open".into(),
-				Some(button) if button.requested => "PTT held".into(),
+				Some(button) if button.requested => "transmitting".into(),
 				Some(_) => "muted".into(),
 			};
 		}
@@ -156,6 +169,7 @@ impl Transmit {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use std::time::Duration;
 
 	fn address(value: &str) -> Address {
 		Address::parse(value).unwrap_or_else(|_| {
@@ -181,6 +195,16 @@ mod tests {
 	}
 
 	#[test]
+	fn unavailable_headset_drops_request_and_reports_it_once() {
+		let (mut t, now) = setup(Mode::FullDuplex);
+		press(&mut t, "a", now, 0);
+		t.topology(&set(&["b", "c"]));
+		assert!(t.sources().is_empty());
+		assert_eq!(t.take_dropped(), set(&["a"]));
+		assert!(t.take_dropped().is_empty());
+	}
+
+	#[test]
 	fn fifo_and_release_cancellation_only_confirm_the_granted_source() {
 		let (mut t, now) = setup(Mode::HalfDuplex);
 		press(&mut t, "b", now, 0);
@@ -202,7 +226,7 @@ mod tests {
 		let (mut full, now) = setup(Mode::FullDuplex);
 		assert_eq!(full.dashboard_state(&address("a")), "muted");
 		press(&mut full, "a", now, 0);
-		assert_eq!(full.dashboard_state(&address("a")), "PTT held");
+		assert_eq!(full.dashboard_state(&address("a")), "transmitting");
 		assert_eq!(full.dashboard_state(&address("b")), "muted");
 
 		let (mut half, now) = setup(Mode::HalfDuplex);
@@ -249,67 +273,6 @@ mod tests {
 	}
 
 	#[test]
-	fn independent_triples_toggle_open_and_back_to_normal_hold() {
-		let (mut t, now) = setup(Mode::FullDuplex);
-		assert!(t.sources().is_empty());
-		for ms in [0, 300, 1000] {
-			press(&mut t, "a", now, ms);
-			release(&mut t, "a", now, ms + 1);
-		}
-		assert_eq!(t.sources(), &set(&["a"])); // inclusive 1s window
-		press(&mut t, "b", now, 1100);
-		assert_eq!(t.sources(), &set(&["a", "b"]));
-		release(&mut t, "b", now, 1101);
-		assert_eq!(t.sources(), &set(&["a"]));
-		for ms in [1200, 1300] {
-			press(&mut t, "b", now, ms);
-			release(&mut t, "b", now, ms + 1);
-		}
-		assert_eq!(t.sources(), &set(&["a", "b"]));
-		for ms in [1400, 1500, 1600] {
-			press(&mut t, "a", now, ms);
-			if ms != 1600 {
-				release(&mut t, "a", now, ms + 1);
-			}
-		}
-		assert_eq!(t.sources(), &set(&["a", "b"])); // third press remains held
-		release(&mut t, "a", now, 1601);
-		assert_eq!(t.sources(), &set(&["b"])); // B stays independently open
-		for ms in [1700, 1800, 1900] {
-			press(&mut t, "b", now, ms);
-			release(&mut t, "b", now, ms + 1);
-		}
-		assert!(t.sources().is_empty());
-	}
-
-	#[test]
-	fn expired_window_and_duplicate_presses_do_not_toggle() {
-		let (mut t, now) = setup(Mode::FullDuplex);
-		for ms in [0, 400, 1001] {
-			press(&mut t, "a", now, ms);
-			assert!(!t.event(&address("a"), true, now + Duration::from_millis(ms)));
-			release(&mut t, "a", now, ms + 1);
-			assert!(!t.event(&address("a"), false, now + Duration::from_millis(ms + 2)));
-		}
-		assert!(t.sources().is_empty());
-		// Sliding window: the 400, 1001, 1200 presses now constitute a triple.
-		press(&mut t, "a", now, 1200);
-		release(&mut t, "a", now, 1201);
-		assert_eq!(t.sources(), &set(&["a"]));
-	}
-
-	#[test]
-	fn half_never_toggles_and_rapid_changes_retire_pending_beeps() {
-		let (mut t, now) = setup(Mode::HalfDuplex);
-		for ms in [0, 10, 20] {
-			press(&mut t, "a", now, ms);
-			release(&mut t, "a", now, ms + 1);
-		}
-		assert!(t.sources().is_empty());
-		assert!(t.pending.is_empty());
-	}
-
-	#[test]
 	fn disconnect_releases_floor_and_reconnect_requires_new_press() {
 		let (mut t, now) = setup(Mode::HalfDuplex);
 		press(&mut t, "a", now, 0);
@@ -318,26 +281,29 @@ mod tests {
 		assert_eq!(t.sources(), &set(&["b"]));
 		assert_eq!(t.pending, set(&["b"]));
 		t.topology(&set(&["a", "b", "c"]));
-		assert!(!t.event(&address("a"), true, now));
+		assert_eq!(t.sources(), &set(&["b"]));
+		assert!(!t.tap(&address("a"), Tap::Pause, now));
 		release(&mut t, "b", now, 2);
 		assert!(t.sources().is_empty());
-		release(&mut t, "a", now, 3);
-		press(&mut t, "a", now, 4);
+		assert!(t.tap(&address("a"), Tap::Play, now));
 		assert_eq!(t.sources(), &set(&["a"]));
 	}
 
 	#[test]
-	fn disconnect_resets_open_mode_and_gesture_history() {
-		let (mut t, now) = setup(Mode::FullDuplex);
-		for ms in [0, 10, 20] {
-			press(&mut t, "a", now, ms);
-			release(&mut t, "a", now, ms + 1);
+	fn play_opens_pause_releases_and_toggle_alternates() {
+		for mode in [Mode::FullDuplex, Mode::HalfDuplex] {
+			let (mut t, now) = setup(mode);
+			assert!(t.tap(&address("a"), Tap::Play, now));
+			assert!(!t.tap(&address("a"), Tap::Play, now));
+			assert_eq!(t.sources(), &set(&["a"]));
+			assert!(t.tap(&address("a"), Tap::Pause, now));
+			assert!(!t.tap(&address("a"), Tap::Pause, now));
+			assert!(t.sources().is_empty());
+			assert!(t.tap(&address("a"), Tap::Toggle, now));
+			assert_eq!(t.sources(), &set(&["a"]));
+			assert!(t.tap(&address("a"), Tap::Toggle, now));
+			assert!(t.sources().is_empty());
+			assert!(t.pending.is_empty());
 		}
-		assert!(t.topology(&set(&["b"])));
-		t.topology(&set(&["a", "b"]));
-		assert!(t.sources().is_empty());
-		press(&mut t, "a", now, 30);
-		release(&mut t, "a", now, 31);
-		assert!(t.sources().is_empty());
 	}
 }
