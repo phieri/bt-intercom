@@ -379,7 +379,9 @@ fn read_loop<R: Read>(
 	wake: &Receiver<()>,
 	session_wake: Option<&SyncSender<()>>,
 ) -> Result<(), String> {
-	let offset = std::mem::size_of::<libc::timeval>();
+	// The kernel's input_event timestamp is two C longs on every ABI, which can
+	// differ from libc::timeval (64-bit time_t on 32-bit targets).
+	let offset = 2 * std::mem::size_of::<libc::c_ulong>();
 	let mut event = vec![0; offset + 8];
 	let mut filled = 0;
 	while !stopped.load(Ordering::SeqCst) {
@@ -414,7 +416,9 @@ fn read_loop<R: Read>(
 		let event_key = u16::from_ne_bytes([event[offset + 2], event[offset + 3]]);
 		let value = i32::from_ne_bytes(event[offset + 4..offset + 8].try_into().unwrap());
 		if event_type == 0 && event_key == 3 {
-			return Err(format!("PTT input for {address} lost button events"));
+			// SYN_DROPPED: later taps still arrive intact, so keep reading.
+			log::warn!("PTT input for {address} dropped events; continuing");
+			continue;
 		}
 		// Headsets send each AVRCP command as an instant press and release, so
 		// only the key-down carries meaning; releases and repeats are ignored.
