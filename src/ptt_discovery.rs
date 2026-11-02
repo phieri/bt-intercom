@@ -16,16 +16,41 @@ pub(crate) const AUTO: &str = "auto";
 
 const SYS_INPUT: &str = "/sys/class/input";
 
-/// Returns whether a `capabilities/key` bitmask contains `code`.
+/// Returns whether a `capabilities/key` bitmask contains `code`. The kernel
+/// prints `unsigned long` words, so the width is that of the kernel, not of this
+/// process (a 32-bit userland may run on a 64-bit kernel): non-leading words
+/// are zero-padded to the full width.
 fn has_key(mask: &str, code: u16) -> bool {
-	let bits = usize::BITS as usize;
 	let words: Vec<&str> = mask.split_whitespace().collect();
+	let widest = words
+		.iter()
+		.skip(1)
+		.map(|word| word.len())
+		.max()
+		.unwrap_or(0);
+	let bits = match widest {
+		16.. => 64,
+		8.. => 32,
+		_ => usize::BITS as usize,
+	};
 	let code = usize::from(code);
 	words
 		.len()
 		.checked_sub(code / bits + 1)
-		.and_then(|index| usize::from_str_radix(words[index], 16).ok())
+		.and_then(|index| u64::from_str_radix(words[index], 16).ok())
 		.is_some_and(|word| word >> (code % bits) & 1 == 1)
+}
+
+/// BlueZ names the AVRCP input device after the headset address and sets its
+/// `uniq`; accept either so a missing `uniq` does not hide the device.
+fn belongs_to(device: &Path, address: &Address) -> bool {
+	let read = |file: &str| fs::read_to_string(device.join(file)).unwrap_or_default();
+	let wanted = address.as_str();
+	read("uniq").trim().eq_ignore_ascii_case(wanted)
+		|| read("name")
+			.trim()
+			.get(..wanted.len())
+			.is_some_and(|prefix| prefix.eq_ignore_ascii_case(wanted))
 }
 
 /// Finds the event device that reports play/pause for `address` under `root`.
@@ -39,8 +64,7 @@ fn find_in(root: &Path, address: &Address) -> Result<Option<String>, String> {
 			continue;
 		}
 		let device = entry.path().join("device");
-		let uniq = fs::read_to_string(device.join("uniq")).unwrap_or_default();
-		if !uniq.trim().eq_ignore_ascii_case(address.as_str()) {
+		if !belongs_to(&device, address) {
 			continue;
 		}
 		let keys = fs::read_to_string(device.join("capabilities/key")).unwrap_or_default();
@@ -139,6 +163,27 @@ mod tests {
 		assert!(has_key(format!("{word} {zeros}").trim(), 164));
 		assert!(!has_key("0 0 0", 164));
 		assert!(!has_key("", 164));
+	}
+
+	#[test]
+	fn detects_key_in_32_and_64_bit_kernel_words() {
+		let wide = "0 0000001000000000 0000000000000000 0000000000000000";
+		assert!(has_key(wide, 164));
+		assert!(!has_key(wide, 165));
+		let narrow = "0 00000010 00000000 00000000 00000000 00000000 00000000";
+		assert!(has_key(narrow, 164));
+		assert!(!has_key(narrow, 163));
+	}
+
+	#[test]
+	fn falls_back_to_device_name_when_uniq_is_missing() {
+		let root = temp("ptt-name");
+		device(&root, "event3", "", "0");
+		let dir = root.join("event3/device");
+		fs::write(dir.join("name"), "AA:BB:CC:DD:EE:01 (AVRCP)\n").unwrap();
+		assert!(belongs_to(&dir, &address("aa:bb:cc:dd:ee:01")));
+		assert!(!belongs_to(&dir, &address("aa:bb:cc:dd:ee:02")));
+		fs::remove_dir_all(root).unwrap();
 	}
 
 	#[test]
