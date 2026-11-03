@@ -298,10 +298,7 @@ fn bluetooth_summary(address: &Address, info: &Result<String, String>) -> (Strin
 			(identity, connected.to_string())
 		}
 		Err(error) => {
-			let error = error
-				.chars()
-				.filter(|character| !character.is_control())
-				.collect::<String>();
+			let error = bluez::strip_control(error);
 			(address.to_string(), format!("status query failed: {error}"))
 		}
 	}

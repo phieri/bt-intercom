@@ -505,7 +505,7 @@ fn diagnose_with(
 
 pub(crate) fn log_findings(findings: &[Finding]) {
 	for finding in findings {
-		let text: String = finding.text.chars().filter(|c| !c.is_control()).collect();
+		let text: String = bluez::strip_control(&finding.text);
 		match finding.level {
 			Level::Info => log::info!("Diagnostics: {text}"),
 			Level::Warn => log::warn!("Diagnostics: {text}"),

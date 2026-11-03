@@ -9,7 +9,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use crate::bluez::Address;
+use crate::bluez::{Address, strip_control};
 use crate::device_status::{HeadsetStatus, StatusPresentation, StatusUpdate, start_polling};
 use crate::router::Headset;
 use crate::routing_status::RoutingStatus;
@@ -126,24 +126,10 @@ impl Dashboard {
 			"\nTX / FLOOR is per headset; links represent routing, not measured speech. RSSI and battery are shown only if BlueZ reports them."
 		)?;
 		if let Some(error) = error {
-			writeln!(
-				output,
-				"Last routing error: {}",
-				error
-					.chars()
-					.filter(|ch| !ch.is_control())
-					.collect::<String>()
-			)?;
+			writeln!(output, "Last routing error: {}", strip_control(error))?;
 		}
 		if let Some(error) = &self.status_error {
-			writeln!(
-				output,
-				"Last status error: {}",
-				error
-					.chars()
-					.filter(|ch| !ch.is_control())
-					.collect::<String>()
-			)?;
+			writeln!(output, "Last status error: {}", strip_control(error))?;
 		}
 		output.flush()
 	}
