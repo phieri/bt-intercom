@@ -38,14 +38,14 @@
               <div class="host-pill"><span>bt</span><b>LOCAL INTERCOM</b></div>
             </div>
           </div>
-          <p class="deck-hint">Use ← → or the on-screen arrows to move through the guide.</p>
+          <p class="deck-hint">Use ← → to move through the guide.</p>
           <aside class="notes">Welcome the group. Explain that this briefing covers headset use, not host setup or Bluetooth pairing.</aside>
         </section>
 
         <section aria-labelledby="route-title">
           <p class="chapter">How audio moves <span>02 / 09</span></p>
           <h2 id="route-title">Your voice goes through the host</h2>
-          <p class="lead">Headsets do not connect directly to each other. The Linux host routes your microphone to the other headsets.</p>
+          <p class="lead">The Linux host routes your microphone to the other headsets.</p>
           <div class="route-map" role="img" aria-label="Your headset sends audio to the host, which routes it to the other headsets">
             <div class="route-node"><span class="node-icon">01</span><strong>Your headset</strong><small>microphone</small></div>
             <span class="route-link" aria-hidden="true">→</span>
@@ -53,7 +53,7 @@
             <span class="route-link" aria-hidden="true">→</span>
             <div class="route-node"><span class="node-icon">02</span><strong>Other headsets</strong><small>headset speakers</small></div>
           </div>
-          <p class="takeaway"><b>Remember</b> Everyone else hears you. Your voice is never sent back to your own headset.</p>
+          <p class="takeaway"><b>Remember</b> You never hear your own voice back.</p>
           <aside class="notes">Point out that the host routes audio locally. Every other headset hears the talker.</aside>
         </section>
 
@@ -62,11 +62,11 @@
           <h2 id="ready-title">Check that the audio route is ready</h2>
           <div class="check-layout">
             <ol class="check-list">
-              <li><span>01</span><div><strong>Wear and power on your headset.</strong><small>Keep it close to the host during setup.</small></div></li>
-              <li><span>02</span><div><strong>Wait for Bluetooth and duplex audio.</strong><small>The host operator can check connection and audio status.</small></div></li>
-              <li><span>03</span><div><strong>Listen for the route confirmation.</strong><small>A double beep means your microphone route is active.</small></div></li>
+              <li><span>01</span><div><strong>Power on your headset.</strong></div></li>
+              <li><span>02</span><div><strong>Wait for it to connect.</strong></div></li>
+              <li><span>03</span><div><strong>Listen for the double beep.</strong></div></li>
             </ol>
-            <aside class="callout"><strong>No route yet?</strong><p>A paired headset is not always ready for voice audio. One headset by itself has no intercom route.</p></aside>
+            <aside class="callout"><strong>No beep?</strong><p>Ask the host operator.</p></aside>
           </div>
           <aside class="notes">A double beep confirms that the microphone route is ready. Pairing alone does not guarantee that duplex audio has connected.</aside>
         </section>
@@ -78,12 +78,12 @@
             <article class="mode-card">
               <span class="mode-symbol open" aria-hidden="true">●</span>
               <h3>Always open</h3>
-              <p>Your microphone is live whenever its route is ready. Speak normally.</p>
+              <p>Your microphone is live. Speak normally.</p>
             </article>
             <article class="mode-card ptt-card">
               <span class="mode-symbol held" aria-hidden="true">●</span>
               <h3>Push to talk</h3>
-              <p>Tap the headset’s <kbd>Play/Pause</kbd> button to speak. Tap it again to mute.</p>
+              <p>Tap <kbd>Play/Pause</kbd> to speak. Tap again to mute.</p>
             </article>
           </div>
           <p class="takeaway"><b>If unsure</b> Ask the host operator which mode is configured before you start.</p>
@@ -94,13 +94,13 @@
           <p class="chapter">Push to talk <span>05 / 09</span></p>
           <h2 id="ptt-title">Tap to speak. Tap again to mute</h2>
           <div class="press-sequence">
-            <div class="press-step"><span class="step-number">1</span><div class="button-drawing" aria-hidden="true"><span>▶Ⅱ</span></div><strong>Tap play</strong><small>Use the headset’s media Play/Pause button.</small></div>
+            <div class="press-step"><span class="step-number">1</span><div class="button-drawing" aria-hidden="true"><span>▶Ⅱ</span></div><strong>Tap play</strong></div>
             <span class="sequence-arrow" aria-hidden="true">→</span>
-            <div class="press-step active-step"><span class="step-number">2</span><div class="sound-waves" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><strong>Wait for the double beep</strong><small>Then speak.</small></div>
+            <div class="press-step active-step"><span class="step-number">2</span><div class="sound-waves" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><strong>Wait for the beep</strong></div>
             <span class="sequence-arrow" aria-hidden="true">→</span>
-            <div class="press-step"><span class="step-number">3</span><div class="release-mark" aria-hidden="true">↗</div><strong>Tap pause to finish</strong><small>Your microphone mutes after the second tap.</small></div>
+            <div class="press-step"><span class="step-number">3</span><div class="release-mark" aria-hidden="true">↗</div><strong>Tap pause to mute</strong></div>
           </div>
-          <p class="takeaway"><b>Use the media button</b> Call, answer, and keyboard buttons do not transmit.</p>
+          <p class="takeaway"><b>Media button only</b> Call and answer do not transmit.</p>
           <aside class="notes">Demonstrate a play tap and a pause tap if possible. The press-to-talk mapping uses the headset's Play/Pause media key, not call controls.</aside>
         </section>
 
@@ -108,18 +108,18 @@
           <p class="chapter">Half-duplex <span>06 / 09</span></p>
           <h2 id="half-title">Wait your turn, then speak</h2>
           <div class="queue-board">
-            <div class="queue-state speaking"><span>NOW TALKING</span><strong>Headset A</strong><small>has the floor</small></div>
+            <div class="queue-state speaking"><span>NOW TALKING</span><strong>Headset A</strong><small>speaking</small></div>
             <span class="queue-arrow" aria-hidden="true">→</span>
-            <div class="queue-state waiting"><span>WAITING</span><strong>You</strong><small>stay in line</small></div>
+            <div class="queue-state waiting"><span>WAITING</span><strong>You</strong><small>in line</small></div>
             <span class="queue-arrow" aria-hidden="true">→</span>
-            <div class="queue-state next"><span>THEN</span><strong>Your turn</strong><small>double beep = go</small></div>
+            <div class="queue-state next"><span>THEN</span><strong>Your turn</strong><small>after the beep</small></div>
           </div>
           <ul class="plain-list">
-            <li>Tap play once; your request stays queued.</li>
-            <li>Talk after the double beep confirms your turn.</li>
-            <li>Tap pause to cancel your wait or end your turn.</li>
+            <li>Tap play once to queue.</li>
+            <li>Talk after the double beep.</li>
+            <li>Tap pause to finish.</li>
           </ul>
-          <p class="takeaway"><b>One queue</b> Only one person talks at a time.</p>
+          <p class="takeaway"><b>One queue</b> One person talks at a time.</p>
           <aside class="notes">Explain that one tap queues the request. The double beep signals that the floor is theirs; a pause tap cancels a wait or ends a turn.</aside>
         </section>
 
@@ -130,12 +130,12 @@
             <div class="control-callout">
               <span class="button-drawing large-button" aria-hidden="true"><span>▶Ⅱ</span></span>
               <strong>Media Play/Pause</strong>
-              <p>The headset button used for push to talk.</p>
+              <p>The push-to-talk button.</p>
             </div>
             <div class="control-notes">
-              <p><span class="no-mark" aria-hidden="true">×</span><span><strong>Call or answer</strong><small>These buttons do not activate push to talk.</small></span></p>
-              <p><span class="no-mark" aria-hidden="true">×</span><span><strong>Keyboard buttons</strong><small>Typing or pressing a key on the host is not push to talk.</small></span></p>
-              <p><span class="caution-mark" aria-hidden="true">!</span><span><strong>Forgotten open microphone</strong><small>Your microphone stays open until you tap pause, so mute when you finish.</small></span></p>
+              <p><span class="no-mark" aria-hidden="true">×</span><span><strong>Call or answer</strong><small>Do not transmit.</small></span></p>
+              <p><span class="no-mark" aria-hidden="true">×</span><span><strong>Keyboard keys</strong><small>Do not transmit.</small></span></p>
+              <p><span class="caution-mark" aria-hidden="true">!</span><span><strong>Open microphone</strong><small>Tap pause when you finish.</small></span></p>
             </div>
           </div>
           <aside class="notes">Stress the distinction between media Play/Pause and call/answer buttons. The microphone stays open between the play tap and the pause tap.</aside>
@@ -145,11 +145,11 @@
           <p class="chapter">Quick checks <span>08 / 09</span></p>
           <h2 id="trouble-title">If you cannot hear or be heard</h2>
           <div class="trouble-grid">
-            <article><span>01</span><h3>Check your button</h3><p>In push-to-talk or half-duplex, tap Play/Pause once. In a queue, wait for the double beep.</p></article>
-            <article><span>02</span><h3>Check the connection</h3><p>Ask the host operator to confirm your headset is connected and duplex audio is ready.</p></article>
-            <article><span>03</span><h3>Reconnect, then try again</h3><p>After audio reconnects, tap play again to request a turn.</p></article>
+            <article><span>01</span><h3>Check your button</h3><p>Tap Play/Pause once, then wait for the beep.</p></article>
+            <article><span>02</span><h3>Check the connection</h3><p>Ask the host operator to check it.</p></article>
+            <article><span>03</span><h3>Reconnect, then try again</h3><p>Then tap play again.</p></article>
           </div>
-          <p class="takeaway"><b>Beep check</b> The double beep confirms an active microphone route or your turn—not pairing by itself.</p>
+          <p class="takeaway"><b>Beep check</b> No double beep means no route or turn yet.</p>
           <aside class="notes">If problems remain after these checks, ask the host operator to inspect the connection and audio route before trying again.</aside>
         </section>
 
@@ -157,7 +157,7 @@
           <p class="chapter">You’re ready <span>09 / 09</span></p>
           <h2 id="close-title">Listen first.<br>Speak clearly.<br>Tap pause when done</h2>
           <div class="closing-bottom">
-            <p>Not sure which mode you’re in? Ask the person running the intercom.</p>
+            <p>Unsure of your mode? Ask the operator.</p>
             <a href="https://github.com/phieri/bt-intercom#duplex-modes-and-push-to-talk">Read the operator guide <span aria-hidden="true">↗</span></a>
           </div>
           <p class="deck-hint">Press <kbd>Esc</kbd> for overview · <kbd>F</kbd> for full screen</p>

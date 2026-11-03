@@ -41,20 +41,23 @@
         <div class="signal-board" role="img" aria-label="Illustration of one Linux host with two Bluetooth controllers: the first serves two headsets and the second serves one">
           <div class="board-topline"><span>LOCAL AUDIO ROUTING</span><span class="live-indicator">● READY</span></div>
           <div class="host-node">
-            <span class="host-symbol" aria-hidden="true">⌘</span>
-            <span><strong>Linux host</strong><small>BlueZ + PipeWire</small></span>
-            <span class="host-mode">HALF DUPLEX</span>
+            <div class="host-header">
+              <span class="host-symbol" aria-hidden="true">⌘</span>
+              <span><strong>Linux host</strong><small>BlueZ + PipeWire</small></span>
+              <span class="host-mode">HALF DUPLEX</span>
+            </div>
+            <div class="group-nodes">
+              <div class="group-node">
+                <div class="group-heading"><span>hci0</span><strong>Bluetooth controller</strong></div>
+              </div>
+              <div class="group-node group-node-alt">
+                <div class="group-heading"><span>hci1</span><strong>Bluetooth controller</strong></div>
+              </div>
+            </div>
           </div>
-          <div class="signal-lines" aria-hidden="true"></div>
-          <div class="group-nodes">
-            <div class="group-node">
-              <div class="group-heading"><span>hci0</span><strong>Bluetooth controller</strong></div>
-              <div class="headset-list"><span class="headset-chip"><b>🎧</b> Alex</span><span class="headset-chip"><b>🎧</b> Jules</span></div>
-            </div>
-            <div class="group-node group-node-alt">
-              <div class="group-heading"><span>hci1</span><strong>Bluetooth controller</strong></div>
-              <div class="headset-list"><span class="headset-chip"><b>🎧</b> Morgan</span></div>
-            </div>
+          <div class="headset-groups" aria-hidden="true">
+            <div class="headset-list"><span class="headset-chip"><b>🎧</b> Alex</span><span class="headset-chip"><b>🎧</b> Jules</span></div>
+            <div class="headset-list headset-list-alt"><span class="headset-chip"><b>🎧</b> Morgan</span></div>
           </div>
           <p class="board-caption"><span aria-hidden="true">↔</span> Two controllers serve three headsets (2 + 1)</p>
         </div>
