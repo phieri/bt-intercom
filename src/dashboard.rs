@@ -31,6 +31,9 @@ pub struct Dashboard {
 pub struct RunStatus<'a> {
 	pub mode: Mode,
 	pub transmit: &'a Transmit,
+	/// The routing computer's wired headset ports while available; only
+	/// shown when the host takes part in the intercom.
+	pub host: Option<&'a Headset>,
 }
 
 impl Dashboard {
@@ -66,7 +69,7 @@ impl Dashboard {
 		error: Option<&str>,
 		output: &mut impl Write,
 	) -> io::Result<()> {
-		let routes = RoutingStatus::new(headsets, links);
+		let routes = RoutingStatus::with_host(headsets, status.host, links);
 		writeln!(
 			output,
 			"bt-intercom | {} | {} owned active links",
@@ -102,6 +105,20 @@ impl Dashboard {
 				format!("{tx}/{rx}"),
 				transmit_state,
 				presentation.battery_label()
+			)?;
+		}
+		if status.transmit.has_host() {
+			let (tx, rx) = routes.host_counts();
+			writeln!(
+				output,
+				"{:<16} {:<17}  {:<9}  {:<6}  {:<5}  {:<15} {:<7}  hold space to talk",
+				"This computer",
+				"wired headset",
+				if status.host.is_some() { "yes" } else { "no" },
+				if status.host.is_some() { "yes" } else { "no" },
+				format!("{tx}/{rx}"),
+				status.transmit.dashboard_host_state(),
+				"—",
 			)?;
 		}
 		writeln!(
@@ -168,6 +185,7 @@ mod tests {
 				RunStatus {
 					mode: Mode::FullDuplex,
 					transmit: &Transmit::new(Mode::FullDuplex, []),
+					host: None,
 				},
 				None,
 				&mut output,
@@ -215,6 +233,7 @@ mod tests {
 				RunStatus {
 					mode: Mode::HalfDuplex,
 					transmit: &Transmit::new(Mode::HalfDuplex, []),
+					host: None,
 				},
 				None,
 				&mut output,
@@ -275,6 +294,7 @@ mod tests {
 				RunStatus {
 					mode: Mode::HalfDuplex,
 					transmit: &transmit,
+					host: None,
 				},
 				None,
 				&mut output,
@@ -364,6 +384,7 @@ mod tests {
 				RunStatus {
 					mode: Mode::FullDuplex,
 					transmit: &Transmit::new(Mode::FullDuplex, []),
+					host: None,
 				},
 				None,
 				&mut output,
@@ -410,6 +431,7 @@ mod tests {
 				RunStatus {
 					mode: Mode::FullDuplex,
 					transmit: &Transmit::new(Mode::FullDuplex, []),
+					host: None,
 				},
 				None,
 				&mut output,

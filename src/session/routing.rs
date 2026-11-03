@@ -7,6 +7,7 @@ use crate::bluez::Address;
 use crate::process::{COMMAND_TIMEOUT, command_cancellable};
 use crate::ptt::{PttBeep, PttInput, confirm_connections, confirm_transmissions, drain_events};
 use crate::router::{Headset, Router};
+use crate::routing_status::Observed;
 use crate::runtime_config::RunConfig;
 use crate::transmit::Transmit;
 use crate::transport::{self, Transport};
@@ -27,15 +28,19 @@ pub(crate) struct RouteUpdateOutcome {
 
 struct PreparedCycle {
 	sources: BTreeSet<Address>,
+	host_talking: bool,
 	transport_ready: bool,
 }
 
 pub(crate) struct RoutingCoordinator {
 	pub(crate) router: Router<Execute>,
 	pub(crate) headsets: BTreeMap<Address, Headset>,
+	/// The host's wired headset ports, while it is available.
+	pub(crate) host: Option<Headset>,
 	pub(crate) links: BTreeSet<(u64, u64)>,
 	connected_headsets: BTreeSet<Address>,
 	reported_controller_warnings: BTreeSet<String>,
+	reported_host_error: Option<String>,
 }
 
 impl RoutingCoordinator {
@@ -47,12 +52,17 @@ impl RoutingCoordinator {
 		router.set_transport(config.transport);
 		router.set_sco_limit(config.sco_limit);
 		router.set_a2dp_limit(config.a2dp_limit);
+		if let Some(host) = &config.host {
+			router.set_host(host.audio.clone());
+		}
 		Self {
 			router,
 			headsets: BTreeMap::new(),
+			host: None,
 			links: BTreeSet::new(),
 			connected_headsets: BTreeSet::new(),
 			reported_controller_warnings: BTreeSet::new(),
+			reported_host_error: None,
 		}
 	}
 
@@ -70,7 +80,12 @@ impl RoutingCoordinator {
 		{
 			return Ok(self.invalidate_cycle());
 		}
-		let update = self.update_route_set(input, &cycle.sources, cycle.transport_ready);
+		let update = self.update_route_set(
+			input,
+			&cycle.sources,
+			cycle.host_talking,
+			cycle.transport_ready,
+		);
 		super::guard_half_update(config.mode, &update, || self.router.close())?;
 		let inspection = self.inspect_and_confirm(config, transmit, input, beep, stopped)?;
 		if inspection.changed {
@@ -92,12 +107,13 @@ impl RoutingCoordinator {
 		input: Option<&PttInput>,
 	) -> Result<PreparedCycle, String> {
 		self.refresh_topology(config, transmit, input)?;
-		let sources = self.routing_sources(input, transmit);
+		let (sources, host_talking) = self.routing_sources(input, transmit);
 		let prepared = self.router.prepare_transport(&sources);
 		super::guard_half_update(config.mode, &prepared, || self.router.close())?;
 		let transport_ready = prepared?;
 		Ok(PreparedCycle {
 			sources,
+			host_talking,
 			transport_ready,
 		})
 	}
@@ -166,14 +182,40 @@ impl RoutingCoordinator {
 				}
 			}
 		}
+		self.sync_host(transmit);
 		Ok(())
 	}
 
-	fn routing_sources(&self, input: Option<&PttInput>, transmit: &Transmit) -> BTreeSet<Address> {
+	/// Follows the host's wired headset as of the latest snapshot, telling the
+	/// user once when it is unavailable. Returns whether the floor changed.
+	fn sync_host(&mut self, transmit: &mut Transmit) -> bool {
+		if !transmit.has_host() {
+			return false;
+		}
+		self.host = self.router.host_ports().cloned();
+		let error = self.router.host_error().map(str::to_owned);
+		if error != self.reported_host_error {
+			match &error {
+				Some(error) => log::warn!("Host wired headset unavailable: {error}"),
+				None if self.reported_host_error.is_some() => {
+					log::info!("Host wired headset is available");
+				}
+				None => {}
+			}
+			self.reported_host_error = error;
+		}
+		transmit.host_topology(self.host.is_some())
+	}
+
+	fn routing_sources(
+		&self,
+		input: Option<&PttInput>,
+		transmit: &Transmit,
+	) -> (BTreeSet<Address>, bool) {
 		if input.is_some() {
-			transmit.sources().clone()
+			(transmit.sources().clone(), transmit.host_active())
 		} else {
-			self.router.allowed.clone()
+			(self.router.allowed.clone(), false)
 		}
 	}
 
@@ -181,6 +223,7 @@ impl RoutingCoordinator {
 		&mut self,
 		input: Option<&PttInput>,
 		sources: &BTreeSet<Address>,
+		host_talking: bool,
 		transport_ready: bool,
 	) -> Result<BTreeMap<Address, Headset>, String> {
 		if !transport_ready {
@@ -188,7 +231,7 @@ impl RoutingCoordinator {
 		} else if input.is_none() {
 			self.router.update(true)
 		} else {
-			self.router.update_sources(sources)
+			self.router.update_talkers(sources, host_talking)
 		}
 	}
 
@@ -213,6 +256,7 @@ impl RoutingCoordinator {
 		};
 		self.headsets = current;
 		self.links = active;
+		self.host = self.router.host_ports().cloned();
 		let mut changed = false;
 		if let Some(input) = input {
 			changed |= drain_events(&input.events, transmit)?;
@@ -233,13 +277,17 @@ impl RoutingCoordinator {
 					.collect();
 				changed |= transmit.topology(&available);
 			}
+			changed |= self.sync_host(transmit);
 			if !changed {
 				changed |= confirm_transmissions(
 					config.mode,
 					transmit,
 					&input.events,
-					&self.headsets,
-					&self.links,
+					Observed {
+						headsets: &self.headsets,
+						host: self.host.as_ref(),
+						links: &self.links,
+					},
 					beep,
 					stopped,
 				)?;

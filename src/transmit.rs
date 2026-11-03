@@ -7,6 +7,10 @@
 //! microphone request and a pause tap releases it; the request is latched in
 //! between. Full-duplex lets every requesting headset transmit at once,
 //! half-duplex grants one shared floor in FIFO order.
+//!
+//! The optional host (the routing computer's wired headset) joins the same
+//! floor. Its spacebar is a true push-to-talk: key-down requests and key-up
+//! releases, so it never latches.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Instant;
@@ -28,6 +32,19 @@ pub enum Tap {
 	Toggle,
 }
 
+/// Anyone who can hold the floor: the routing computer or a Bluetooth headset.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Talker {
+	Host,
+	Headset(Address),
+}
+
+impl From<Address> for Talker {
+	fn from(address: Address) -> Self {
+		Self::Headset(address)
+	}
+}
+
 #[derive(Default)]
 struct Button {
 	requested: bool,
@@ -36,11 +53,15 @@ struct Button {
 pub struct Transmit {
 	mode: Mode,
 	buttons: BTreeMap<Address, Button>,
-	queue: VecDeque<Address>,
+	host: Option<Button>,
+	queue: VecDeque<Talker>,
 	active: BTreeSet<Address>,
+	host_active: bool,
 	controllers: Option<BTreeMap<Address, String>>,
 	dropped: BTreeSet<Address>,
+	host_dropped: bool,
 	pub pending: BTreeSet<Address>,
+	pub host_pending: bool,
 }
 
 impl Transmit {
@@ -48,12 +69,26 @@ impl Transmit {
 		Self {
 			mode,
 			buttons: mapped.into_iter().map(|a| (a, Button::default())).collect(),
+			host: None,
 			queue: VecDeque::new(),
 			active: BTreeSet::new(),
+			host_active: false,
 			controllers: None,
 			dropped: BTreeSet::new(),
+			host_dropped: false,
 			pending: BTreeSet::new(),
+			host_pending: false,
 		}
+	}
+
+	/// Lets the routing computer take part through its own push-to-talk key.
+	pub fn with_host(mut self) -> Self {
+		self.host = Some(Button::default());
+		self
+	}
+
+	pub fn has_host(&self) -> bool {
+		self.host.is_some()
 	}
 
 	/// Half-duplex requests from headsets without a known controller stay
@@ -63,9 +98,16 @@ impl Transmit {
 		self.refresh();
 	}
 
-	/// Apply a tap; a repeated play or pause is not a transition.
+	/// Apply a headset's tap; a repeated play or pause is not a transition.
+	#[cfg(test)]
 	pub fn tap(&mut self, address: &Address, tap: Tap, at: Instant) -> bool {
-		let Some(button) = self.buttons.get(address) else {
+		self.talker_tap(&Talker::Headset(address.clone()), tap, at)
+	}
+
+	/// Apply a tap or key transition from any talker. The host reports `Play`
+	/// while its key is down and `Pause` once it is released.
+	pub fn talker_tap(&mut self, talker: &Talker, tap: Tap, at: Instant) -> bool {
+		let Some(button) = self.button(talker) else {
 			return false;
 		};
 		let talking = match tap {
@@ -73,13 +115,29 @@ impl Transmit {
 			Tap::Pause => false,
 			Tap::Toggle => !button.requested,
 		};
-		self.event(address, talking, at)
+		self.request(talker, talking, at)
+	}
+
+	fn button(&self, talker: &Talker) -> Option<&Button> {
+		match talker {
+			Talker::Host => self.host.as_ref(),
+			Talker::Headset(address) => self.buttons.get(address),
+		}
 	}
 
 	/// Set whether a headset requests to transmit. Returns whether this changed
 	/// its request.
-	pub fn event(&mut self, address: &Address, talking: bool, _at: Instant) -> bool {
-		let Some(button) = self.buttons.get_mut(address) else {
+	#[cfg(test)]
+	pub fn event(&mut self, address: &Address, talking: bool, at: Instant) -> bool {
+		self.request(&Talker::Headset(address.clone()), talking, at)
+	}
+
+	fn request(&mut self, talker: &Talker, talking: bool, _at: Instant) -> bool {
+		let button = match talker {
+			Talker::Host => self.host.as_mut(),
+			Talker::Headset(address) => self.buttons.get_mut(address),
+		};
+		let Some(button) = button else {
 			return false;
 		};
 		if button.requested == talking {
@@ -88,9 +146,9 @@ impl Transmit {
 		button.requested = talking;
 		if self.mode == Mode::HalfDuplex {
 			if talking {
-				self.queue.push_back(address.to_owned());
+				self.queue.push_back(talker.clone());
 			} else {
-				self.queue.retain(|queued| queued != address);
+				self.queue.retain(|queued| queued != talker);
 			}
 		}
 		self.refresh();
@@ -100,18 +158,31 @@ impl Transmit {
 	/// Drop disconnected requests, including the floor. Reconnection alone must
 	/// not restart a mapped microphone: require a new play tap.
 	pub fn topology(&mut self, available: &BTreeSet<Address>) -> bool {
-		let before = self.active.clone();
+		let before = (self.active.clone(), self.host_active);
 		for (address, button) in &mut self.buttons {
 			if !available.contains(address) {
 				if button.requested {
 					self.dropped.insert(address.clone());
 				}
-				self.queue.retain(|queued| queued != address);
+				self.queue
+					.retain(|queued| *queued != Talker::Headset(address.clone()));
 				button.requested = false;
 			}
 		}
 		self.refresh();
-		before != self.active
+		before != (self.active.clone(), self.host_active)
+	}
+
+	/// Drop the host's request while its wired headset is unavailable.
+	pub fn host_topology(&mut self, available: bool) -> bool {
+		let before = (self.active.clone(), self.host_active);
+		if !available && let Some(button) = &mut self.host {
+			self.host_dropped |= button.requested;
+			button.requested = false;
+			self.queue.retain(|queued| *queued != Talker::Host);
+		}
+		self.refresh();
+		before != (self.active.clone(), self.host_active)
 	}
 
 	/// Headsets whose held or always-open request was discarded because the
@@ -120,15 +191,22 @@ impl Transmit {
 		std::mem::take(&mut self.dropped)
 	}
 
+	/// Whether the discarded host request was due to its wired headset vanishing.
+	pub fn take_host_dropped(&mut self) -> bool {
+		std::mem::take(&mut self.host_dropped)
+	}
+
 	fn refresh(&mut self) {
-		let next = match self.mode {
+		let next: BTreeSet<Talker> = match self.mode {
 			Mode::HalfDuplex => self
 				.queue
 				.front()
-				.filter(|address| {
-					self.controllers
+				.filter(|talker| match talker {
+					Talker::Host => true,
+					Talker::Headset(address) => self
+						.controllers
 						.as_ref()
-						.is_none_or(|controllers| controllers.contains_key(*address))
+						.is_none_or(|controllers| controllers.contains_key(address)),
 				})
 				.cloned()
 				.into_iter()
@@ -137,16 +215,43 @@ impl Transmit {
 				.buttons
 				.iter()
 				.filter(|(_, b)| b.requested)
-				.map(|(a, _)| a.clone())
-				.collect::<BTreeSet<_>>(),
+				.map(|(a, _)| Talker::Headset(a.clone()))
+				.chain(
+					self.host
+						.as_ref()
+						.filter(|button| button.requested)
+						.map(|_| Talker::Host),
+				)
+				.collect(),
 		};
+		let next_host = next.contains(&Talker::Host);
+		let next: BTreeSet<Address> = next
+			.into_iter()
+			.filter_map(|talker| match talker {
+				Talker::Headset(address) => Some(address),
+				Talker::Host => None,
+			})
+			.collect();
 		self.pending.retain(|a| next.contains(a));
 		self.pending.extend(next.difference(&self.active).cloned());
 		self.active = next;
+		self.host_pending = next_host && (self.host_pending || !self.host_active);
+		self.host_active = next_host;
 	}
 
+	/// Whether any transmission still awaits its routing confirmation.
+	pub fn has_pending(&self) -> bool {
+		self.host_pending || !self.pending.is_empty()
+	}
+
+	/// Bluetooth headsets whose microphones currently hold the floor.
 	pub fn sources(&self) -> &BTreeSet<Address> {
 		&self.active
+	}
+
+	/// Whether the host's microphone currently holds the floor.
+	pub fn host_active(&self) -> bool {
+		self.host_active
 	}
 
 	pub(crate) fn dashboard_state(&self, address: &Address) -> String {
@@ -157,8 +262,26 @@ impl Transmit {
 				Some(_) => "muted".into(),
 			};
 		}
-		let queued = self.queue.contains(address);
+		let queued = self.queue.contains(&Talker::Headset(address.clone()));
 		match (self.active.contains(address), queued) {
+			(true, _) => "has floor".into(),
+			(false, true) => "queued".into(),
+			(false, false) => "idle".into(),
+		}
+	}
+
+	pub(crate) fn dashboard_host_state(&self) -> String {
+		let Some(button) = &self.host else {
+			return "off".into();
+		};
+		if self.mode == Mode::FullDuplex {
+			return if button.requested {
+				"transmitting".into()
+			} else {
+				"muted".into()
+			};
+		}
+		match (self.host_active, self.queue.contains(&Talker::Host)) {
 			(true, _) => "has floor".into(),
 			(false, true) => "queued".into(),
 			(false, false) => "idle".into(),
@@ -305,5 +428,55 @@ mod tests {
 			assert!(t.sources().is_empty());
 			assert!(t.pending.is_empty());
 		}
+	}
+
+	#[test]
+	fn host_key_is_a_true_push_to_talk_sharing_the_fifo_floor() {
+		let now = Instant::now();
+		let mut t = Transmit::new(Mode::HalfDuplex, set(&["a"])).with_host();
+		assert!(t.talker_tap(&Talker::Host, Tap::Play, now));
+		assert!(t.host_active() && t.host_pending);
+		assert!(t.sources().is_empty());
+		assert_eq!(t.dashboard_host_state(), "has floor");
+		press(&mut t, "a", now, 1);
+		assert!(t.sources().is_empty());
+		assert_eq!(t.dashboard_state(&address("a")), "queued");
+		assert!(t.talker_tap(&Talker::Host, Tap::Pause, now));
+		assert!(!t.host_active() && !t.host_pending);
+		assert_eq!(t.sources(), &set(&["a"]));
+		assert_eq!(t.dashboard_host_state(), "idle");
+	}
+
+	#[test]
+	fn host_requests_are_ignored_without_a_host_and_dropped_when_unavailable() {
+		let now = Instant::now();
+		let mut none = Transmit::new(Mode::FullDuplex, set(&["a"]));
+		assert!(!none.talker_tap(&Talker::Host, Tap::Play, now));
+		assert_eq!(none.dashboard_host_state(), "off");
+
+		let mut t = Transmit::new(Mode::FullDuplex, set(&["a"])).with_host();
+		assert_eq!(t.dashboard_host_state(), "muted");
+		t.talker_tap(&Talker::Host, Tap::Play, now);
+		press(&mut t, "a", now, 0);
+		assert_eq!(t.dashboard_host_state(), "transmitting");
+		assert!(t.host_topology(false));
+		assert!(!t.host_active() && !t.host_pending);
+		assert!(t.take_host_dropped());
+		assert!(!t.take_host_dropped());
+		assert_eq!(t.sources(), &set(&["a"]));
+		assert!(!t.host_topology(true));
+	}
+
+	#[test]
+	fn host_in_a_queue_leaves_it_when_released_before_getting_the_floor() {
+		let now = Instant::now();
+		let mut t = Transmit::new(Mode::HalfDuplex, set(&["a"])).with_host();
+		press(&mut t, "a", now, 0);
+		t.talker_tap(&Talker::Host, Tap::Play, now);
+		assert_eq!(t.dashboard_host_state(), "queued");
+		t.talker_tap(&Talker::Host, Tap::Pause, now);
+		release(&mut t, "a", now, 1);
+		assert!(!t.host_active());
+		assert_eq!(t.dashboard_host_state(), "idle");
 	}
 }

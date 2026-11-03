@@ -104,6 +104,17 @@ Pair headsets to their intended controllers using bluetoothctl select before
 pairing. Extra adapters do not redistribute existing bonds. Auracast requires
 separate LE Audio broadcast hardware and software support and is not implemented.
 .TP
+.B run --host
+Let the routing computer join the intercom with a wired (non-Bluetooth)
+headset. Hold the spacebar (evdev KEY_SPACE) for true push-to-talk; the host
+shares the floor and queue with the headsets.
+.TP
+.BI run " --host --host-keyboard " auto|/dev/input/eventX
+Keyboard evdev device(s) for host PTT (default auto). Requires --host.
+.TP
+.BI run " --host --host-source " NODE " --host-sink " NODE
+PipeWire node.name of the host microphone and speakers instead of the defaults.
+.TP
 .BI run " --ptt ADDRESS=/dev/input/eventX"
 Override the default automatic matching of play/pause input devices by mapping
 a headset to its Linux evdev push-to-talk input. Repeat once for every configured

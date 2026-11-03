@@ -215,6 +215,26 @@ the open request stays until the headset disconnects, and the reader reattaches 
 device reappears. PTT is not a privacy boundary: a failed mute can
 leave audio active until a retry succeeds.
 
+### Joining from the routing computer
+
+Add `--host` to `run` to let the routing computer take part as one more
+participant, using a wired (non-Bluetooth) headset. Its microphone and speakers
+are taken from PipeWire's default source and sink, or from `--host-source` and
+`--host-sink` (PipeWire `node.name` values; Bluetooth nodes are rejected). With
+neither flag and no non-Bluetooth defaults, a single physical audio device is
+used. The host hears every active talker and, while it talks, its microphone is
+routed to every headset. It shares the same floor and FIFO queue as the
+headsets, and a double beep confirms its turn.
+
+Host PTT is true push-to-talk: **hold the spacebar** to talk and release it to
+stop. It reads Linux evdev keyboards (`--host-keyboard auto`, the default, or
+`--host-keyboard /dev/input/eventX`), so it works from a terminal, SSH session
+or service, but the user needs read access to them (usually the `input` group).
+Keys are not grabbed, so spaces still reach the focused program. Only
+`KEY_SPACE` is used; a lost keyboard or dropped events count as a release. If the
+wired headset is unavailable, the press is warned about and ignored.
+`--host-keyboard`, `--host-source` and `--host-sink` require `--host`.
+
 ### Diagnostics
 
 `bt-intercom diagnose [ADDRESS...]` (saved network when omitted) tests the real

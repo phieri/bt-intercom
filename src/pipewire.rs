@@ -14,7 +14,7 @@ pub(crate) const MONO_CHANNEL: &str = "MONO";
 /// A directed link, represented as `(output_port_id, input_port_id)`.
 pub(crate) type Link = (u64, u64);
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 /// A PipeWire audio port and the channel it carries.
 pub struct Port {
 	pub(crate) id: u64,
@@ -22,8 +22,9 @@ pub struct Port {
 	pub(crate) channel: String,
 }
 
-#[derive(Debug, Default)]
-/// Audio ports belonging to one allowlisted Bluetooth headset.
+#[derive(Clone, Debug, Default)]
+/// Audio ports belonging to one allowlisted Bluetooth headset, or to the
+/// routing computer's own wired headset.
 pub struct Headset {
 	/// Microphone output ports exposed by the headset.
 	pub sources: Vec<Port>,
@@ -43,6 +44,14 @@ impl Headset {
 	}
 }
 
+/// Overrides for the routing computer's wired headset, by PipeWire `node.name`.
+/// An unset side follows PipeWire's default device when it is not Bluetooth.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct HostSelection {
+	pub(crate) source: Option<String>,
+	pub(crate) sink: Option<String>,
+}
+
 #[derive(Debug)]
 struct DeviceMetadata {
 	address: Address,
@@ -52,6 +61,8 @@ struct DeviceMetadata {
 #[derive(Debug)]
 struct Node {
 	device: Option<u64>,
+	name: Option<String>,
+	bluetooth: bool,
 	class: Option<String>,
 	profile: Option<String>,
 	label: Option<String>,
@@ -72,6 +83,7 @@ pub(crate) struct Snapshot {
 	device_observations: Vec<(Address, Option<String>)>,
 	nodes: BTreeMap<u64, Node>,
 	ports: Vec<AudioPort>,
+	defaults: BTreeMap<String, String>,
 	links: BTreeSet<Link>,
 	unowned_links: BTreeSet<Link>,
 	owned_links: BTreeMap<String, BTreeSet<Link>>,
@@ -83,6 +95,15 @@ fn id(value: &Value) -> Option<u64> {
 
 fn text(props: &Value, key: &str) -> Option<String> {
 	props[key].as_str().map(str::to_owned)
+}
+
+/// PipeWire reports a default device as `{"name": "node.name"}`, either parsed
+/// or as the JSON text.
+fn default_node_name(value: &Value) -> Option<String> {
+	match value {
+		Value::String(text) => default_node_name(&serde_json::from_str(text).ok()?),
+		_ => value["name"].as_str().map(str::to_owned),
+	}
 }
 
 impl Snapshot {
@@ -103,6 +124,7 @@ impl Snapshot {
 			device_observations: Vec::new(),
 			nodes: BTreeMap::new(),
 			ports: Vec::new(),
+			defaults: BTreeMap::new(),
 			links: BTreeSet::new(),
 			unowned_links: BTreeSet::new(),
 			owned_links: BTreeMap::new(),
@@ -138,10 +160,17 @@ impl Snapshot {
 				}
 				Some("PipeWire:Interface:Node") => {
 					let Some(object_id) = object_id else { continue };
+					let name = text(props, "node.name");
+					let bluetooth = text(props, "device.api").as_deref() == Some("bluez5")
+						|| name
+							.as_deref()
+							.is_some_and(|name| name.starts_with("bluez_"));
 					snapshot.nodes.insert(
 						object_id,
 						Node {
 							device: id(&props["device.id"]),
+							name,
+							bluetooth,
 							class: text(props, "media.class"),
 							profile: text(props, "api.bluez5.profile"),
 							label: text(props, "application.name")
@@ -160,6 +189,18 @@ impl Snapshot {
 							channel: text(props, "audio.channel")
 								.unwrap_or_else(|| MONO_CHANNEL.into()),
 						});
+					}
+				}
+				Some("PipeWire:Interface:Metadata") => {
+					if text(props, "metadata.name").as_deref() != Some("default") {
+						continue;
+					}
+					for entry in object["metadata"].as_array().into_iter().flatten() {
+						if let Some(key) = entry["key"].as_str()
+							&& let Some(name) = default_node_name(&entry["value"])
+						{
+							snapshot.defaults.insert(key.to_owned(), name);
+						}
 					}
 				}
 				Some("PipeWire:Interface:Link") => {
@@ -280,6 +321,94 @@ impl Snapshot {
 			});
 		}
 		headsets
+	}
+
+	fn is_bluetooth(&self, node: &Node) -> bool {
+		node.bluetooth
+			|| node
+				.device
+				.is_some_and(|device| self.devices.contains_key(&device))
+	}
+
+	/// Finds the node carrying one side of the host's wired headset: the
+	/// explicit `node.name`, else PipeWire's default if it is not Bluetooth,
+	/// else the only physical non-Bluetooth device of that class.
+	fn host_node(
+		&self,
+		explicit: Option<&str>,
+		class: &str,
+		default_key: &str,
+		flag: &str,
+	) -> Result<u64, String> {
+		let of_class = || {
+			self.nodes
+				.iter()
+				.filter(move |(_, node)| node.class.as_deref() == Some(class))
+		};
+		if let Some(wanted) = explicit {
+			let (id, node) = of_class()
+				.find(|(_, node)| node.name.as_deref() == Some(wanted))
+				.ok_or_else(|| {
+					format!("no PipeWire {class} node named {wanted} (see `pw-cli ls Node`)")
+				})?;
+			if self.is_bluetooth(node) {
+				return Err(format!(
+					"{flag} {wanted} is a Bluetooth device; the host needs a wired headset"
+				));
+			}
+			return Ok(*id);
+		}
+		let usable = || of_class().filter(|(_, node)| !self.is_bluetooth(node));
+		if let Some(default) = self.defaults.get(default_key)
+			&& let Some((id, _)) = usable().find(|(_, node)| node.name.as_ref() == Some(default))
+		{
+			return Ok(*id);
+		}
+		let mut physical = usable().filter(|(_, node)| node.device.is_some());
+		match (physical.next(), physical.next()) {
+			(Some((id, _)), None) => Ok(*id),
+			(None, _) => Err(format!(
+				"no wired {class} node found; connect the headset or pass {flag} NODE_NAME"
+			)),
+			_ => Err(format!(
+				"several wired {class} nodes and no usable PipeWire default; pass {flag} NODE_NAME"
+			)),
+		}
+	}
+
+	/// The routing computer's wired headset ports, or why they are unavailable.
+	pub(crate) fn host_audio(&self, selection: &HostSelection) -> Result<Headset, String> {
+		let source = self.host_node(
+			selection.source.as_deref(),
+			"Audio/Source",
+			"default.audio.source",
+			"--host-source",
+		)?;
+		let sink = self.host_node(
+			selection.sink.as_deref(),
+			"Audio/Sink",
+			"default.audio.sink",
+			"--host-sink",
+		)?;
+		let ports = |node: u64, direction: &str| -> Vec<Port> {
+			self.ports
+				.iter()
+				.filter(|port| port.node == node && port.direction == direction)
+				.map(|port| Port {
+					id: port.id,
+					node_id: Some(port.node),
+					channel: port.channel.clone(),
+				})
+				.collect()
+		};
+		let headset = Headset {
+			sources: ports(source, "out"),
+			sinks: ports(sink, "in"),
+		};
+		if !headset.has_duplex_audio() {
+			return Err("the wired headset's PipeWire nodes expose no audio ports yet".into());
+		}
+		Ok(headset)
 	}
 
 	/// Other programs' audio nodes linked to an allowlisted headset's nodes.

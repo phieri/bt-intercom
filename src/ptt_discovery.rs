@@ -9,6 +9,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::bluez::Address;
+use crate::host_ptt::{KEY_A, KEY_ENTER, KEY_SPACE};
 use crate::ptt::{PLAY_PAUSE_KEYS, PttButton};
 
 /// Value accepted in place of an input device path to request discovery.
@@ -20,7 +21,7 @@ const SYS_INPUT: &str = "/sys/class/input";
 /// prints `unsigned long` words, so the width is that of the kernel, not of this
 /// process (a 32-bit userland may run on a 64-bit kernel): non-leading words
 /// are zero-padded to the full width.
-fn has_key(mask: &str, code: u16) -> bool {
+pub(crate) fn has_key(mask: &str, code: u16) -> bool {
 	let words: Vec<&str> = mask.split_whitespace().collect();
 	let widest = words
 		.iter()
@@ -130,6 +131,32 @@ fn resolve_at(
 		}
 	}
 	Ok(())
+}
+
+/// Event devices that look like a typing keyboard (space, enter and a letter),
+/// which excludes media-key devices such as headset AVRCP inputs.
+fn keyboards_in(root: &Path) -> Vec<String> {
+	let mut keyboards: Vec<_> = fs::read_dir(root)
+		.into_iter()
+		.flatten()
+		.flatten()
+		.filter_map(|entry| {
+			let name = entry.file_name().to_string_lossy().into_owned();
+			let keys = fs::read_to_string(entry.path().join("device/capabilities/key")).ok()?;
+			(name.starts_with("event")
+				&& [KEY_SPACE, KEY_ENTER, KEY_A]
+					.iter()
+					.all(|&code| has_key(&keys, code)))
+			.then(|| format!("/dev/input/{name}"))
+		})
+		.collect();
+	keyboards.sort();
+	keyboards
+}
+
+/// Every attached keyboard's event device, in path order.
+pub(crate) fn find_keyboards() -> Vec<String> {
+	keyboards_in(Path::new(SYS_INPUT))
 }
 
 #[cfg(test)]
@@ -242,6 +269,32 @@ mod tests {
 		resolve_at(&root, &mut buttons, &allowed).unwrap();
 		assert_eq!(buttons.len(), 2);
 		assert_eq!(buttons[1].path, "/dev/input/event2");
+		fs::remove_dir_all(root).unwrap();
+	}
+
+	#[test]
+	fn finds_only_typing_keyboards() {
+		let root = temp("ptt-keyboards");
+		let mut mask = [0u64; 2];
+		for code in [KEY_ENTER, KEY_A, KEY_SPACE] {
+			mask[usize::from(code) / 64] |= 1 << (code % 64);
+		}
+		let keyboard = format!("{:x} {:016x}", mask[1], mask[0]);
+		device(&root, "event1", "", &keyboard);
+		device(&root, "event2", "", "0");
+		device(
+			&root,
+			"event3",
+			"aa:bb:cc:dd:ee:01",
+			&format!("{:x}", 1u64 << 8),
+		);
+		device(&root, "mouse0", "", &keyboard);
+		device(&root, "event10", "", &keyboard);
+		assert_eq!(
+			keyboards_in(&root),
+			["/dev/input/event1", "/dev/input/event10"]
+		);
+		assert!(keyboards_in(&root.join("missing")).is_empty());
 		fs::remove_dir_all(root).unwrap();
 	}
 }
