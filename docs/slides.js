@@ -9,7 +9,7 @@ window.addEventListener("load", () => {
     hash: true,
     keyboard: true,
     overview: true,
-    center: false,
+    center: true,
     transition: "fade",
     width: 1200,
     height: 700,

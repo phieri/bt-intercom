@@ -23,12 +23,12 @@
     <main class="reveal" id="briefing" aria-label="Headset user briefing">
       <div class="slides">
         <section class="title-slide" aria-labelledby="welcome-title">
-          <p class="chapter">A quick field guide <span>01 / 09</span></p>
+          <p class="chapter">A quick field guide</p>
           <div class="title-layout">
             <div>
               <p class="signal-tag"><span aria-hidden="true"></span> FOR HEADSET USERS</p>
               <h1 id="welcome-title">Ready to<br>talk together?</h1>
-              <p class="lead">A practical guide to listening, speaking, and taking turns on bt-intercom.</p>
+              <p class="lead">Listen, speak, take turns.</p>
             </div>
             <div class="headset-illustration" role="img" aria-label="A headset connected to a local intercom host">
               <div class="earcup"></div>
@@ -38,133 +38,130 @@
               <div class="host-pill"><span>bt</span><b>LOCAL INTERCOM</b></div>
             </div>
           </div>
-          <p class="deck-hint">Use ← → to move through the guide.</p>
+          <p class="deck-hint">Press → to begin.</p>
           <aside class="notes">Welcome the group. Explain that this briefing covers headset use, not host setup or Bluetooth pairing.</aside>
         </section>
 
         <section aria-labelledby="route-title">
-          <p class="chapter">How audio moves <span>02 / 09</span></p>
+          <p class="chapter">How audio moves</p>
           <h2 id="route-title">Your voice goes through the host</h2>
-          <p class="lead">The Linux host routes your microphone to the other headsets.</p>
-          <div class="route-map" role="img" aria-label="Your headset sends audio to the host, which routes it to the other headsets">
-            <div class="route-node"><span class="node-icon">01</span><strong>Your headset</strong><small>microphone</small></div>
+                    <div class="route-map" role="img" aria-label="Your headset sends audio to the host, which routes it to the other headsets">
+            <div class="route-node"><span class="node-icon">01</span><strong>Your headset</strong></div>
             <span class="route-link" aria-hidden="true">→</span>
-            <div class="route-node route-host"><span class="node-icon">bt</span><strong>Intercom host</strong><small>routes audio locally</small></div>
+            <div class="route-node route-host"><span class="node-icon">bt</span><strong>Intercom host</strong></div>
             <span class="route-link" aria-hidden="true">→</span>
-            <div class="route-node"><span class="node-icon">02</span><strong>Other headsets</strong><small>headset speakers</small></div>
+            <div class="route-node"><span class="node-icon">02</span><strong>Other headsets</strong></div>
           </div>
-          <p class="takeaway"><b>Remember</b> You never hear your own voice back.</p>
+          <p class="takeaway">You never hear your own voice.</p>
           <aside class="notes">Point out that the host routes audio locally. Every other headset hears the talker.</aside>
         </section>
 
         <section aria-labelledby="ready-title">
-          <p class="chapter">Before you talk <span>03 / 09</span></p>
-          <h2 id="ready-title">Check that the audio route is ready</h2>
+          <p class="chapter">Before you talk</p>
+          <h2 id="ready-title">Wait for the double beep</h2>
           <div class="check-layout">
             <ol class="check-list">
-              <li><span>01</span><div><strong>Power on your headset.</strong></div></li>
-              <li><span>02</span><div><strong>Wait for it to connect.</strong></div></li>
-              <li><span>03</span><div><strong>Listen for the double beep.</strong></div></li>
+              <li><span>01</span><div><strong>Power on</strong></div></li>
+              <li><span>02</span><div><strong>Let it connect</strong></div></li>
+              <li><span>03</span><div><strong>Hear the double beep</strong></div></li>
             </ol>
-            <aside class="callout"><strong>No beep?</strong><p>Ask the host operator.</p></aside>
+            <aside class="callout"><strong>No beep?</strong><p>Ask the operator.</p></aside>
           </div>
           <aside class="notes">A double beep confirms that the microphone route is ready. Pairing alone does not guarantee that duplex audio has connected.</aside>
         </section>
 
         <section aria-labelledby="full-title">
-          <p class="chapter">Full-duplex <span>04 / 09</span></p>
-          <h2 id="full-title">Know whether your microphone is open</h2>
+          <p class="chapter">Full-duplex</p>
+          <h2 id="full-title">Is your microphone open?</h2>
           <div class="mode-cards">
             <article class="mode-card">
               <span class="mode-symbol open" aria-hidden="true">●</span>
               <h3>Always open</h3>
-              <p>Your microphone is live. Speak normally.</p>
+              <p>Just speak.</p>
             </article>
             <article class="mode-card ptt-card">
               <span class="mode-symbol held" aria-hidden="true">●</span>
               <h3>Push to talk</h3>
-              <p>Tap <kbd>Play/Pause</kbd> to speak. Tap again to mute.</p>
+              <p>Tap <kbd>Play/Pause</kbd> first.</p>
             </article>
           </div>
-          <p class="takeaway"><b>If unsure</b> Ask the host operator which mode is configured before you start.</p>
+          <p class="takeaway">Unsure? Ask the operator.</p>
           <aside class="notes">In always-open mode, a ready microphone transmits continuously. Push to talk mutes until the headset button is tapped to play.</aside>
         </section>
 
         <section aria-labelledby="ptt-title">
-          <p class="chapter">Push to talk <span>05 / 09</span></p>
-          <h2 id="ptt-title">Tap to speak. Tap again to mute</h2>
+          <p class="chapter">Push to talk</p>
+          <h2 id="ptt-title">Tap to speak. Tap to mute</h2>
           <div class="press-sequence">
             <div class="press-step"><span class="step-number">1</span><div class="button-drawing" aria-hidden="true"><span>▶Ⅱ</span></div><strong>Tap play</strong></div>
             <span class="sequence-arrow" aria-hidden="true">→</span>
-            <div class="press-step active-step"><span class="step-number">2</span><div class="sound-waves" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><strong>Wait for the beep</strong></div>
+            <div class="press-step active-step"><span class="step-number">2</span><div class="sound-waves" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div><strong>Hear the beep</strong></div>
             <span class="sequence-arrow" aria-hidden="true">→</span>
-            <div class="press-step"><span class="step-number">3</span><div class="release-mark" aria-hidden="true">↗</div><strong>Tap pause to mute</strong></div>
+            <div class="press-step"><span class="step-number">3</span><div class="release-mark" aria-hidden="true">↗</div><strong>Tap pause</strong></div>
           </div>
-          <p class="takeaway"><b>Media button only</b> Call and answer do not transmit.</p>
+          <p class="takeaway">Call and answer never transmit.</p>
           <aside class="notes">Demonstrate a play tap and a pause tap if possible. The press-to-talk mapping uses the headset's Play/Pause media key, not call controls.</aside>
         </section>
 
         <section aria-labelledby="half-title">
-          <p class="chapter">Half-duplex <span>06 / 09</span></p>
+          <p class="chapter">Half-duplex</p>
           <h2 id="half-title">Wait your turn, then speak</h2>
           <div class="queue-board">
-            <div class="queue-state speaking"><span>NOW TALKING</span><strong>Headset A</strong><small>speaking</small></div>
+            <div class="queue-state speaking"><span>NOW TALKING</span><strong>Headset A</strong></div>
             <span class="queue-arrow" aria-hidden="true">→</span>
-            <div class="queue-state waiting"><span>WAITING</span><strong>You</strong><small>in line</small></div>
+            <div class="queue-state waiting"><span>WAITING</span><strong>You</strong></div>
             <span class="queue-arrow" aria-hidden="true">→</span>
-            <div class="queue-state next"><span>THEN</span><strong>Your turn</strong><small>after the beep</small></div>
+            <div class="queue-state next"><span>THEN</span><strong>You talk</strong></div>
           </div>
           <ul class="plain-list">
-            <li>Tap play once to queue.</li>
-            <li>Talk after the double beep.</li>
-            <li>Tap pause to finish.</li>
+            <li>Tap play to queue</li>
+            <li>Talk after the double beep</li>
+            <li>Tap pause to finish</li>
           </ul>
-          <p class="takeaway"><b>One queue</b> One person talks at a time.</p>
           <aside class="notes">Explain that one tap queues the request. The double beep signals that the floor is theirs; a pause tap cancels a wait or ends a turn.</aside>
         </section>
 
         <section aria-labelledby="button-title">
-          <p class="chapter">The right control <span>07 / 09</span></p>
-          <h2 id="button-title">Use Play/Pause, not call or answer</h2>
+          <p class="chapter">The right control</p>
+          <h2 id="button-title">Use Play/Pause to talk</h2>
           <div class="control-layout">
             <div class="control-callout">
               <span class="button-drawing large-button" aria-hidden="true"><span>▶Ⅱ</span></span>
               <strong>Media Play/Pause</strong>
-              <p>The push-to-talk button.</p>
+              
             </div>
             <div class="control-notes">
-              <p><span class="no-mark" aria-hidden="true">×</span><span><strong>Call or answer</strong><small>Do not transmit.</small></span></p>
-              <p><span class="no-mark" aria-hidden="true">×</span><span><strong>Keyboard keys</strong><small>Do not transmit.</small></span></p>
-              <p><span class="caution-mark" aria-hidden="true">!</span><span><strong>Open microphone</strong><small>Tap pause when you finish.</small></span></p>
+              <p><span class="no-mark" aria-hidden="true">×</span><span><strong>Call or answer</strong></span></p>
+              <p><span class="no-mark" aria-hidden="true">×</span><span><strong>Keyboard keys</strong></span></p>
+              <p><span class="caution-mark" aria-hidden="true">!</span><span><strong>Pause when done</strong></span></p>
             </div>
           </div>
           <aside class="notes">Stress the distinction between media Play/Pause and call/answer buttons. The microphone stays open between the play tap and the pause tap.</aside>
         </section>
 
         <section aria-labelledby="trouble-title">
-          <p class="chapter">Quick checks <span>08 / 09</span></p>
-          <h2 id="trouble-title">If you cannot hear or be heard</h2>
+          <p class="chapter">Quick checks</p>
+          <h2 id="trouble-title">Cannot hear or be heard?</h2>
           <div class="trouble-grid">
-            <article><span>01</span><h3>Check your button</h3><p>Tap Play/Pause once, then wait for the beep.</p></article>
-            <article><span>02</span><h3>Check the connection</h3><p>Ask the host operator to check it.</p></article>
-            <article><span>03</span><h3>Reconnect, then try again</h3><p>Then tap play again.</p></article>
+            <article><span>01</span><h3>Tap Play/Pause</h3><p>Wait for the beep.</p></article>
+            <article><span>02</span><h3>Ask the operator</h3><p>Check the connection.</p></article>
+            <article><span>03</span><h3>Try again</h3><p>Tap play after reconnecting.</p></article>
           </div>
-          <p class="takeaway"><b>Beep check</b> No double beep means no route or turn yet.</p>
           <aside class="notes">If problems remain after these checks, ask the host operator to inspect the connection and audio route before trying again.</aside>
         </section>
 
         <section class="closing-slide" aria-labelledby="close-title">
-          <p class="chapter">You’re ready <span>09 / 09</span></p>
-          <h2 id="close-title">Listen first.<br>Speak clearly.<br>Tap pause when done</h2>
+          <p class="chapter">You’re ready</p>
+          <h2 id="close-title">Listen first.<br>Speak clearly.<br>Tap pause.</h2>
           <div class="closing-bottom">
-            <p>Unsure of your mode? Ask the operator.</p>
-            <a href="https://github.com/phieri/bt-intercom#duplex-modes-and-push-to-talk">Read the operator guide <span aria-hidden="true">↗</span></a>
+            <p>Unsure? Ask the operator.</p>
+            <a href="https://github.com/phieri/bt-intercom#duplex-modes-and-push-to-talk">Operator guide <span aria-hidden="true">↗</span></a>
           </div>
-          <p class="deck-hint">Press <kbd>Esc</kbd> for overview · <kbd>F</kbd> for full screen</p>
+          <p class="deck-hint"><kbd>Esc</kbd> overview · <kbd>F</kbd> full screen</p>
           <aside class="notes">Invite questions and remind everyone to tap pause on the media button when they finish speaking.</aside>
         </section>
       </div>
     </main>
-    <footer class="deck-footer"><span>bt-intercom · headset user briefing</span><span>← → navigate <i aria-hidden="true">·</i> Esc overview <i aria-hidden="true">·</i> F full screen</span></footer>
+    <footer class="deck-footer"><span>bt-intercom · headset briefing</span><span>← → navigate <i aria-hidden="true">·</i> Esc overview <i aria-hidden="true">·</i> F full screen</span></footer>
   </body>
 </html>

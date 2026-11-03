@@ -47,14 +47,14 @@ body {
 .skip-link {
   position: fixed;
   z-index: 20;
-  top: -4rem;
+  top: -64px;
   left: 1rem;
-  padding: .7rem 1rem;
+  padding: 10px 16px;
   background: var(--deck-ink);
   color: var(--deck-surface);
 }
 
-.skip-link:focus { top: 1rem; }
+.skip-link:focus { top: 16px; }
 a:focus-visible, button:focus-visible { outline: 3px solid var(--deck-ink); outline-offset: 3px; }
 
 .deck-footer {
@@ -64,7 +64,7 @@ a:focus-visible, button:focus-visible { outline: 3px solid var(--deck-ink); outl
   bottom: 0;
   left: 0;
   display: flex;
-  min-height: 2.8rem;
+  min-height: 44px;
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
@@ -72,7 +72,7 @@ a:focus-visible, button:focus-visible { outline: 3px solid var(--deck-ink); outl
   border-top: 1px solid var(--deck-line);
   background: var(--deck-bg);
   color: var(--deck-muted);
-  font-size: .6rem;
+  font-size: 14px;
 }
 
 .deck-footer span:last-child { font-family: var(--deck-mono); }
@@ -80,8 +80,8 @@ a:focus-visible, button:focus-visible { outline: 3px solid var(--deck-ink); outl
 
 .reveal {
   width: 100%;
-  height: calc(100vh - 2.8rem);
-  height: calc(100dvh - 2.8rem);
+  height: calc(100vh - 44px);
+  height: calc(100dvh - 44px);
   font-size: clamp(14px, 1.65vw, 21px);
 }
 
@@ -207,7 +207,7 @@ a:focus-visible, button:focus-visible { outline: 3px solid var(--deck-ink); outl
 
 .reveal .controls { color: var(--deck-primary-text); }
 .reveal .progress { height: 3px; color: var(--deck-primary-text); }
-.reveal .slide-number { right: clamp(1rem, 4vw, 3.5rem); bottom: 3.5rem; color: var(--deck-muted); background: transparent; font-family: var(--deck-body); font-size: .6rem; }
+.reveal .slide-number { right: clamp(1rem, 4vw, 3.5rem); bottom: 56px; color: var(--deck-muted); background: transparent; font-family: var(--deck-body); font-size: 14px; }
 
 @media (max-width: 700px) {
   .reveal { font-size: 16px; }
@@ -249,11 +249,11 @@ a:focus-visible, button:focus-visible { outline: 3px solid var(--deck-ink); outl
   .trouble-grid article h3 { font-size: .82rem; }
   .trouble-grid article p { font-size: .56rem; }
   .closing-bottom { align-items: flex-start; flex-direction: column; margin-top: 1rem; }
-  .deck-footer { min-height: 2.2rem; padding-inline: .8rem; font-size: .46rem; }
-  .deck-footer span:first-child { max-width: 8rem; }
-  .deck-footer span:last-child { text-align: right; }
-  .reveal { height: calc(100vh - 2.2rem); height: calc(100dvh - 2.2rem); }
-  .reveal .slide-number { bottom: 2.2rem; }
+  .deck-footer { min-height: 36px; padding-inline: 12px; font-size: 11px; }
+  .deck-footer span:first-child { max-width: 120px; }
+  .deck-footer span:last-child { display: none; }
+  .reveal { height: calc(100vh - 36px); height: calc(100dvh - 36px); }
+  .reveal .slide-number { bottom: 44px; font-size: 11px; }
 }
 
 @media (max-height: 620px) and (min-width: 701px) {
@@ -267,36 +267,39 @@ a:focus-visible, button:focus-visible { outline: 3px solid var(--deck-ink); outl
   .press-step { min-height: 8.5rem; }
 }
 
-/* Larger type for projected slides; Reveal scales the 1200x700 canvas to fit. */
+/* Projected type. Reveal scales the 1200x700 canvas to fit; rem is 27px for the slides only. */
 html { font-size: 27px; }
-.reveal .slides section .chapter { font-size: .75rem; margin-bottom: 1rem; }
-.reveal h2 { max-width: 22ch; font-size: 2.3rem; }
-.reveal h3 { font-size: 1.1rem; }
-.lead { font-size: 1.15rem; }
-.signal-tag { font-size: .8rem; }
-.deck-hint, .deck-footer, .reveal .slide-number { font-size: .72rem; }
-.reveal h1 { font-size: 4.2rem; }
-.route-map { margin: 1.5rem 0 1rem; }
-.route-node strong, .press-step strong, .queue-state strong, .control-callout strong, .control-notes strong, .check-list strong, .callout strong { font-size: 1rem; }
-.route-node small, .press-step small, .queue-state small, .control-notes small, .check-list small { font-size: .8rem; }
-.node-icon, .check-list li > span, .trouble-grid article > span, .step-number, .queue-state span { font-size: .8rem; }
-.takeaway { font-size: .85rem; }
-.callout p, .mode-card p, .control-callout p, .trouble-grid article p, .closing-bottom p, .closing-bottom a { font-size: .85rem; }
-.plain-list { font-size: .85rem; }
-.press-step { min-height: 9rem; }
-.queue-state { min-height: 6.5rem; }
-.mode-card { min-height: 8rem; }
-.trouble-grid article { min-height: 8rem; }
-.closing-slide h2 { font-size: 3.6rem; }
-.check-list li { padding: .6rem .75rem; }
-
-@media (max-width: 700px) {
-  .route-node strong, .press-step strong, .queue-state strong { font-size: .8rem; }
-  .route-node small, .press-step small, .queue-state small, .queue-state span, .plain-list, .trouble-grid article p { font-size: .7rem; }
-  .reveal h2 { font-size: 1.8rem; }
-  .reveal h1 { font-size: 3rem; }
-  .closing-slide h2 { font-size: 2.6rem; }
-}
+.reveal .slides section .chapter { margin-bottom: 1rem; font-size: .8rem; }
+.reveal h1 { font-size: 4.6rem; }
+.title-slide h1 { max-width: 12ch; }
+.reveal h2 { max-width: 24ch; margin-bottom: 1.4rem; font-size: 2.8rem; line-height: 1.08; }
+.reveal h3 { margin: .9rem 0 .3rem; font-size: 1.5rem; }
+.lead { font-size: 1.4rem; }
+.signal-tag { font-size: .9rem; }
+.deck-hint { font-size: .9rem; }
+.route-map { margin: 1.2rem 0 1.2rem; }
+.route-node { min-height: 8rem; }
+.route-node strong, .press-step strong, .queue-state strong, .control-callout strong, .control-notes strong, .check-list strong, .callout strong { font-size: 1.35rem; }
+.node-icon, .check-list li > span, .trouble-grid article > span, .step-number, .queue-state span { font-size: .85rem; }
+.takeaway { margin-top: 1.2rem; font-size: 1.2rem; }
+.callout p, .mode-card p, .trouble-grid article p, .closing-bottom p, .closing-bottom a, .plain-list { font-size: 1.15rem; }
+.callout p { margin-top: .4rem; }
+.mode-card { min-height: 9rem; }
+.mode-card p { color: var(--deck-ink); }
+.mode-card h3 { font-size: 1.6rem; }
+.press-step { min-height: 9.5rem; justify-content: space-between; }
+.queue-state { min-height: 8rem; }
+.plain-list { gap: 1.2rem; margin-top: 1.2rem; color: var(--deck-ink); }
+.check-list { gap: .8rem; }
+.check-list li { padding: .8rem 1rem; }
+.control-callout { justify-content: center; }
+.control-notes { gap: .8rem; }
+.control-notes > p { align-items: center; padding: .9rem 1rem; }
+.no-mark, .caution-mark { width: 1.4rem; flex-basis: 1.4rem; font-size: 1.3rem; }
+.trouble-grid article { min-height: 10rem; }
+.trouble-grid article p { color: var(--deck-ink); }
+.closing-slide h2 { max-width: 14ch; font-size: 3.8rem; }
+.sequence-arrow, .queue-arrow, .route-link { font-size: 1.6rem; }
 
 @media (prefers-reduced-motion: reduce) {
   .reveal .slides section, .reveal .controls, .reveal .progress { transition: none !important; }
