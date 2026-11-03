@@ -158,24 +158,20 @@ pub(crate) enum CliCommand {
 	},
 }
 
-fn parse_sco_limit(value: &str) -> Result<usize, String> {
-	let limit = value
-		.parse::<usize>()
-		.map_err(|_| "--sco-limit must be a positive integer")?;
-	if limit == 0 {
-		return Err("--sco-limit must be at least 1".into());
+fn parse_limit(flag: &str, value: &str) -> Result<usize, String> {
+	match value.parse::<usize>() {
+		Ok(0) => Err(format!("{flag} must be at least 1")),
+		Ok(limit) => Ok(limit),
+		Err(_) => Err(format!("{flag} must be a positive integer")),
 	}
-	Ok(limit)
+}
+
+fn parse_sco_limit(value: &str) -> Result<usize, String> {
+	parse_limit("--sco-limit", value)
 }
 
 fn parse_a2dp_limit(value: &str) -> Result<usize, String> {
-	let limit = value
-		.parse::<usize>()
-		.map_err(|_| "--a2dp-limit must be a positive integer")?;
-	if limit == 0 {
-		return Err("--a2dp-limit must be at least 1".into());
-	}
-	Ok(limit)
+	parse_limit("--a2dp-limit", value)
 }
 
 fn parse_ptt_binding(value: &str) -> Result<PttButton, String> {

@@ -208,12 +208,16 @@ pub(crate) fn battery_percentage(info: &str) -> Option<u8> {
 		.filter(|percent: &u8| *percent <= 100)
 }
 
+/// Removes control characters so external text cannot manipulate the terminal.
+pub(crate) fn strip_control(text: &str) -> String {
+	text.chars()
+		.filter(|character| !character.is_control())
+		.collect()
+}
+
 pub(crate) fn bluetooth_name(info: &str) -> Option<String> {
 	["Alias", "Name"].into_iter().find_map(|field| {
-		let name: String = property(info, field)?
-			.chars()
-			.filter(|character| !character.is_control())
-			.collect();
+		let name = strip_control(property(info, field)?);
 		let name = name.trim();
 		(!name.is_empty()).then(|| name.to_owned())
 	})
