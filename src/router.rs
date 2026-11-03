@@ -16,11 +16,11 @@ use serde_json::Value;
 
 use crate::bluez::Address;
 pub use crate::pipewire::Headset;
-use crate::pipewire::{Link, OWNER_PROPERTY, Snapshot};
+use crate::pipewire::{HostSelection, Link, OWNER_PROPERTY, Snapshot};
 use crate::process::{COMMAND_TIMEOUT, command};
 #[cfg(test)]
 use crate::route_policy::desired_links;
-use crate::route_policy::desired_links_for_sources;
+use crate::route_policy::desired_links_with_host;
 #[cfg(test)]
 use crate::routing_status::RoutingStatus;
 use crate::transport::{self, Transport};
@@ -177,6 +177,8 @@ pub struct Router<F = fn(&[&str]) -> Result<String, String>> {
 	start_link: StartLink,
 	owned: LinkRegistry,
 	coordinator: transport::Coordinator,
+	host: Option<HostSelection>,
+	host_audio: Option<Result<Headset, String>>,
 }
 
 fn default_command(args: &[&str]) -> Result<String, String> {
@@ -229,7 +231,26 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 			start_link,
 			owned: LinkRegistry::new(owner),
 			coordinator: transport::Coordinator::default(),
+			host: None,
+			host_audio: None,
 		}
+	}
+
+	/// Includes the routing computer's wired headset in the intercom. It is
+	/// resolved from every snapshot and is never touched unless owned links to
+	/// it are requested.
+	pub fn set_host(&mut self, selection: HostSelection) {
+		self.host = Some(selection);
+	}
+
+	/// Ports of the host's wired headset as of the latest snapshot.
+	pub fn host_ports(&self) -> Option<&Headset> {
+		self.host_audio.as_ref()?.as_ref().ok()
+	}
+
+	/// Why the host's wired headset is unavailable, as of the latest snapshot.
+	pub fn host_error(&self) -> Option<&str> {
+		self.host_audio.as_ref()?.as_ref().err().map(String::as_str)
 	}
 
 	pub fn set_transport(&mut self, transport: Transport) {
@@ -293,6 +314,17 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 		&mut self,
 		sources: &BTreeSet<Address>,
 	) -> Result<BTreeMap<Address, Headset>, String> {
+		self.update_talkers(sources, false)
+	}
+
+	/// Like [`Self::update_sources`], additionally routing the host's microphone
+	/// to every headset while `host_talking`. The host's speakers always hear
+	/// the active headsets.
+	pub fn update_talkers(
+		&mut self,
+		sources: &BTreeSet<Address>,
+		host_talking: bool,
+	) -> Result<BTreeMap<Address, Headset>, String> {
 		if !self.prepare_transport(sources)? {
 			log::debug!("Transport not ready for sources {sources:?}; releasing owned links");
 			self.close();
@@ -300,9 +332,9 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 		}
 		let snapshot = self.snapshot()?;
 		let (headsets, existing) = snapshot.topology(&self.allowed, self.coordinator.transport);
-		let desired = desired_links_for_sources(&headsets, sources);
+		let desired = desired_links_with_host(&headsets, sources, self.host_ports(), host_talking);
 		log::debug!(
-			"Routing: sources {sources:?}, {} headsets, {} desired links, {} observed links, {} owned links",
+			"Routing: sources {sources:?}, host talking {host_talking}, {} headsets, {} desired links, {} observed links, {} owned links",
 			headsets.len(),
 			desired.len(),
 			existing.len(),
@@ -339,7 +371,14 @@ impl<F: FnMut(&[&str]) -> Result<String, String>> Router<F> {
 	}
 
 	fn snapshot(&mut self) -> Result<Snapshot, String> {
-		self.coordinator.snapshot(&self.allowed, &mut self.execute)
+		let snapshot = self
+			.coordinator
+			.snapshot(&self.allowed, &mut self.execute)?;
+		self.host_audio = self
+			.host
+			.as_ref()
+			.map(|selection| snapshot.host_audio(selection));
+		Ok(snapshot)
 	}
 
 	/// Releases every link created by this router.

@@ -5,8 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs::{self, File, OpenOptions};
-use std::io::{ErrorKind, Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,11 +13,13 @@ use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use crate::bluez::Address;
+use crate::evdev::{EV_KEY, EV_SYN, EventReader, SYN_DROPPED, access_hint, open_nonblocking};
+use crate::host_ptt::{Keyboards, PreparedKeyboards};
 use crate::network::runtime_directory;
 use crate::process::command_cancellable;
 use crate::router::Headset;
-use crate::routing_status::RoutingStatus;
-use crate::transmit::{Mode, Tap, Transmit};
+use crate::routing_status::{Observed, RoutingStatus};
+use crate::transmit::{Mode, Talker, Tap, Transmit};
 use crate::worker::Worker;
 
 /// Upper bound for playing the short PTT confirmation tone.
@@ -45,7 +46,7 @@ pub(crate) struct PttButton {
 	pub path: String,
 }
 
-pub(crate) type PttEvent = Result<(Address, Tap, Instant), String>;
+pub(crate) type PttEvent = Result<(Talker, Tap, Instant), String>;
 
 pub(crate) struct PttBeep {
 	path: PathBuf,
@@ -97,27 +98,37 @@ pub(crate) fn confirm_transmissions(
 	mode: Mode,
 	transmit: &mut Transmit,
 	input: &Receiver<PttEvent>,
-	headsets: &BTreeMap<Address, Headset>,
-	links: &BTreeSet<(u64, u64)>,
+	observed: Observed<'_>,
 	beep: Option<&PttBeep>,
 	stopped: &AtomicBool,
 ) -> Result<bool, String> {
-	let status = RoutingStatus::new(headsets, links);
-	let ready = transmit
+	let status = observed.status();
+	let mut ready = transmit
 		.pending
 		.iter()
 		.filter_map(|address| {
-			let headset = headsets.get(address)?;
+			let headset = observed.headsets.get(address)?;
 			(transmit.sources().contains(address) && status.has_active_source_route(address))
-				.then(|| (address.clone(), headset.speaker_node()))
+				.then(|| (Talker::Headset(address.clone()), headset.speaker_node()))
 		})
 		.collect::<Vec<_>>();
-	for (address, speaker_node) in ready {
+	if let Some(host) = observed.host
+		&& transmit.host_pending
+		&& transmit.host_active()
+		&& status.has_active_host_route()
+	{
+		ready.push((Talker::Host, host.speaker_node()));
+	}
+	for (talker, speaker_node) in ready {
 		if drain_events(input, transmit)? || stopped.load(Ordering::SeqCst) {
 			return Ok(true);
 		}
+		let who = match &talker {
+			Talker::Host => "the host".to_string(),
+			Talker::Headset(address) => address.to_string(),
+		};
 		let Some(speaker_node) = speaker_node else {
-			let error = format!("could not play PTT confirmation for {address}: no speaker node");
+			let error = format!("could not play PTT confirmation for {who}: no speaker node");
 			if mode == Mode::HalfDuplex {
 				return Err(error);
 			}
@@ -128,17 +139,20 @@ pub(crate) fn confirm_transmissions(
 			.ok_or_else(|| "confirmation beep is unavailable".to_string())
 			.and_then(|beep| beep.play(speaker_node, stopped));
 		match result {
-			Ok(()) => {
-				transmit.pending.remove(&address);
-			}
+			Ok(()) => match &talker {
+				Talker::Host => transmit.host_pending = false,
+				Talker::Headset(address) => {
+					transmit.pending.remove(address);
+				}
+			},
 			Err(_error) if stopped.load(Ordering::SeqCst) => return Ok(true),
 			Err(error) if mode == Mode::HalfDuplex => {
 				return Err(format!(
-					"could not play PTT confirmation for {address}: {error}"
+					"could not play PTT confirmation for {who}: {error}"
 				));
 			}
 			Err(error) => {
-				log::warn!("Could not play PTT confirmation for {address}: {error}");
+				log::warn!("Could not play PTT confirmation for {who}: {error}");
 			}
 		}
 	}
@@ -181,8 +195,8 @@ pub(crate) fn drain_events(
 	let mut changed = false;
 	loop {
 		match input.try_recv() {
-			Ok(Ok((address, tap, at))) => {
-				changed |= transmit.tap(&address, tap, at);
+			Ok(Ok((talker, tap, at))) => {
+				changed |= transmit.talker_tap(&talker, tap, at);
 			}
 			Ok(Err(error)) => return Err(error),
 			Err(TryRecvError::Empty) => return Ok(changed),
@@ -205,7 +219,10 @@ pub(crate) fn read_input_events<R: Read>(input: R, address: Address, sender: Sen
 }
 
 /// A mapping whose device is `None` is still waiting for discovery to find it.
-pub(crate) struct PreparedInputs(Vec<(PttButton, Option<File>)>);
+pub(crate) struct PreparedInputs {
+	buttons: Vec<(PttButton, Option<File>)>,
+	host: Option<PreparedKeyboards>,
+}
 
 pub(crate) struct PttInput {
 	pub events: Receiver<PttEvent>,
@@ -213,35 +230,28 @@ pub(crate) struct PttInput {
 }
 
 impl PreparedInputs {
-	pub fn open(buttons: &[PttButton]) -> Result<Self, String> {
-		buttons
+	pub fn open(buttons: &[PttButton], host: Option<&Keyboards>) -> Result<Self, String> {
+		let buttons = buttons
 			.iter()
 			.map(|button| {
 				if button.path == crate::ptt_discovery::AUTO {
 					return Ok((button.clone(), None));
 				}
-				OpenOptions::new()
-					.read(true)
-					.custom_flags(libc::O_NONBLOCK)
-					.open(&button.path)
+				open_nonblocking(&button.path)
 					.map(|file| (button.clone(), Some(file)))
 					.map_err(|error| {
-						let hint = if error.kind() == ErrorKind::PermissionDenied {
-							" (add the user to the `input` group or fix udev permissions, then log in again)"
-						} else {
-							""
-						};
-						format!("PTT input {}: {error}{hint}", button.path)
+						format!("PTT input {}: {error}{}", button.path, access_hint(&error))
 					})
 			})
-			.collect::<Result<Vec<_>, _>>()
-			.map(Self)
+			.collect::<Result<Vec<_>, _>>()?;
+		let host = host.map(PreparedKeyboards::open).transpose()?;
+		Ok(Self { buttons, host })
 	}
 
 	pub fn start(self, stopped: Arc<AtomicBool>, session_wake: SyncSender<()>) -> PttInput {
 		let (sender, events) = mpsc::channel();
-		let workers = self
-			.0
+		let mut workers: Vec<Worker> = self
+			.buttons
 			.into_iter()
 			.map(|(button, file)| {
 				let sender = sender.clone();
@@ -262,6 +272,9 @@ impl PreparedInputs {
 				})
 			})
 			.collect();
+		if let Some(host) = self.host {
+			workers.push(host.start(Arc::clone(&stopped), sender, session_wake));
+		}
 		PttInput { events, workers }
 	}
 }
@@ -344,11 +357,7 @@ fn supervise_events(
 
 fn reopen(address: &Address) -> Result<(String, File), String> {
 	let path = crate::ptt_discovery::find(address)?;
-	let file = OpenOptions::new()
-		.read(true)
-		.custom_flags(libc::O_NONBLOCK)
-		.open(&path)
-		.map_err(|error| format!("{path}: {error}"))?;
+	let file = open_nonblocking(&path).map_err(|error| format!("{path}: {error}"))?;
 	Ok((path, file))
 }
 
@@ -369,8 +378,7 @@ pub(crate) fn read_events<R: Read>(
 	}
 }
 
-/// Preserve the prefix of a record across short reads and WouldBlock. Returns
-/// `Ok` when stopped or the session is gone, `Err` when the input was lost.
+/// Returns `Ok` when stopped or the session is gone, `Err` when the input was lost.
 fn read_loop<R: Read>(
 	mut input: R,
 	address: &Address,
@@ -379,21 +387,11 @@ fn read_loop<R: Read>(
 	wake: &Receiver<()>,
 	session_wake: Option<&SyncSender<()>>,
 ) -> Result<(), String> {
-	// The kernel's input_event timestamp is two C longs on every ABI, which can
-	// differ from libc::timeval (64-bit time_t on 32-bit targets).
-	let offset = 2 * std::mem::size_of::<libc::c_ulong>();
-	let mut event = vec![0; offset + 8];
-	let mut filled = 0;
+	let mut reader = EventReader::new();
 	while !stopped.load(Ordering::SeqCst) {
-		match input.read(&mut event[filled..]) {
-			Ok(0) => {
-				return Err(format!(
-					"PTT input for {address} closed: unexpected end of input"
-				));
-			}
-			Ok(count) => filled += count,
-			Err(error) if error.kind() == ErrorKind::Interrupted => continue,
-			Err(error) if error.kind() == ErrorKind::WouldBlock => {
+		let event = match reader.next(&mut input) {
+			Ok(Some(event)) => event,
+			Ok(None) => {
 				if !matches!(
 					wake.recv_timeout(Duration::from_millis(20)),
 					Err(mpsc::RecvTimeoutError::Timeout)
@@ -403,29 +401,22 @@ fn read_loop<R: Read>(
 				continue;
 			}
 			Err(error) => return Err(format!("PTT input for {address} closed: {error}")),
-		}
-		if filled != event.len() {
-			continue;
-		}
-		filled = 0;
+		};
 		if stopped.load(Ordering::SeqCst) {
 			return Ok(());
 		}
 		let at = Instant::now();
-		let event_type = u16::from_ne_bytes([event[offset], event[offset + 1]]);
-		let event_key = u16::from_ne_bytes([event[offset + 2], event[offset + 3]]);
-		let value = i32::from_ne_bytes(event[offset + 4..offset + 8].try_into().unwrap());
-		if event_type == 0 && event_key == 3 {
-			// SYN_DROPPED: later taps still arrive intact, so keep reading.
+		if event.kind == EV_SYN && event.code == SYN_DROPPED {
+			// Later taps still arrive intact, so keep reading.
 			log::warn!("PTT input for {address} dropped events; continuing");
 			continue;
 		}
 		// Headsets send each AVRCP command as an instant press and release, so
 		// only the key-down carries meaning; releases and repeats are ignored.
-		if event_type == 1
-			&& value == 1
-			&& let Some(tap) = tap_for_key(event_key)
-			&& !send_event(sender, session_wake, Ok((address.clone(), tap, at)))
+		if event.kind == EV_KEY
+			&& event.value == 1
+			&& let Some(tap) = tap_for_key(event.code)
+			&& !send_event(sender, session_wake, Ok((address.clone().into(), tap, at)))
 		{
 			return Ok(());
 		}
@@ -529,7 +520,10 @@ mod tests {
 				.recv_timeout(Duration::from_secs(1))
 				.unwrap()
 				.unwrap();
-			assert_eq!(address.as_str(), "AA:BB:CC:DD:EE:01");
+			assert_eq!(
+				address,
+				Talker::Headset("AA:BB:CC:DD:EE:01".parse().unwrap())
+			);
 			assert_eq!(actual, Tap::Toggle);
 			session_events.recv_timeout(Duration::from_secs(1)).unwrap();
 		}

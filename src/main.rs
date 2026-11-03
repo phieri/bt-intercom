@@ -11,6 +11,8 @@ mod cli;
 mod dashboard;
 mod device_status;
 mod diagnostics;
+mod evdev;
+mod host_ptt;
 mod network;
 mod pipewire;
 mod process;
@@ -250,6 +252,10 @@ fn run(action: CliCommand) -> Result<(), String> {
 			mode,
 			transport,
 			dashboard: show_dashboard,
+			host,
+			host_keyboard,
+			host_source,
+			host_sink,
 		} => {
 			let config = runtime_config::RunConfig::resolve(
 				runtime_config::RunOptions {
@@ -262,6 +268,13 @@ fn run(action: CliCommand) -> Result<(), String> {
 					mode,
 					transport,
 					dashboard: show_dashboard,
+					host: host.then_some(runtime_config::HostConfig {
+						keyboards: host_keyboard,
+						audio: pipewire::HostSelection {
+							source: host_source,
+							sink: host_sink,
+						},
+					}),
 				},
 				std::io::stderr().is_terminal(),
 			)?;
@@ -776,8 +789,11 @@ mod tests {
 				Mode::HalfDuplex,
 				&mut transmit,
 				&input,
-				&headsets,
-				&BTreeSet::from([(23, 14)]),
+				crate::routing_status::Observed {
+					headsets: &headsets,
+					host: None,
+					links: &BTreeSet::from([(23, 14)]),
+				},
 				None,
 				&stopped,
 			)
@@ -787,8 +803,11 @@ mod tests {
 				Mode::HalfDuplex,
 				&mut transmit,
 				&input,
-				&headsets,
-				&BTreeSet::new(),
+				crate::routing_status::Observed {
+					headsets: &headsets,
+					host: None,
+					links: &BTreeSet::new(),
+				},
 				None,
 				&stopped,
 			)
@@ -799,8 +818,11 @@ mod tests {
 				Mode::HalfDuplex,
 				&mut transmit,
 				&input,
-				&headsets,
-				&BTreeSet::from([(13, 24)]),
+				crate::routing_status::Observed {
+					headsets: &headsets,
+					host: None,
+					links: &BTreeSet::from([(13, 24)]),
+				},
 				None,
 				&stopped,
 			),
@@ -810,7 +832,11 @@ mod tests {
 			// Release arriving during routing retires the old grant and defers
 			// confirmation of the next source until its own routing update.
 			sender
-				.send(Ok((a.clone(), Tap::Pause, now + Duration::from_millis(1))))
+				.send(Ok((
+					a.clone().into(),
+					Tap::Pause,
+					now + Duration::from_millis(1),
+				)))
 				.unwrap();
 			transmit.pending.insert(a.clone());
 			assert!(
@@ -818,8 +844,11 @@ mod tests {
 					Mode::HalfDuplex,
 					&mut transmit,
 					&input,
-					&headsets,
-					&BTreeSet::from([(13, 24)]),
+					crate::routing_status::Observed {
+						headsets: &headsets,
+						host: None,
+						links: &BTreeSet::from([(13, 24)]),
+					},
 					None,
 					&stopped
 				)
@@ -842,7 +871,7 @@ mod tests {
 			for (ms, tap) in [(0, Tap::Play), (1, Tap::Pause)] {
 				sender
 					.send(Ok((
-						input_address.clone(),
+						input_address.clone().into(),
 						tap,
 						now + Duration::from_millis(ms),
 					)))
@@ -945,7 +974,7 @@ mod tests {
 			read_input_events(std::io::Cursor::new(events), input_address.clone(), sender);
 
 			let (address, tap, first_at) = receiver.recv().unwrap().unwrap();
-			assert_eq!((address, tap), (input_address.clone(), Tap::Toggle));
+			assert_eq!((address, tap), (input_address.clone().into(), Tap::Toggle));
 			let (_, tap, second_at) = receiver.recv().unwrap().unwrap();
 			assert_eq!(tap, Tap::Toggle);
 			assert!(second_at >= first_at);

@@ -33,6 +33,8 @@ When a change affects those topics, update the README as well.
 - `src/transmit.rs`: transmit state and half-duplex floor/queue behavior.
 - `src/transport.rs`, `src/transport_model.rs`, `src/transport/profile_plan.rs`:
   `sco-a2dp` profile transitions (pure planning, then verified mutation).
+- `src/host_ptt.rs`, `src/evdev.rs`: optional host spacebar PTT and shared evdev
+  record framing.
 - `src/ptt.rs`, `src/ptt_discovery.rs`: evdev PTT readers and automatic
   matching of each headset's play/pause device.
 - `src/diagnostics.rs`, `src/diagnostics/probe.rs`: passive and active hardware
@@ -59,7 +61,7 @@ over requiring Bluetooth hardware or a live PipeWire session.
   interactive children that share the caller's terminal have different
   job-control constraints.
 - PTT is driven by mapped Linux evdev devices and `KEY_PLAYPAUSE`, `KEY_PLAYCD` and
-  `KEY_PAUSECD` (BlueZ AVRCP) press/release events only. Keyboard input and headset call/answer keys must not activate it.
+  `KEY_PAUSECD` (BlueZ AVRCP) press/release events only. Headset call/answer keys must not activate it. Only the opt-in `--host` reader (`src/host_ptt.rs`, `src/evdev.rs`) may use keyboard `KEY_SPACE`, as hold-to-talk for the routing computer's wired headset.
 - With `--transport sco-a2dp`, change profiles only per headset after
   re-verifying its PipeWire identity, respect per-controller `--sco-limit` and
   `--a2dp-limit`, and never assume capacity when controller identity is missing.

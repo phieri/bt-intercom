@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Philip Eriksson. All rights reserved.
 
 use crate::bluez::{Address, parse_address};
+use crate::host_ptt::Keyboards;
 use crate::ptt::PttButton;
 use crate::runtime_config::parse_interval;
 use crate::transmit::Mode;
@@ -126,6 +127,29 @@ pub(crate) enum CliCommand {
 		/// Show the live terminal dashboard.
 		#[arg(long)]
 		dashboard: bool,
+		/// Also join the intercom from this computer through its wired headset
+		/// (non-Bluetooth microphone and speakers in PipeWire). Hold the
+		/// spacebar to talk; it shares the half-duplex floor with the headsets.
+		#[arg(long)]
+		host: bool,
+		/// Keyboard event device whose spacebar is the host's push-to-talk,
+		/// or `auto` for every attached keyboard (default). Needs `input` group access.
+		#[arg(
+			long,
+			requires = "host",
+			value_name = "/dev/input/eventX|auto",
+			default_value = "auto",
+			value_parser = Keyboards::parse
+		)]
+		host_keyboard: Keyboards,
+		/// PipeWire node.name of the host's microphone (default: the PipeWire
+		/// default source if it is not Bluetooth).
+		#[arg(long, requires = "host", value_name = "NODE_NAME")]
+		host_source: Option<String>,
+		/// PipeWire node.name of the host's speakers (default: the PipeWire
+		/// default sink if it is not Bluetooth).
+		#[arg(long, requires = "host", value_name = "NODE_NAME")]
+		host_sink: Option<String>,
 	},
 	/// Generate shell completion definitions.
 	Completions {
@@ -192,6 +216,52 @@ mod tests {
 		);
 		assert!(parse_ptt_binding("auto").is_ok());
 		assert!(parse_ptt_binding(&format!("{address}=/dev/input/event4")).is_ok());
+	}
+
+	#[test]
+	fn host_options_require_host_and_default_to_automatic_keyboards() {
+		let CliCommand::Run {
+			host,
+			host_keyboard,
+			host_source,
+			host_sink,
+			..
+		} = Cli::try_parse_from(["bt-intercom", "run"]).unwrap().command
+		else {
+			panic!("expected run");
+		};
+		assert!(!host);
+		assert_eq!(host_keyboard, Keyboards::Auto);
+		assert!(host_source.is_none() && host_sink.is_none());
+		for option in ["--host-keyboard", "--host-source", "--host-sink"] {
+			assert!(Cli::try_parse_from(["bt-intercom", "run", option, "x"]).is_err());
+		}
+		let CliCommand::Run {
+			host,
+			host_keyboard,
+			host_source,
+			host_sink,
+			..
+		} = Cli::try_parse_from([
+			"bt-intercom",
+			"run",
+			"--host",
+			"--host-keyboard",
+			"/dev/input/event3",
+			"--host-source",
+			"in",
+			"--host-sink",
+			"out",
+		])
+		.unwrap()
+		.command
+		else {
+			panic!("expected run");
+		};
+		assert!(host);
+		assert_eq!(host_keyboard, Keyboards::Path("/dev/input/event3".into()));
+		assert_eq!(host_source.as_deref(), Some("in"));
+		assert_eq!(host_sink.as_deref(), Some("out"));
 	}
 
 	#[test]

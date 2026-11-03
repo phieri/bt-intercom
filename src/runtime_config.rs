@@ -7,7 +7,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::bluez::Address;
+use crate::host_ptt::Keyboards;
 use crate::network;
+use crate::pipewire::HostSelection;
 use crate::ptt::PttButton;
 use crate::transmit::Mode;
 use crate::transport::{self, Transport};
@@ -77,6 +79,13 @@ pub(crate) fn validate_mode(
 	Ok(())
 }
 
+/// The routing computer's own participation in the intercom.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct HostConfig {
+	pub keyboards: Keyboards,
+	pub audio: HostSelection,
+}
+
 pub(crate) struct RunOptions {
 	pub addresses: Vec<Address>,
 	pub interval: f64,
@@ -87,6 +96,7 @@ pub(crate) struct RunOptions {
 	pub mode: Option<Mode>,
 	pub transport: Option<Transport>,
 	pub dashboard: bool,
+	pub host: Option<HostConfig>,
 }
 
 pub(crate) struct RunConfig {
@@ -99,6 +109,7 @@ pub(crate) struct RunConfig {
 	pub mode: Mode,
 	pub transport: Transport,
 	pub dashboard: bool,
+	pub host: Option<HostConfig>,
 	pub network_path: PathBuf,
 	pub explicit_network: bool,
 }
@@ -173,6 +184,7 @@ impl RunConfig {
 			mode,
 			transport,
 			dashboard: options.dashboard,
+			host: options.host,
 			network_path,
 			explicit_network,
 		})
@@ -227,6 +239,7 @@ mod tests {
 			mode: Some(Mode::FullDuplex),
 			transport: Some(Transport::Hfp),
 			dashboard: false,
+			host: None,
 		}
 	}
 

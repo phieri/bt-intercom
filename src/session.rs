@@ -95,13 +95,16 @@ impl Session {
 		let (wake_sender, wake) = mpsc::sync_channel(1);
 		let update_interval = config.interval;
 		let routing = RoutingCoordinator::new(&config, &stopped);
-		let transmit = Transmit::new(
+		let mut transmit = Transmit::new(
 			config.mode,
 			config
 				.buttons
 				.iter()
 				.filter_map(|button| button.address.clone()),
 		);
+		if config.host.is_some() {
+			transmit = transmit.with_host();
+		}
 		Self {
 			config,
 			stopped,
@@ -186,7 +189,10 @@ impl Session {
 		);
 		crate::diagnostics::log_findings(&findings);
 		// Validate all device opens before starting any worker or saving the network.
-		let inputs = PreparedInputs::open(&self.config.buttons)?;
+		let inputs = PreparedInputs::open(
+			&self.config.buttons,
+			self.config.host.as_ref().map(|host| &host.keyboards),
+		)?;
 		let signal = Arc::clone(&self.stopped);
 		let wake = self.wake_sender.clone();
 		ctrlc::set_handler(move || {
@@ -214,6 +220,15 @@ impl Session {
 					"Full-duplex: Tap play to transmit; tap pause to mute. A single toggling play/pause key alternates on each tap."
 				),
 			}
+		}
+		if self.config.host.is_some() {
+			log::info!(
+				"Host: hold the spacebar to talk through this computer's wired headset; it shares the {} with the Bluetooth headsets.",
+				match self.config.mode {
+					Mode::HalfDuplex => "FIFO floor",
+					Mode::FullDuplex => "intercom",
+				}
+			);
 		}
 		if self.config.dashboard {
 			self.dashboard = Some(Dashboard::start(
@@ -294,7 +309,7 @@ impl Session {
 		self.last_update = Some(Instant::now());
 		// Links and profile changes appear asynchronously, so poll quickly until
 		// every requested transmission is confirmed.
-		self.update_interval = if outcome.changed || !self.transmit.pending.is_empty() {
+		self.update_interval = if outcome.changed || self.transmit.has_pending() {
 			ROUTE_CHANGE_RETRY_INTERVAL
 		} else {
 			self.config.interval
@@ -308,12 +323,17 @@ impl Session {
 				"PTT press from {address} ignored: the headset is not connected or lacks a headset-head-unit (HFP/HSP) microphone and speaker in PipeWire; connect it, then press again"
 			);
 		}
+		if self.transmit.take_host_dropped() {
+			log::warn!(
+				"Host push-to-talk ignored: the wired headset's microphone and speakers are unavailable in PipeWire; connect it (or pass --host-source/--host-sink), then press space again"
+			);
+		}
 	}
 
 	/// A held button that never reaches a confirmed route usually means a
 	/// configuration problem rather than a transient transition.
 	fn warn_stalled_requests(&mut self) {
-		if self.transmit.pending.is_empty() {
+		if !self.transmit.has_pending() {
 			self.pending_since = None;
 			self.stall_warned = false;
 			return;
@@ -323,9 +343,10 @@ impl Session {
 			self.stall_warned = true;
 			let pending: Vec<_> = self
 				.transmit
-				.pending
-				.iter()
-				.map(|a| a.to_string())
+				.host_pending
+				.then(|| "the host".to_string())
+				.into_iter()
+				.chain(self.transmit.pending.iter().map(|a| a.to_string()))
 				.collect();
 			log::warn!(
 				"PTT from {} is not transmitting after {} s: it needs at least one other connected headset with a speaker, working PipeWire (`pw-dump`, `pw-cli`) and, with --transport sco-a2dp, an HFP profile that WirePlumber exposes; run `bt-intercom diagnose` for details",
@@ -392,6 +413,7 @@ impl Session {
 					RunStatus {
 						mode: self.config.mode,
 						transmit: &self.transmit,
+						host: self.routing.host.as_ref(),
 					},
 					self.last_error.as_deref(),
 					&mut frame,
@@ -502,6 +524,7 @@ mod tests {
 			sco_limit: 1,
 			a2dp_limit: 1,
 			dashboard: false,
+			host: None,
 			explicit_network: true,
 			network_path,
 		}
@@ -571,7 +594,11 @@ mod tests {
 			snapshots += 1;
 			if snapshots == 3 {
 				sender
-					.send(Ok((address.into(), Tap::Pause, Instant::now())))
+					.send(Ok((
+						crate::transmit::Talker::Headset(address.parse().unwrap()),
+						Tap::Pause,
+						Instant::now(),
+					)))
 					.unwrap();
 			}
 			Ok(snapshot.clone())
