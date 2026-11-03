@@ -267,6 +267,37 @@ a:focus-visible, button:focus-visible { outline: 3px solid var(--deck-ink); outl
   .press-step { min-height: 8.5rem; }
 }
 
+/* Larger type for projected slides; Reveal scales the 1200x700 canvas to fit. */
+html { font-size: 27px; }
+.reveal .slides section .chapter { font-size: .75rem; margin-bottom: 1rem; }
+.reveal h2 { max-width: 22ch; font-size: 2.3rem; }
+.reveal h3 { font-size: 1.1rem; }
+.lead { font-size: 1.15rem; }
+.signal-tag { font-size: .8rem; }
+.deck-hint, .deck-footer, .reveal .slide-number { font-size: .72rem; }
+.reveal h1 { font-size: 4.2rem; }
+.route-map { margin: 1.5rem 0 1rem; }
+.route-node strong, .press-step strong, .queue-state strong, .control-callout strong, .control-notes strong, .check-list strong, .callout strong { font-size: 1rem; }
+.route-node small, .press-step small, .queue-state small, .control-notes small, .check-list small { font-size: .8rem; }
+.node-icon, .check-list li > span, .trouble-grid article > span, .step-number, .queue-state span { font-size: .8rem; }
+.takeaway { font-size: .85rem; }
+.callout p, .mode-card p, .control-callout p, .trouble-grid article p, .closing-bottom p, .closing-bottom a { font-size: .85rem; }
+.plain-list { font-size: .85rem; }
+.press-step { min-height: 9rem; }
+.queue-state { min-height: 6.5rem; }
+.mode-card { min-height: 8rem; }
+.trouble-grid article { min-height: 8rem; }
+.closing-slide h2 { font-size: 3.6rem; }
+.check-list li { padding: .6rem .75rem; }
+
+@media (max-width: 700px) {
+  .route-node strong, .press-step strong, .queue-state strong { font-size: .8rem; }
+  .route-node small, .press-step small, .queue-state small, .queue-state span, .plain-list, .trouble-grid article p { font-size: .7rem; }
+  .reveal h2 { font-size: 1.8rem; }
+  .reveal h1 { font-size: 3rem; }
+  .closing-slide h2 { font-size: 2.6rem; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .reveal .slides section, .reveal .controls, .reveal .progress { transition: none !important; }
 }

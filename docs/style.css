@@ -80,15 +80,20 @@ h1 { max-width: 11ch; margin-bottom: 1.3rem; font-family: var(--font-display); f
 .signal-board { --board-text: #F4F1E8; --board-muted: #CFDCD6; --board-mint: #4FB286; --board-orange: #D6A34A; --board-inset: #0B2925; --board-border: #496760; position: relative; min-width: 0; padding: 1.3rem 1.25rem 1rem; border: 1px solid var(--board-border); border-radius: .55rem; background: radial-gradient(ellipse at 50% 10%, #103630 0%, #123B35 72%); box-shadow: 0 24px 65px #0003; color: var(--board-text); }
 .board-topline { display: flex; justify-content: space-between; gap: .8rem; color: var(--board-muted); font-family: var(--mono); font-size: .62rem; letter-spacing: .07em; }
 .live-indicator { color: var(--board-mint); white-space: nowrap; }
-.host-node { position: relative; z-index: 1; display: flex; align-items: center; gap: .8rem; width: min(100%, 310px); margin: 2rem auto 0; padding: .85rem 1rem; border: 1px solid var(--board-border); border-radius: .4rem; background: var(--board-inset); }
+.host-node { position: relative; z-index: 1; margin: 1.6rem 0 0; padding: .85rem 1rem; border: 1px solid var(--board-border); border-radius: .4rem; background: var(--board-inset); }
 .host-symbol { display: grid; width: 2.1rem; height: 2.1rem; place-items: center; border: 1px solid var(--board-border); border-radius: .35rem; color: var(--board-mint); font-size: 1.1rem; }
 .host-node strong, .host-node small { display: block; }
 .host-node strong { font-size: .85rem; }
 .host-node small { margin-top: .1rem; color: var(--board-muted); font-size: .66rem; }
 .host-mode { margin-left: auto; color: var(--board-mint); font-family: var(--mono); font-size: .53rem; white-space: nowrap; }
-.signal-lines { position: absolute; top: 7.35rem; left: 25%; width: 50%; height: 4rem; border: solid var(--board-mint); border-width: 1px 1px 0; border-radius: 50% 50% 0 0; opacity: .65; }
-.group-nodes { position: relative; z-index: 1; display: grid; grid-template-columns: 1fr 1fr; gap: .85rem; margin-top: 2.2rem; }
-.group-node { padding: .8rem; border: 1px solid var(--board-border); border-radius: .4rem; background: var(--board-inset); }
+.host-header { display: flex; align-items: center; gap: .8rem; }
+.group-nodes { display: grid; grid-template-columns: 1fr 1fr; gap: .85rem; margin-top: .9rem; }
+.headset-groups { display: grid; grid-template-columns: 1fr 1fr; gap: .85rem; margin-top: 1.5rem; }
+.headset-groups > .headset-list { position: relative; justify-content: center; }
+.headset-groups > .headset-list::before { content: ""; position: absolute; top: -1.5rem; left: 50%; height: 1.5rem; border-left: 1px solid var(--board-mint); opacity: .65; }
+.headset-list-alt .headset-chip b { background: color-mix(in srgb, var(--board-orange) 15%, transparent); color: var(--board-orange); }
+.headset-list-alt::before { border-color: var(--board-orange) !important; }
+.group-node { padding: .6rem .8rem; border: 1px solid var(--board-border); border-radius: .4rem; background: var(--board-inset); }
 .group-node-alt { border-color: color-mix(in srgb, var(--board-border), var(--board-orange) 30%); }
 .group-heading { display: flex; align-items: center; gap: .5rem; margin-bottom: .65rem; }
 .group-heading > span { color: var(--board-mint); font-size: .7rem; font-weight: 600; }
@@ -114,7 +119,7 @@ h1 { max-width: 11ch; margin-bottom: 1.3rem; font-family: var(--font-display); f
 .mode-note { max-width: 75ch; margin: 1.3rem 0 0; padding-left: 1rem; border-left: 2px solid var(--orange); color: var(--muted); font-size: .84rem; }
 .mode-note strong { color: var(--paper); }
 code { color: var(--color-code); font-family: var(--mono); font-size: .9em; }
-.demo-section { border-top: 1px solid var(--line); }
+.demo-section { border-top: 1px solid var(--line); scroll-margin-top: calc(1.5rem - clamp(4.5rem, 9vw, 7rem)); }
 .demo-heading { display: flex; align-items: end; justify-content: space-between; gap: 2rem; margin-bottom: 1.5rem; }
 .demo-heading h2 { margin-bottom: 0; }
 .demo-heading > p { max-width: 40ch; margin: 0 0 .25rem; color: var(--muted); font-size: .84rem; }
@@ -154,7 +159,7 @@ footer > a:last-child:hover { color: var(--accent-text); }
   h1 { font-size: clamp(3.1rem, 15vw, 5rem); }
   .hero-intro { font-size: 1rem; }
   .signal-board { padding-inline: .8rem; }
-  .group-nodes { gap: .5rem; }
+  .group-nodes, .headset-groups { gap: .5rem; }
   .group-node { padding: .65rem .55rem; }
   .group-heading { gap: .35rem; }
   .group-heading strong { font-size: .67rem; }
