@@ -178,6 +178,11 @@ impl Session {
 				"Multiple Bluetooth controllers detected: automatic reconnection addresses only BlueZ's default controller (use --no-connect to disable it). Keep other controllers' headsets connected using an adapter-aware Bluetooth manager, or connect them in a bluetoothctl session after select CONTROLLER_MAC."
 			);
 		}
+		if self.config.allowed.len() < 2 && self.config.host.is_none() {
+			log::warn!(
+				"Only one headset is configured, so there is nothing to route; add another headset address (or --host) and restart"
+			);
+		}
 		// Advisory only; never blocks startup.
 		let findings = crate::diagnostics::diagnose_startup(
 			&self.config.allowed,

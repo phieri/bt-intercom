@@ -73,7 +73,7 @@ pub(crate) enum CliCommand {
 	/// Test adapters and headsets on real hardware: connects them, exercises
 	/// A2DP and HFP, and measures simultaneous SCO links per controller.
 	/// Uses the saved network when no address is given. Stop any running
-	/// intercom first: profiles are switched and restored to A2DP (unsaved).
+	/// intercom first: profiles are switched and released (unsaved).
 	Diagnose {
 		/// Only inspect BlueZ and PipeWire state; do not connect or switch profiles.
 		#[arg(long)]
@@ -115,8 +115,8 @@ pub(crate) enum CliCommand {
 		/// tap play to request the FIFO floor; tap pause to cancel/relinquish.
 		/// Full-duplex lets every headset that tapped play transmit until it
 		/// taps pause. A single toggling play/pause key alternates each tap.
-		/// Without active mappings full-duplex is always open. Disconnected mapped
-		/// headsets are muted and require a fresh play tap after reconnection.
+		/// Disconnected headsets are muted and require a fresh play tap after
+		/// reconnection.
 		#[arg(long, value_enum)]
 		mode: Option<Mode>,
 		/// Audio transport: hfp leaves profiles unchanged; sco-a2dp switches

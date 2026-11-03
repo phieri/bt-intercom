@@ -24,7 +24,7 @@ pub(crate) fn validate_controller_count(
 ) -> Result<(), String> {
 	if mode == Mode::FullDuplex && count > 0 && count.saturating_mul(sco_limit) < 2 {
 		return Err(format!(
-			"full-duplex requires at least two SCO/eSCO slots; detected {count} Bluetooth controller(s) with --sco-limit {sco_limit}. Use a higher verified --sco-limit or --mode half-duplex with --ptt for every headset"
+			"full-duplex requires at least two SCO/eSCO slots; detected {count} Bluetooth controller(s) with --sco-limit {sco_limit}. Use a higher verified --sco-limit or --mode half-duplex"
 		));
 	}
 	Ok(())
@@ -32,7 +32,7 @@ pub(crate) fn validate_controller_count(
 
 pub(crate) fn validate_transport(mode: Mode, transport: Transport) -> Result<(), String> {
 	if transport == Transport::ScoA2dp && mode != Mode::HalfDuplex {
-		return Err("--transport sco-a2dp requires --mode half-duplex and --ptt for every headset; use one controller per headset for full-duplex".into());
+		return Err("--transport sco-a2dp requires --mode half-duplex; use one controller per headset for full-duplex".into());
 	}
 	Ok(())
 }
